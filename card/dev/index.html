@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knightly Review — card harness</title>
+<!-- Serve the card/ directory (e.g. `python -m http.server -d card 8000`) and open /dev/.
+     <base> makes the template's relative "_knightly.js" resolve like Anki's media folder. -->
+<base href="/dist/">
+<link rel="stylesheet" href="/dist/templates/style.css">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  #harness { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; background: #eee; border-bottom: 1px solid #ccc; font-size: 14px; }
+  #harness textarea { width: 100%; height: 90px; font: 12px monospace; }
+  #harness details { width: 100%; }
+  body.nightMode #harness { background: #222; color: #ddd; border-color: #444; }
+  #qa { padding: 12px 16px; }
+</style>
+</head>
+<body class="card">
+<div id="harness">
+  <label>Card <select id="card"></select></label>
+  <button id="front">Front</button>
+  <button id="back">Back (show answer)</button>
+  <label><input type="checkbox" id="night"> Night mode</label>
+  <label><input type="checkbox" id="rebuild"> Rebuild page between sides (AnkiMobile/AnkiWeb)</label>
+  <label>intro <select id="intro"><option value="">(template)</option><option>lastMove</option><option>fullGame</option></select></label>
+  <label>afterAnswer <select id="after"><option value="">(template)</option><option>flip</option><option>stay</option><option>grade</option></select></label>
+  <label><input type="checkbox" id="pycmd" checked> Fake desktop pycmd</label>
+  <label><input type="checkbox" id="addon" checked> Fake add-on</label>
+  <button id="cleardev">Clear device settings</button>
+  <span id="log"></span>
+  <details><summary>PGN field</summary><textarea id="pgn"></textarea></details>
+</div>
+<div id="qa"></div>
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  const tpl = {
+    front: await (await fetch('/dist/templates/front.html')).text(),
+    back: await (await fetch('/dist/templates/back.html')).text(),
+  };
+  $('pgn').value = await (await fetch('/dev/samples.pgn')).text();
+
+  function cards() {
+    const ids = new Set();
+    $('pgn').value.replace(/\[%kr\s+(\d+)\]/g, (_, n) => ids.add(+n));
+    return [...ids].sort((a, b) => a - b);
+  }
+  function fillCards() {
+    const cur = $('card').value;
+    $('card').innerHTML = cards().map(n => `<option>${n}</option>`).join('');
+    if (cur) $('card').value = cur;
+  }
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Mimic Anki: cloze rendering, field HTML (<br> for newlines), script execution.
+  function render(side) {
+    if (side === 'front') $('log').textContent = '';
+    const n = +$('card').value;
+    const others = cards().filter(c => c !== n).map(c => `<span class="cloze-inactive" data-ordinal="${c}">${c}</span>`).join(' ');
+    const active = side === 'front'
+      ? `<span class="cloze" data-cloze="${n}" data-ordinal="${n}">[${n}]</span>`
+      : `<span class="cloze" data-ordinal="${n}">${n}</span>`;
+    window.__harnessCfg = {};
+    if ($('intro').value) window.__harnessCfg.intro = $('intro').value;
+    if ($('after').value) window.__harnessCfg.afterAnswer = $('after').value;
+    if ($('pycmd').checked) {
+      window.pycmd = (cmd, cb) => {
+        if (cmd.startsWith('kr:')) {
+          // Mimics addon/knightly_review: answers only when the add-on is "installed".
+          if (!$('addon').checked) return;
+          if (cmd === 'kr:hello') return setTimeout(() => cb && cb({ kr: 1, version: 'harness' }));
+          if (cmd.startsWith('kr:config:')) {
+            const cfg = JSON.parse(cmd.slice(10));
+            const block = 'window.KR_CONFIG = {\n' + Object.keys(cfg).map(k => '  ' + k + ': ' +
+              (Array.isArray(cfg[k]) ? '[' + cfg[k].join(', ') + ']' : typeof cfg[k] === 'string' ? "'" + cfg[k] + "'" : cfg[k])).join(',\n') + '\n};';
+            ['front', 'back'].forEach(s => { tpl[s] = tpl[s].replace(/window\.KR_CONFIG\s*=\s*\{[^{}]*\}\s*;?/, block); });
+            $('log').textContent = 'add-on saved template config';
+            return setTimeout(() => cb && cb({ ok: true }));
+          }
+          return;
+        }
+        if (cmd === 'ans') render('back');
+        else if (/^ease\d$/.test(cmd)) $('log').textContent = 'graded: ' + ['', 'Again', 'Hard', 'Good', 'Easy'][+cmd[4]];
+      };
+    } else delete window.pycmd;
+    const html = tpl[side]
+      .replace('(function () {', 'Object.assign(window.KR_CONFIG, window.__harnessCfg || {});\n(function () {')
+      .replace('{{cloze:Cards}}', active + ' ' + others)
+      .replace('{{PGN}}', esc($('pgn').value).replace(/\n/g, '<br>'))
+      .replace(/\{\{#Notes\}\}[\s\S]*?\{\{\/Notes\}\}/, '<div class="kr-notes"><b>Notes field:</b> example note.</div>');
+    if ($('rebuild').checked && side === 'back') {
+      // Simulate a client that reloads the page: drop in-memory state (sessionStorage survives).
+      delete window.__krResults;
+    }
+    const qa = $('qa');
+    qa.innerHTML = html;
+    qa.querySelectorAll('script').forEach(old => {
+      const s = document.createElement('script');
+      s.textContent = old.textContent;
+      old.replaceWith(s);
+    });
+  }
+  $('front').onclick = () => render('front');
+  $('back').onclick = () => render('back');
+  $('card').onchange = () => render('front');
+  $('intro').onchange = $('after').onchange = () => render('front');
+  $('pgn').oninput = fillCards;
+  $('cleardev').onclick = () => {
+    try { localStorage.removeItem('kr:settings:v1'); } catch (_) {}
+    document.cookie = 'kr_settings=; max-age=0; path=/';
+    render('front');
+  };
+  $('night').onchange = e => document.body.classList.toggle('nightMode', e.target.checked);
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'TEXTAREA') return;
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); render('back'); }
+  });
+  fillCards();
+  render('front');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<script>window.KR_CONFIG = null; /* stays null if the config below has a typo */</script>
+<script>
+/* Knightly Review settings: the defaults for every device.
+   Easiest: open ⚙ on a card. With the desktop add-on, "Save for all devices" rewrites this block.
+   Editing by hand: keep Front and Back identical, keep the quotes, and see the card's ⚙ for warnings.
+   acceptNags: NAGs counted as correct (1 !, 2 ?, 3 !!, 4 ??, 5 !?, 6 ?!)
+   intro: 'lastMove' | 'fullGame'      afterAnswer: 'flip' | 'stay' | 'grade'
+   gradeSolved / gradeHinted / gradeFailed: 1 Again, 2 Hard, 3 Good, 4 Easy      delays in ms */
+window.KR_CONFIG = {
+  acceptNags: [1, 3, 5],
+  autoReplyDelay: 400,
+  showEval: true,
+  evalOnPuzzleFront: false,
+  intro: 'lastMove',
+  introMoveDelay: 900,
+  afterAnswer: 'flip',
+  flipDelay: 1200,
+  gradeDelay: 2500,
+  gradeSolved: 3,
+  gradeHinted: 2,
+  gradeFailed: 1,
+  hints: true
+};
+</script>
+<script>
+(function () {
+  if (window.KnightlyReview) { window.KnightlyReview.mount(); return; }
+  if (document.getElementById('kr-script')) return; /* still loading; onload mounts the current card */
+  var s = document.createElement('script');
+  s.id = 'kr-script';
+  s.src = '_knightly.js';
+  s.onload = function () { window.KnightlyReview.mount(); };
+  s.onerror = function () {
+    var r = document.getElementById('kr-root');
+    if (r) r.innerHTML = '<div class="kr-error">Knightly Review: _knightly.js is missing from the collection media.</div>';
+  };
+  document.head.appendChild(s);
+})();
+</script>
