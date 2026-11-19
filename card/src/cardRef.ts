@@ -48,7 +48,8 @@ export const DEFAULT_CONFIG: Config = {
 
 declare global {
   interface Window {
-    KR_CONFIG?: Partial<Config>;
+    /** Set by the template; null when its config script failed to run. */
+    KR_CONFIG?: Partial<Config> | null;
   }
 }
 
@@ -57,22 +58,107 @@ const CHOICES: Partial<Record<keyof Config, readonly string[]>> = {
   afterAnswer: ['flip', 'stay', 'grade'],
 };
 
+/** [min, max, integer] for numeric settings. */
+const RANGES: Partial<Record<keyof Config, [number, number, boolean]>> = {
+  autoReplyDelay: [0, 10000, false],
+  introMoveDelay: [100, 10000, false],
+  flipDelay: [0, 30000, false],
+  gradeDelay: [0, 60000, false],
+  gradeSolved: [1, 4, true],
+  gradeHinted: [1, 4, true],
+  gradeFailed: [1, 4, true],
+};
+
+export const CONFIG_KEYS = Object.keys(DEFAULT_CONFIG) as (keyof Config)[];
+
+function show(v: unknown): string {
+  return typeof v === 'string' ? "'" + v + "'" : JSON.stringify(v);
+}
+
+/** Why `v` is not a valid value for `k`, or undefined when it is. */
+function problem(k: keyof Config, v: unknown): string | undefined {
+  const d = DEFAULT_CONFIG[k];
+  if (Array.isArray(d)) {
+    if (!Array.isArray(v) || !v.every(x => typeof x === 'number' && x === Math.floor(x) && x > 0))
+      return 'expected a list of NAG numbers like [1, 3, 5]';
+    return undefined;
+  }
+  if (typeof d === 'boolean') return typeof v === 'boolean' ? undefined : 'expected true or false';
+  if (typeof d === 'number') {
+    if (typeof v !== 'number' || !isFinite(v)) return 'expected a number';
+    const r = RANGES[k];
+    if (r && (v < r[0] || v > r[1] || (r[2] && v !== Math.floor(v))))
+      return 'expected ' + (r[2] ? 'a whole number' : 'a number') + ' from ' + r[0] + ' to ' + r[1];
+    return undefined;
+  }
+  const allowed = CHOICES[k];
+  if (typeof v !== 'string' || (allowed && allowed.indexOf(v) < 0))
+    return 'expected ' + (allowed ? allowed.map(show).join(' or ') : 'text');
+  return undefined;
+}
+
+export interface ConfigCheck {
+  config: Config;
+  /** The valid entries of `raw`. */
+  valid: Partial<Config>;
+  warnings: string[];
+}
+
+/**
+ * Validates `raw` field by field on top of `base`. Invalid or unknown entries
+ * are dropped with a warning; everything else falls back to `base`.
+ */
+export function checkConfig(raw: unknown, base: Config = DEFAULT_CONFIG, source = 'KR_CONFIG'): ConfigCheck {
+  const out = { ...base } as Record<string, unknown>;
+  const valid: Record<string, unknown> = {};
+  const warnings: string[] = [];
+  if (raw === undefined) return { config: base, valid: {}, warnings };
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    warnings.push(source + ' could not be read (is there a typo in the template?) — using defaults.');
+    return { config: base, valid: {}, warnings };
+  }
+  const c = raw as Record<string, unknown>;
+  Object.keys(c).forEach(key => {
+    const v = c[key];
+    if (CONFIG_KEYS.indexOf(key as keyof Config) < 0) {
+      warnings.push(source + ': unknown setting "' + key + '" (ignored).');
+      return;
+    }
+    const k = key as keyof Config;
+    if (v === undefined) return;
+    const why = problem(k, v);
+    if (why) {
+      warnings.push(source + ': ' + k + ' = ' + show(v) + ' is not valid, ' + why + ' — using ' + show(base[k]) + '.');
+      return;
+    }
+    out[k] = v;
+    valid[k] = v;
+  });
+  return { config: out as unknown as Config, valid: valid as Partial<Config>, warnings };
+}
+
 /** KR_CONFIG from the template, validated field by field against the defaults. */
 export function readConfig(raw?: Partial<Config>): Config {
-  const c = (raw || (typeof window !== 'undefined' && window.KR_CONFIG) || {}) as Record<string, unknown>;
-  const out = { ...DEFAULT_CONFIG } as Record<string, unknown>;
-  (Object.keys(DEFAULT_CONFIG) as (keyof Config)[]).forEach(k => {
-    const v = c[k];
-    const d = DEFAULT_CONFIG[k];
-    if (v === undefined) return;
-    if (Array.isArray(d)) {
-      if (Array.isArray(v) && v.every(x => typeof x === 'number')) out[k] = v;
-    } else if (typeof v === typeof d) {
-      const allowed = CHOICES[k];
-      if (!allowed || allowed.indexOf(v as string) >= 0) out[k] = v;
-    }
+  return checkConfig(raw || (typeof window !== 'undefined' && window.KR_CONFIG) || {}).config;
+}
+
+/** Entries of `cfg` that differ from `base`. */
+export function configDiff(cfg: Config, base: Config): Partial<Config> {
+  const out: Record<string, unknown> = {};
+  CONFIG_KEYS.forEach(k => {
+    if (JSON.stringify(cfg[k]) !== JSON.stringify(base[k])) out[k] = cfg[k];
   });
-  return out as unknown as Config;
+  return out as Partial<Config>;
+}
+
+/** `window.KR_CONFIG = {…};` in the template's style, ready to paste. */
+export function formatConfig(cfg: Config): string {
+  const lines = CONFIG_KEYS.map(k => {
+    const v = cfg[k];
+    const s = Array.isArray(v) ? '[' + v.join(', ') + ']' : typeof v === 'string' ? "'" + v + "'" : String(v);
+    return '  ' + k + ': ' + s;
+  });
+  return 'window.KR_CONFIG = {\n' + lines.join(',\n') + '\n};';
 }
 
 /**

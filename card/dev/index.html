@@ -24,9 +24,11 @@
   <button id="back">Back (show answer)</button>
   <label><input type="checkbox" id="night"> Night mode</label>
   <label><input type="checkbox" id="rebuild"> Rebuild page between sides (AnkiMobile/AnkiWeb)</label>
-  <label>intro <select id="intro"><option>lastMove</option><option>fullGame</option></select></label>
-  <label>afterAnswer <select id="after"><option>flip</option><option>stay</option><option>grade</option></select></label>
+  <label>intro <select id="intro"><option value="">(template)</option><option>lastMove</option><option>fullGame</option></select></label>
+  <label>afterAnswer <select id="after"><option value="">(template)</option><option>flip</option><option>stay</option><option>grade</option></select></label>
   <label><input type="checkbox" id="pycmd" checked> Fake desktop pycmd</label>
+  <label><input type="checkbox" id="addon" checked> Fake add-on</label>
+  <button id="cleardev">Clear device settings</button>
   <span id="log"></span>
   <details><summary>PGN field</summary><textarea id="pgn"></textarea></details>
 </div>
@@ -60,9 +62,25 @@
     const active = side === 'front'
       ? `<span class="cloze" data-cloze="${n}" data-ordinal="${n}">[${n}]</span>`
       : `<span class="cloze" data-ordinal="${n}">${n}</span>`;
-    window.__harnessCfg = { intro: $('intro').value, afterAnswer: $('after').value };
+    window.__harnessCfg = {};
+    if ($('intro').value) window.__harnessCfg.intro = $('intro').value;
+    if ($('after').value) window.__harnessCfg.afterAnswer = $('after').value;
     if ($('pycmd').checked) {
-      window.pycmd = cmd => {
+      window.pycmd = (cmd, cb) => {
+        if (cmd.startsWith('kr:')) {
+          // Mimics addon/knightly_review: answers only when the add-on is "installed".
+          if (!$('addon').checked) return;
+          if (cmd === 'kr:hello') return setTimeout(() => cb && cb({ kr: 1, version: 'harness' }));
+          if (cmd.startsWith('kr:config:')) {
+            const cfg = JSON.parse(cmd.slice(10));
+            const block = 'window.KR_CONFIG = {\n' + Object.keys(cfg).map(k => '  ' + k + ': ' +
+              (Array.isArray(cfg[k]) ? '[' + cfg[k].join(', ') + ']' : typeof cfg[k] === 'string' ? "'" + cfg[k] + "'" : cfg[k])).join(',\n') + '\n};';
+            ['front', 'back'].forEach(s => { tpl[s] = tpl[s].replace(/window\.KR_CONFIG\s*=\s*\{[^{}]*\}\s*;?/, block); });
+            $('log').textContent = 'add-on saved template config';
+            return setTimeout(() => cb && cb({ ok: true }));
+          }
+          return;
+        }
         if (cmd === 'ans') render('back');
         else if (/^ease\d$/.test(cmd)) $('log').textContent = 'graded: ' + ['', 'Again', 'Hard', 'Good', 'Easy'][+cmd[4]];
       };
@@ -89,6 +107,11 @@
   $('card').onchange = () => render('front');
   $('intro').onchange = $('after').onchange = () => render('front');
   $('pgn').oninput = fillCards;
+  $('cleardev').onclick = () => {
+    try { localStorage.removeItem('kr:settings:v1'); } catch (_) {}
+    document.cookie = 'kr_settings=; max-age=0; path=/';
+    render('front');
+  };
   $('night').onchange = e => document.body.classList.toggle('nightMode', e.target.checked);
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'TEXTAREA') return;

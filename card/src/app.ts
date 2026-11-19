@@ -64,6 +64,14 @@ export function renderError(root: HTMLElement, msg: string): void {
   root.appendChild(h('div', 'kr-error', 'Knightly Review: ' + msg));
 }
 
+export interface AppExtras {
+  /** Config problems to show in a banner. */
+  warnings: string[];
+  /** Re-mounted after the settings dialog closed: don't start an automatic grade again. */
+  resumed: boolean;
+  openSettings: () => void;
+}
+
 export class App {
   private readonly games: KGame[];
   private readonly puzzle: PuzzleRef;
@@ -96,7 +104,7 @@ export class App {
     nextBtn: HTMLButtonElement;
   };
 
-  static create(root: HTMLElement, card: CardRef, cfg: Config): App | undefined {
+  static create(root: HTMLElement, card: CardRef, cfg: Config, extras: AppExtras): App | undefined {
     const games = parseGames(card.pgn);
     if (!games.length) {
       renderError(root, 'no readable game in the PGN field.');
@@ -107,13 +115,14 @@ export class App {
       renderError(root, 'no move tagged [%kr ' + card.n + '] in the PGN.');
       return undefined;
     }
-    return new App(root, card, cfg, games, puzzle);
+    return new App(root, card, cfg, extras, games, puzzle);
   }
 
   private constructor(
     private readonly root: HTMLElement,
     private readonly card: CardRef,
     private readonly cfg: Config,
+    private readonly extras: AppExtras,
     games: KGame[],
     puzzle: PuzzleRef,
   ) {
@@ -152,6 +161,16 @@ export class App {
     root.innerHTML = '';
     root.classList.add('kr-root', 'kr-' + this.card.side);
     root.appendChild(this.buildHeader());
+    if (this.extras.warnings.length) {
+      const w = this.extras.warnings;
+      const banner = button(
+        'kr-warn-banner',
+        '⚠ Card settings: ' + w[0] + (w.length > 1 ? ' (+' + (w.length - 1) + ' more)' : ''),
+        'Open the card settings',
+        () => this.extras.openSettings(),
+      );
+      root.appendChild(banner);
+    }
 
     const main = h('div', 'kr-main');
     const col = h('div', 'kr-board-col');
@@ -220,6 +239,7 @@ export class App {
   private buildHeader(): HTMLElement {
     const hd = this.puzzle.game.headers;
     const head = h('div', 'kr-head');
+    head.appendChild(button('kr-gear', '⚙', 'Card settings', () => this.extras.openSettings()));
     const player = (color: 'White' | 'Black') => {
       const name = hd.get(color) || '?';
       const elo = hd.get(color + 'Elo');
@@ -274,7 +294,7 @@ export class App {
   private start(): void {
     if (this.card.side === 'back') {
       this.render();
-      this.scheduleGrade();
+      if (!this.extras.resumed) this.scheduleGrade();
       return;
     }
     const path = this.introPath();
@@ -296,6 +316,12 @@ export class App {
     this.render();
     this.cursor = this.puzzle.position;
     this.later(() => this.render(), 250);
+  }
+
+  /** Stop anything time-based the user might miss (settings dialog opening). */
+  pause(): void {
+    this.skipIntro();
+    this.cancelGrade();
   }
 
   private skipIntro(): void {

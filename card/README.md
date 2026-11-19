@@ -56,14 +56,28 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
 - **Hints:** `[%hint text]` on the tagged move is shown as the first hint. The next hint circles the
   piece(s) to move. Hints are counted, and the back reports how many were used.
 
-## Settings (`KR_CONFIG`, at the top of both templates)
+## Settings
+
+Tap **⚙** on any card to change these settings. They're applied in layers:
+
+1. **Built-in defaults**, in `src/cardRef.ts`.
+2. **The template's `KR_CONFIG` block**, in both the Front and Back templates. It syncs, so it sets the defaults for every device.
+3. **Per-device changes made in ⚙.** They're stored in the webview's `localStorage`, with a cookie as fallback. A blue dot marks each changed field, and ↺ undoes the change.
+
+How to keep a change made in ⚙:
+
+- **Anki desktop + the [add-on](../addon/README.md):** **Save for all devices** rewrites the `KR_CONFIG` block in this note type's templates, so the change syncs everywhere. Without the add-on, desktop changes last only until Anki restarts, because Anki's card webview doesn't keep storage.
+- **Anywhere:** **Copy as template config** gives you a block to paste over `KR_CONFIG` in both templates.
+
+Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a ⚠ banner on the card. The template sets `KR_CONFIG = null` before its config script, so a syntax error is detected instead of silently ignored.
 
 | Setting | Default | Options |
 |---|---|---|
 | `intro` | `'lastMove'` | `'lastMove'` animates the opponent's last move. `'fullGame'` replays the game at `introMoveDelay` ms per move; tap the board to skip. |
-| `afterAnswer` | `'flip'` | `'flip'` shows the back after `flipDelay` ms. `'stay'` stays on the front. `'grade'` flips, then answers automatically after `gradeDelay` ms with `gradeSolved` (3 Good), `gradeHinted` (2 Hard) or `gradeFailed` (1 Again). Any tap or key cancels it. |
+| `afterAnswer` | `'flip'` | `'flip'` shows the back after `flipDelay` ms. `'stay'` stays on the front. `'grade'` flips, then answers automatically after `gradeDelay` ms with `gradeSolved` (3 Good), `gradeHinted` (2 Hard) or `gradeFailed` (1 Again). Any tap or key cancels the automatic answer. |
 | `hints` | `true` | Show the Hint button. |
 | `acceptNags` | `[1, 3, 5]` | NAGs counted as correct. |
+| `autoReplyDelay` | `400` | ms before the opponent's reply. |
 | `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
 
 Flipping and grading use `pycmd` on desktop and the JS API on AnkiDroid. AnkiMobile and AnkiWeb
