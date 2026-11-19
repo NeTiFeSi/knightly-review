@@ -1,8 +1,10 @@
-"""Knightly Review desktop helper.
+"""Knightly Review for Anki desktop.
 
-Lets the card's settings dialog (⚙) save its settings into the note type's
-templates, so they sync to every device. The card talks to it with
-pycmd('kr:hello') and pycmd('kr:config:{json}').
+- Makes cards from your own Lichess/Chess.com games: Tools → Knightly Review
+  (runner.py, ui.py; the chess work is the bundled core in vendor/knightly).
+- Lets the card's settings dialog (⚙) save its settings into the note type's
+  templates, so they sync to every device. The card talks to it with
+  pycmd('kr:hello') and pycmd('kr:config:{json}').
 """
 
 from __future__ import annotations
@@ -10,11 +12,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from aqt import gui_hooks, mw
+try:
+    from aqt import gui_hooks, mw
+except ImportError:  # used as a library (card/tools, tests) without the Anki GUI
+    gui_hooks = mw = None
 
 from .config_block import rewrite, validate
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 PREFIX = "kr:"
 
 
@@ -68,7 +73,26 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
     if card is None:
         return handled
     if message == "kr:hello":
-        return True, {"kr": 1, "version": VERSION}
+        from . import live, settings
+
+        try:
+            engine = live.engine_label(settings.load())
+        except Exception:
+            engine = None
+        return True, {"kr": 1, "version": VERSION, "engine": engine}
+    if message == "kr:warm":  # a card with live play on: start the engines early
+        from . import live, settings
+
+        if live.engine_label(settings.load()):
+            live.service.warm()
+        return True, {"ok": True}
+    if message.startswith("kr:engine:"):
+        from . import live
+
+        try:
+            return True, live.handle(message, context)
+        except Exception as e:
+            return True, {"error": str(e)}
     if message.startswith("kr:config:"):
         try:
             cfg = json.loads(message[len("kr:config:"):])
@@ -81,4 +105,12 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
     return handled
 
 
-gui_hooks.webview_did_receive_js_message.append(on_js_message)
+if gui_hooks is not None:
+    gui_hooks.webview_did_receive_js_message.append(on_js_message)
+
+
+if mw is not None:  # not when imported by tests
+    from . import runner, ui
+
+    runner.setup()
+    ui.setup_menu()

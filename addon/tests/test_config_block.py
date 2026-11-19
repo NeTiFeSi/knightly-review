@@ -8,7 +8,7 @@ from config_block import format_block, rewrite, validate  # noqa: E402
 LOADER = pathlib.Path(__file__).resolve().parents[2] / "card" / "templates" / "loader.html"
 
 DEFAULT = {
-    "acceptNags": [1, 3, 5],
+    "acceptNags": [1, 3, 5, 8],
     "autoReplyDelay": 400,
     "showEval": True,
     "evalOnPuzzleFront": False,
@@ -21,6 +21,9 @@ DEFAULT = {
     "gradeHinted": 2,
     "gradeFailed": 1,
     "hints": True,
+    "live": False,
+    "goodMove": 2,
+    "liveMaxMoves": 10,
 }
 
 

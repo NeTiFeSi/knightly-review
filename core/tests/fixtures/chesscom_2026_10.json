@@ -1,0 +1,71 @@
+{
+ "games": [
+  {
+   "url": "https://www.chess.com/game/live/1000",
+   "pgn": "[Event \"Let's Play!\"]\n[Site \"Chess.com\"]\n[Date \"2026.09.22\"]\n[Round \"-\"]\n[White \"Opponent0\"]\n[Black \"KnightlyMe\"]\n[Result \"1-0\"]\n[CurrentPosition \"2Q5/pr3pkp/1r2pbp1/q3P3/b2N4/P1P3PP/5PB1/R1R3K1 b - - 0 28\"]\n[Timezone \"UTC\"]\n[ECO \"B07\"]\n[ECOUrl \"https://www.chess.com/openings/Pirc-Defense\"]\n[UTCDate \"2026.09.22\"]\n[UTCTime \"21:31:52\"]\n[WhiteElo \"1487\"]\n[BlackElo \"1500\"]\n[TimeControl \"1/604800\"]\n[Termination \"Opponent0 won by resignation\"]\n[StartTime \"21:31:52\"]\n[EndDate \"2026.10.01\"]\n[EndTime \"08:59:41\"]\n[Link \"https://www.chess.com/game/live/1000\"]\n\n1. e4 1... d6 2. d3 2... Nf6 3. Nc3 3... g6 4. Be3 4... Bg7 5. h3 5... O-O 6. Qd2 6... Re8 7. g3 7... c5 8. Bg2 8... Nc6 9. Nge2 9... Rb8 10. Rb1 10... Bd7 11. Nd5 11... b5 12. O-O 12... e6 13. Nxf6+ 13... Bxf6 14. d4 14... cxd4 15. Bxd4 15... Nxd4 16. Nxd4 16... Qb6 17. c3 17... b4 18. Qd3 18... Qa5 19. Ra1 19... Rec8 20. Rfc1 20... bxc3 21. bxc3 21... Rb2 22. a3 22... Rcb8 23. Nf3 23... R2b3 24. Qxd6 24... Ba4 25. Nd4 25... R3b6 26. Qc7 26... R8b7 27. Qc8+ 27... Kg7 28. e5 1-0\n",
+   "time_control": "1/604800",
+   "end_time": 1790845181,
+   "rated": false,
+   "initial_setup": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+   "fen": "2Q5/pr3pkp/1r2pbp1/q3P3/b2N4/P1P3PP/5PB1/R1R3K1 b - - 0 28",
+   "start_time": 1790112712,
+   "time_class": "daily",
+   "rules": "chess",
+   "white": {
+    "rating": 1487,
+    "result": "win",
+    "username": "Opponent0"
+   },
+   "black": {
+    "rating": 1500,
+    "result": "resigned",
+    "username": "KnightlyMe"
+   }
+  },
+  {
+   "url": "https://www.chess.com/game/live/1001",
+   "pgn": "[Event \"Let's Play! - Chess960\"]\n[Site \"Chess.com\"]\n[Date \"2026.09.28\"]\n[Round \"-\"]\n[White \"KnightlyMe\"]\n[Black \"Opponent1\"]\n[Result \"1-0\"]\n[Variant \"Chess960\"]\n[SetUp \"1\"]\n[FEN \"nrnkqrbb/pppppppp/8/8/8/8/PPPPPPPP/NRNKQRBB w FBfb - 0 1\"]\n[CurrentPosition \"1k3r1b/p2qp3/1ppr2p1/3p1n1p/2nP1P2/2PN2PB/PP2Q2P/2KRR1B1 b - - 3 17\"]\n[Timezone \"UTC\"]\n[ECO \"A02\"]\n[ECOUrl \"https://www.chess.com/openings/Birds-Opening-1...f5\"]\n[UTCDate \"2026.09.28\"]\n[UTCTime \"23:59:10\"]\n[WhiteElo \"1440\"]\n[BlackElo \"1270\"]\n[TimeControl \"1/86400\"]\n[Termination \"KnightlyMe won on time\"]\n[StartTime \"23:59:10\"]\n[EndDate \"2026.10.02\"]\n[EndTime \"22:00:08\"]\n[Link \"https://www.chess.com/game/live/1001\"]\n\n1. f4 1... f5 2. g3 2... Nab6 3. e4 3... fxe4 4. Bxe4 4... d5 5. Bf3 5... Nd6 6. Nab3 6... g6 7. d4 7... Nbc4 8. Nd3 8... c6 9. O-O-O 9... O-O-O 10. Bg4+ 10... Kb8 11. Nbc5 11... Nf5 12. c3 12... b6 13. Ne6 13... Bxe6 14. Qxe6 14... Rd6 15. Qe2 15... h5 16. Bh3 16... Qd7 17. Rfe1 1-0\n",
+   "time_control": "1/86400",
+   "end_time": 1790978408,
+   "rated": true,
+   "initial_setup": "nrnkqrbb/pppppppp/8/8/8/8/PPPPPPPP/NRNKQRBB w KQkq - 0 1",
+   "fen": "1k3r1b/p2qp3/1ppr2p1/3p1n1p/2nP1P2/2PN2PB/PP2Q2P/2KRR1B1 b - - 3 17",
+   "start_time": 1790639950,
+   "time_class": "daily",
+   "rules": "chess960",
+   "white": {
+    "rating": 1440,
+    "result": "win",
+    "username": "KnightlyMe"
+   },
+   "black": {
+    "rating": 1270,
+    "result": "timeout",
+    "username": "Opponent1"
+   }
+  },
+  {
+   "url": "https://www.chess.com/game/live/1002",
+   "pgn": "[Event \"PANAM2026 R3: Team Canada vs. Team  USA - Board 92\"]\n[Site \"Chess.com\"]\n[Date \"2026.09.26\"]\n[Round \"-\"]\n[White \"Opponent2\"]\n[Black \"KnightlyMe\"]\n[Result \"1-0\"]\n[Match \"https://www.chess.com/club/matches/2000776\"]\n[CurrentPosition \"r3kr2/7R/3p2p1/pPp2nq1/4Q3/1P2PP2/P3KP2/3R4 b - - 3 25\"]\n[Timezone \"UTC\"]\n[ECO \"A04\"]\n[ECOUrl \"https://www.chess.com/openings/Reti-Opening-Pirc-Invitation\"]\n[UTCDate \"2026.09.26\"]\n[UTCTime \"02:04:04\"]\n[WhiteElo \"1548\"]\n[BlackElo \"1490\"]\n[TimeControl \"1/259200\"]\n[Termination \"Opponent2 won by resignation\"]\n[StartTime \"02:04:04\"]\n[EndDate \"2026.10.03\"]\n[EndTime \"05:47:29\"]\n[Link \"https://www.chess.com/game/live/1002\"]\n\n1. Nf3 1... d6 2. e3 2... Nf6 3. d4 3... g6 4. Nbd2 4... Bg7 5. c4 5... O-O 6. b3 6... c5 7. Bb2 7... Nc6 8. d5 8... Nb8 9. Qc2 9... b5 10. h4 10... Bg4 11. Be2 11... a5 12. Ng5 12... Bxe2 13. Kxe2 13... h6 14. Ndf3 14... Nbd7 15. Rad1 15... Nh5 16. Bxg7 16... Nxg7 17. cxb5 17... hxg5 18. hxg5 18... Ne5 19. Rh4 19... Nxf3 20. gxf3 20... Nf5 21. Rh3 21... e5 22. dxe6 22... Qxg5 23. exf7+ 23... Kxf7 24. Rh7+ 24... Ke8 25. Qe4+ 1-0\n",
+   "time_control": "1/259200",
+   "end_time": 1791006449,
+   "rated": true,
+   "initial_setup": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+   "fen": "r3kr2/7R/3p2p1/pPp2nq1/4Q3/1P2PP2/P3KP2/3R4 b - - 3 25",
+   "start_time": 1790388244,
+   "time_class": "daily",
+   "rules": "chess",
+   "white": {
+    "rating": 1548,
+    "result": "win",
+    "username": "Opponent2"
+   },
+   "black": {
+    "rating": 1490,
+    "result": "resigned",
+    "username": "KnightlyMe"
+   },
+   "match": "https://api.chess.com/pub/match/2000776"
+  }
+ ]
+}

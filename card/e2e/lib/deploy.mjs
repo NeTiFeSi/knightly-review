@@ -6,12 +6,14 @@ import { CARD_DIR, MODEL } from './common.mjs';
 import { ankiConnect } from './desktop.mjs';
 
 const BLOCK = /window\.KR_CONFIG\s*=\s*\{[^{}]*\}\s*;?/;
+export const MEDIA = ['_knightly.js', '_kr_stockfish.js', '_kr_stockfish.wasm'];
 const hash = s => createHash('sha256').update(s).digest('hex').slice(0, 10);
 
 function built() {
   const read = f => readFileSync(CARD_DIR + 'dist/' + f, 'utf8');
   return {
-    bundle: readFileSync(CARD_DIR + 'dist/_knightly.js'),
+    // The card bundle and the built-in engine (src/wasm.ts).
+    media: Object.fromEntries(MEDIA.map(f => [f, readFileSync(CARD_DIR + 'dist/' + f)])),
     front: read('templates/front.html'),
     back: read('templates/back.html'),
     css: read('templates/style.css'),
@@ -27,10 +29,14 @@ export async function deploy(port, { apply = false } = {}) {
   const b = built();
   const changes = [];
 
-  const media = await ac('retrieveMediaFile', { filename: '_knightly.js' });
-  const oldBundle = media ? Buffer.from(media, 'base64') : null;
-  if (!oldBundle || !oldBundle.equals(b.bundle))
-    changes.push(`_knightly.js: ${oldBundle ? hash(oldBundle) + ' → ' : 'new, '}${hash(b.bundle)} (${b.bundle.length} bytes)`);
+  const mediaUpdates = [];
+  for (const [filename, data] of Object.entries(b.media)) {
+    const cur = await ac('retrieveMediaFile', { filename });
+    const old = cur ? Buffer.from(cur, 'base64') : null;
+    if (old && old.equals(data)) continue;
+    mediaUpdates.push([filename, data]);
+    changes.push(`${filename}: ${old ? hash(old) + ' → ' : 'new, '}${hash(data)} (${data.length} bytes)`);
+  }
 
   const models = await ac('modelNames');
   if (!models.includes(MODEL)) throw new Error(`note type "${MODEL}" not found; import the sample .apkg first`);
@@ -53,8 +59,8 @@ export async function deploy(port, { apply = false } = {}) {
   if (css.css !== b.css) changes.push('styling: updated');
 
   if (apply && changes.length) {
-    if (!oldBundle || !oldBundle.equals(b.bundle))
-      await ac('storeMediaFile', { filename: '_knightly.js', data: b.bundle.toString('base64') });
+    for (const [filename, data] of mediaUpdates)
+      await ac('storeMediaFile', { filename, data: data.toString('base64'), deleteExisting: true });
     await ac('updateModelTemplates', { model: { name: MODEL, templates } });
     if (css.css !== b.css) await ac('updateModelStyling', { model: { name: MODEL, css: b.css } });
   }

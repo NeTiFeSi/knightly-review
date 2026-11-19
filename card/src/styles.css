@@ -13,6 +13,7 @@
   --kr-bad: #c62828;
   --kr-bad-bg: #fdecea;
   --kr-brilliant: #168f8f;
+  --kr-singular: #1565c0;
   --kr-interesting: #c2185b;
   --kr-dubious: #b26a00;
   --kr-mistake: #d84315;
@@ -39,6 +40,7 @@
   --kr-bad: #ff7b72;
   --kr-bad-bg: #3a1a1a;
   --kr-brilliant: #3fd0d0;
+  --kr-singular: #64b5f6;
   --kr-interesting: #f06292;
   --kr-dubious: #f0b429;
   --kr-mistake: #ff8a50;
@@ -148,6 +150,7 @@
 .kr-glyph { margin-left: 1px; font-weight: 700; }
 .kr-ev { margin-left: 4px; font-size: 11px; color: var(--kr-muted); font-variant-numeric: tabular-nums; }
 .kr-nag-brilliant .kr-glyph, .kr-nag-brilliant.kr-badge .kr-badge-nag { color: var(--kr-brilliant); }
+.kr-nag-singular .kr-glyph, .kr-nag-singular.kr-badge .kr-badge-nag { color: var(--kr-singular); }
 .kr-nag-good .kr-glyph, .kr-nag-good.kr-badge .kr-badge-nag { color: var(--kr-good); }
 .kr-nag-interesting .kr-glyph, .kr-nag-interesting.kr-badge .kr-badge-nag { color: var(--kr-interesting); }
 .kr-nag-dubious .kr-glyph, .kr-nag-dubious.kr-badge .kr-badge-nag { color: var(--kr-dubious); }
@@ -250,4 +253,15 @@
   .kr-settings-box { max-width: none; border-radius: 0; }
   .kr-settings-ctl input[type='range'] { width: 120px; }
   .kr-settings-nags { grid-template-columns: repeat(2, auto); }
+}
+
+/* Moves played with the live engine, and the "+ N more" fold on the back. */
+.kr-move.kr-live .kr-san { font-style: italic; }
+.kr-move.kr-live { border-bottom: 1px dotted currentColor; }
+.kr-btn.kr-more {
+  display: block;
+  margin: 2px 0 4px 12px;
+  padding: 2px 8px;
+  font-size: 0.85em;
+  opacity: 0.8;
 }

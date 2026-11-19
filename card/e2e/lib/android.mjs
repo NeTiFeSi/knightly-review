@@ -1,4 +1,5 @@
 // Target: a separate AnkiDroid test app on a phone, over adb (Wi-Fi) + WebView DevTools.
+import { MEDIA } from './deploy.mjs';
 import { readFileSync } from 'node:fs';
 import { CARD_DIR, loadState, puppeteer, SAMPLE_DECK, saveState, sh, until, wait } from './common.mjs';
 
@@ -209,7 +210,7 @@ export class AndroidTarget {
     return this.openDeck();
   }
 
-  /** Copy the current build's _knightly.js into the test collection's media folder. */
+  /** Copy the current build's media (card bundle + built-in engine) into the test collection's media folder. */
   async deploy() {
     await this.assertSafe();
     const real = this.shell(`appops get ${REAL_ANKIDROID} MANAGE_EXTERNAL_STORAGE`);
@@ -217,10 +218,10 @@ export class AndroidTarget {
       throw new Error(
         'your real AnkiDroid has all-files access and may share ' + ANDROID.media + '; set KR_DROID_MEDIA to the test app’s own folder',
       );
-    readFileSync(CARD_DIR + 'dist/_knightly.js'); // fails early if not built
-    this.adb('push', CARD_DIR + 'dist/_knightly.js', ANDROID.media + '/_knightly.js');
+    for (const f of MEDIA) readFileSync(CARD_DIR + 'dist/' + f); // fails early if not built
+    for (const f of MEDIA) this.adb('push', CARD_DIR + 'dist/' + f, ANDROID.media + '/' + f);
     this.shell('am force-stop ' + ANDROID.pkg); // drop the WebView's copy
-    return 'pushed _knightly.js to ' + ANDROID.media + ' (templates are not updated: re-import the .apkg for template changes)';
+    return 'pushed ' + MEDIA.join(', ') + ' to ' + ANDROID.media + ' (templates are not updated: re-import the .apkg for template changes)';
   }
 
   async screenshot(page, file) {

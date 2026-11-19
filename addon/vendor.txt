@@ -1,0 +1,4 @@
+# Pure-Python packages bundled into the add-on: name version sha256-of-the-PyPI-sdist.
+# Bump the version and hash together, rebuild, and run the tests. Never add a package
+# with compiled parts: Anki's Python can't load them reliably on every OS.
+chess 1.11.2 a8b43e5678fdb3000695bdaa573117ad683761e5ca38e591c4826eba6d25bb39

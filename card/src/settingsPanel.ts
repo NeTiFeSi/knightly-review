@@ -7,7 +7,7 @@ import { clearOverrides, saveOverrides, saveToTemplate } from './settings';
 type Field =
   | { key: keyof Config; label: string; kind: 'select'; options: [string | number, string][]; help?: string }
   | { key: keyof Config; label: string; kind: 'toggle'; help?: string }
-  | { key: keyof Config; label: string; kind: 'range'; min: number; max: number; step: number; help?: string }
+  | { key: keyof Config; label: string; kind: 'range'; min: number; max: number; step: number; help?: string; format?: (v: number) => string }
   | { key: keyof Config; label: string; kind: 'nags'; help?: string };
 
 interface Group {
@@ -67,6 +67,19 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: 'Playing on (live engine)',
+    fields: [
+      {
+        key: 'live',
+        label: 'Keep playing after the first move',
+        kind: 'toggle',
+        help: 'Until mate, a draw or a quiet position. Uses the add-on’s engines on desktop, a built-in Stockfish elsewhere.',
+      },
+      { key: 'goodMove', label: 'A move counts as good within', kind: 'range', min: 0.5, max: 10, step: 0.5, format: v => v + ' % win rate', when: c => c.live },
+      { key: 'liveMaxMoves', label: 'At most', kind: 'range', min: 1, max: 20, step: 1, format: v => v + (v === 1 ? ' move' : ' moves'), when: c => c.live },
+    ],
+  },
+  {
     title: 'Evaluation',
     fields: [
       { key: 'showEval', label: 'Show the engine evaluation', kind: 'toggle' },
@@ -80,7 +93,7 @@ const GROUPS: Group[] = [
   },
 ];
 
-const NAG_ORDER = [3, 1, 5, 6, 2, 4];
+const NAG_ORDER = [3, 8, 1, 5, 6, 2, 4];
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -336,8 +349,9 @@ export class SettingsPanel {
       r.max = String(f.max);
       r.step = String(f.step);
       r.value = String(v);
-      const out = h('span', 'kr-settings-value', seconds(v as number));
-      r.addEventListener('input', () => (out.textContent = seconds(Number(r.value))));
+      const fmt = f.format || seconds;
+      const out = h('span', 'kr-settings-value', fmt(v as number));
+      r.addEventListener('input', () => (out.textContent = fmt(Number(r.value))));
       r.addEventListener('change', () => this.set(k, Number(r.value) as never));
       ctl.appendChild(r);
       ctl.appendChild(out);

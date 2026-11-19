@@ -5,7 +5,7 @@ import { parseGames } from '../src/pgn';
 
 describe('nag', () => {
   it('accepts !!, ! and !? by default', () => {
-    for (const n of [1, 3, 5]) expect(isAccepted([n], DEFAULT_ACCEPT)).toBe(true);
+    for (const n of [1, 3, 5, 8]) expect(isAccepted([n], DEFAULT_ACCEPT)).toBe(true);
     for (const n of [2, 4, 6]) expect(isAccepted([n], DEFAULT_ACCEPT)).toBe(false);
   });
   it('rejects ?!, ? and ??', () => {

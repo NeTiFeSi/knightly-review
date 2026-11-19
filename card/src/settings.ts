@@ -123,13 +123,17 @@ function call(cmd: string, timeout = 1500): Promise<unknown> {
   });
 }
 
-let addonCache: Promise<boolean> | undefined;
+let helloCache: Promise<unknown> | undefined;
 
-/** Whether the Knightly Review desktop add-on answers. Cached per page. */
+/** The add-on's answer to kr:hello ({kr: 1, version, engine?}), or undefined. Cached per page. */
+export function addonHello(): Promise<unknown> {
+  if (!helloCache) helloCache = call('kr:hello');
+  return helloCache;
+}
+
+/** Whether the Knightly Review desktop add-on answers. */
 export function addonAvailable(): Promise<boolean> {
-  if (!addonCache)
-    addonCache = call('kr:hello').then(r => !!r && typeof r === 'object' && (r as { kr?: unknown }).kr === 1);
-  return addonCache;
+  return addonHello().then(r => !!r && typeof r === 'object' && (r as { kr?: unknown }).kr === 1);
 }
 
 export interface SaveReply {

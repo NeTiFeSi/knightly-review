@@ -38,6 +38,8 @@ export interface KNode {
   hint?: string;
   /** `[%kr N]` tag on this move. */
   puzzleId?: number;
+  /** Played with the live engine (not in the PGN). */
+  live?: boolean;
   parent?: KNode;
   children: KNode[];
 }
