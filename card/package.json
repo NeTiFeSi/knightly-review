@@ -10,8 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "apkg": "python3 tools/make_sample_apkg.py",
-    "anki:deploy": "node e2e/deploy.mjs",
-    "anki:smoke": "node e2e/smoke.mjs"
+    "e2e": "node e2e/run.mjs"
   },
   "dependencies": {
     "chessground": "^9.2.1",
