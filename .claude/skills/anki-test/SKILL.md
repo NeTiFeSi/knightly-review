@@ -1,0 +1,55 @@
+---
+name: anki-test
+description: Run Knightly Review card UI tests in real Anki desktop and/or AnkiDroid (on a phone over Wi-Fi adb), using the isolated test profile and test app. Use after changing card/src, card/templates or addon/, or when asked to test the card UI "in Anki", "on the phone" or "on AnkiDroid".
+---
+
+# Test the card UI in real Anki
+
+The runner is `card/e2e/run.mjs` (`npm run e2e --` from `card/`). It drives:
+- **desktop**: an isolated Anki through AnkiConnect (port **8766**) and Chrome DevTools (9222);
+- **android**: the AnkiDroid test app `com.ichi2.anki.a` on a phone, through adb over Wi-Fi and WebView DevTools (forwarded to 9223).
+
+Scenarios are listed by `node e2e/run.mjs list`. Each one checks the card the way a person would use it: solving on the board, failing, hints, flip, auto-grade and ⚙ settings.
+
+## Safety rules (never break these)
+
+- **Never test in the user's own Anki or AnkiDroid.** Use only:
+  - the base folder `~/.local/share/Anki2-knightly-test` (profile `Knightly Test`, AnkiConnect 8766);
+  - the phone app `com.ichi2.anki.a`.
+
+  The tools refuse anything else; don't work around them.
+- **Never use port 8765.** That's the user's own AnkiConnect. Never call `sync` on any profile.
+- Only one Anki desktop can run at a time. `start` refuses while the user's Anki is open. Pass `--close-user-anki` only when the user has said Anki may be closed or restarted (they have, for this project), and tell them you did it.
+- On the phone, act only on the `Knightly Review (sample)` deck. The runner checks the deck name through AnkiDroid's JS API before acting.
+- `auto-grade` answers **Again**, so the sample cards stay in learning and the deck never runs out. Don't change that to real grades.
+
+## Steps
+
+All commands run from `card/`.
+
+1. **Build:** `npm run build`. Also run `npm test` and `npm run typecheck` if you changed code.
+2. **Desktop:**
+   - `node e2e/run.mjs start` (add `--close-user-anki` if allowed and needed);
+   - `node e2e/run.mjs deploy --target desktop` pushes `dist/` into the test profile and keeps its `KR_CONFIG`;
+   - `node e2e/run.mjs --target desktop`.
+3. **Android:**
+   - `node e2e/run.mjs status --target android`. If it says no phone is connected, ask the user for the **IP & port** on the phone's Wireless debugging screen. Ports change whenever Wireless debugging restarts, and pairing is kept. Then pass `--device <ip:port>` to every command, or set `KR_ADB_SERIAL`.
+   - `node e2e/run.mjs deploy --target android --device <ip:port>` pushes `_knightly.js` into the test app's media. Template changes need a re-import of `dist/knightly-sample.apkg` (`npm run apkg`), done in the test app.
+   - `node e2e/run.mjs --target android --device <ip:port>`.
+4. **Pick scenarios** with `--only name1,name2`.
+5. **Report** the PASS/FAIL table, and look at the screenshots in `card/e2e/out/<target>/` (`<scenario>-<step>.png`, plus `-failure.png`) before calling something fixed. A FAIL is a wrong result; an ERROR is a broken step (timeout, missing element). Read the note in either case.
+6. **When done:** `node e2e/run.mjs stop` if you started the desktop test Anki. Tell the user their own Anki can be reopened.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `active profile is "…"` | The wrong Anki is running. Stop it and run `start`. |
+| `your own Anki is running` | Ask the user, or use `--close-user-anki` if they allowed it. |
+| `no phone connected` / `Connection refused` | Wireless debugging is off or got a new port: ask the user for the IP & port. |
+| `the test app's WebView` timeout | HTML / JavaScript debugging is off in the test app (Settings → Developer options), or the app wasn't on the study screen. |
+| `the study screen shows deck "…"` | The saved deck ID is stale. Delete `card/e2e/.state.json` and rerun, so the deck is found by name. |
+| `input tap` / `INJECT_EVENTS` errors | On Xiaomi phones, "USB debugging (Security settings)" must be on, and the phone restarted afterwards. |
+| The desktop back side has old settings | Anki caches the rendered card. The add-on re-renders after "Save for all devices"; reopen the deck for other template changes. |
+
+Desktop `localStorage` doesn't survive an Anki restart (off-the-record profile). AnkiDroid serves each study screen from a new port, so ⚙ settings survive there through the cookie fallback.
