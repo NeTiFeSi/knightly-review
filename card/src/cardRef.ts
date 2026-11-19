@@ -28,6 +28,12 @@ export interface Config {
   gradeFailed: number;
   /** Show the "Hint" button. */
   hints: boolean;
+  /** Keep playing past the PGN with a live engine, until mate, a draw or a quiet position. */
+  live: boolean;
+  /** Live play: a move within this many win-% of the engine's best counts as correct. */
+  goodMove: number;
+  /** Live play: at most this many of your moves. */
+  liveMaxMoves: number;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -44,6 +50,9 @@ export const DEFAULT_CONFIG: Config = {
   gradeHinted: 2,
   gradeFailed: 1,
   hints: true,
+  live: true,
+  goodMove: 2,
+  liveMaxMoves: 10,
 };
 
 declare global {
@@ -67,6 +76,8 @@ const RANGES: Partial<Record<keyof Config, [number, number, boolean]>> = {
   gradeSolved: [1, 4, true],
   gradeHinted: [1, 4, true],
   gradeFailed: [1, 4, true],
+  goodMove: [0.1, 20, false],
+  liveMaxMoves: [1, 30, true],
 };
 
 export const CONFIG_KEYS = Object.keys(DEFAULT_CONFIG) as (keyof Config)[];

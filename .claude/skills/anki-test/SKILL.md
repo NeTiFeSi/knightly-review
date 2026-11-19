@@ -29,6 +29,7 @@ All commands run from `card/`.
 
 1. **Build:** `npm run build`. Also run `npm test` and `npm run typecheck` if you changed code.
 2. **Desktop:**
+   - If you changed `addon/` or `core/`: the test base has a **copy** of the add-on, not a symlink (a symlink would share `meta.json` and `user_files/` with the user's own Anki). Refresh it with `python3 build.py --dev` and the `rsync` line in `addon/README.md` (it keeps the test config), then restart the test Anki.
    - `node e2e/run.mjs start` (add `--close-user-anki` if allowed and needed);
    - `node e2e/run.mjs deploy --target desktop` pushes `dist/` into the test profile and keeps its `KR_CONFIG`;
    - `node e2e/run.mjs --target desktop`.

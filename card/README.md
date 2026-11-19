@@ -9,7 +9,7 @@ npm install
 npm run build      # dist/_knightly.js + dist/templates/{front,back}.html, style.css
 npm test           # vitest
 npm run typecheck
-python tools/make_sample_apkg.py   # dist/knightly-sample.apkg (needs `pip install genanki`)
+python tools/make_sample_apkg.py   # dist/knightly-sample.apkg (needs Anki's `anki` package: `pip install anki`)
 ```
 
 **Dev harness:** run `python -m http.server -d card 8000`, then open <http://localhost:8000/dev/>.
@@ -38,8 +38,23 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
   becomes card N, and the position before it is the puzzle. Keep N stable for a given position, because
   Anki keeps the scheduling history per cloze number.
 - **Candidates** are the mainline move plus its variations. Each candidate gets a move NAG
-  (`!!` `!` `!?` `?!` `?` `??`, or `$1`–`$6`). By default `!!`, `!` and `!?` are accepted. The
-  `acceptNags` setting in the templates' `KR_CONFIG` changes that.
+  (`!!` `!` `!?` `?!` `?` `??` `□`, i.e. `$1`–`$6` and `$8`). By default `!!`, `□`, `!` and `!?` are
+  accepted. The `acceptNags` setting in the templates' `KR_CONFIG` changes that. The generator uses
+  them like this, where a *good move* loses at most 2 % (configurable) of the engine's expected
+  score (WDL) against the best move:
+
+  | NAG | Meaning |
+  |---|---|
+  | `!!` ($3) | the only good move, and a sacrifice |
+  | `□` ($8, singular move) | the only good move, not a sacrifice |
+  | `!?` ($5) | a good move that sacrifices material while another good move keeps more |
+  | `!` ($1) | any other good move |
+  | `?!` ($6) | not a good move; loses up to 10 % |
+  | `?` ($2) | loses 10–20 % |
+  | `??` ($4) | loses more than 20 % |
+
+  A *sacrifice* ends 4 plies down the engine's line (carried on through captures and checks) at least
+  2 points of material (1/3/3/5/9) below the alternative line that keeps the most material.
 - **Continuations:** the user plays every own move of the chosen line, and the opponent's replies are
   played automatically. At a later user turn, the line's next move is accepted unless its NAG rejects
   it, and so is any sibling variation with an accepted NAG. A legal move that is not in the PGN counts
@@ -47,6 +62,19 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
 - **Evals:** `[%eval 0.17]`, `[%eval #-3]` or `[%eval 0.17,22]`, from White's point of view, in the
   comment *after* a move. They describe the position reached by that move.
 - **Arrows:** `[%cal Ge2e4]` and `[%csl Re4]` are drawn when that node is shown.
+- **Playing on (live engine):** the PGN holds only the candidate moves and the reply. Where its line
+  ends, a live engine takes over (setting `live`, on by default). You keep playing until mate, a draw,
+  a quiet position (two or more good moves, no check, no capture just made) or `liveMaxMoves`. Each of
+  your moves must be within `goodMove` win-% of the engine's best (its WDL expected score); the
+  opponent plays the engine's best reply. Live moves are shown in italics, and on the back too.
+  - Desktop with the add-on: your Stockfish (and Lc0, if on), same rule as the analysis. Background
+    analysis pauses while you review.
+  - Everywhere else (AnkiDroid, AnkiMobile, AnkiWeb, desktop without the add-on): a built-in
+    Stockfish (stockfish.js 19 "lite, single-threaded", GPL-3) shipped as the media files
+    `_kr_stockfish.js` + `_kr_stockfish.wasm` (1.8 MB), capped at depth 18 / 1.5 s per search.
+  - Without an engine, the puzzle ends where the PGN does.
+- **Back side:** at the puzzle position only the accepted moves, the game move and your move are
+  listed; "+ N more" shows the rejected ones.
 - **What each side shows:**
   - Front: the mainline only. The NAG, comment, eval and arrows of every tagged move in the note are
     hidden, and so are the eval and arrows of the position before each one.
@@ -76,9 +104,12 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a �
 | `intro` | `'lastMove'` | `'lastMove'` animates the opponent's last move. `'fullGame'` replays the game at `introMoveDelay` ms per move; tap the board to skip. |
 | `afterAnswer` | `'flip'` | `'flip'` shows the back after `flipDelay` ms. `'stay'` stays on the front. `'grade'` flips, then answers automatically after `gradeDelay` ms with `gradeSolved` (3 Good), `gradeHinted` (2 Hard) or `gradeFailed` (1 Again). Any tap or key cancels the automatic answer. |
 | `hints` | `true` | Show the Hint button. |
-| `acceptNags` | `[1, 3, 5]` | NAGs counted as correct. |
+| `acceptNags` | `[1, 3, 5, 8]` | NAGs counted as correct. |
 | `autoReplyDelay` | `400` | ms before the opponent's reply. |
 | `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
+| `live` | `true` | Keep playing past the PGN with a live engine. |
+| `goodMove` | `2` | Live play: win-% a move may lose against the engine's best and still count. |
+| `liveMaxMoves` | `10` | Live play: at most this many of your moves. |
 
 Flipping and grading use `pycmd` on desktop and the JS API on AnkiDroid. AnkiMobile and AnkiWeb
 have no such hook, so the card stays on the front there and asks you to show the answer.

@@ -23,6 +23,9 @@ SCHEMA: dict[str, tuple] = {
     "gradeHinted": ("num", 1, 4, True),
     "gradeFailed": ("num", 1, 4, True),
     "hints": ("bool",),
+    "live": ("bool",),
+    "goodMove": ("num", 0.1, 20, False),
+    "liveMaxMoves": ("num", 1, 30, True),
 }
 
 BLOCK_RE = re.compile(r"window\.KR_CONFIG\s*=\s*\{[^{}]*\}\s*;?")

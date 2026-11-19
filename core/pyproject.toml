@@ -1,0 +1,18 @@
+[project]
+name = "knightly"
+version = "0.1.0"
+description = "Turn your own Lichess/Chess.com mistakes into Knightly Review Anki notes"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
+# Only pure-Python dependencies that Anki already ships (requests) or that the add-on vendors (chess).
+dependencies = ["chess==1.11.2", "requests>=2.25"]
+
+[project.scripts]
+knightly = "knightly.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["knightly*"]

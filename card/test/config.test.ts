@@ -47,13 +47,13 @@ describe('checkConfig', () => {
     expect(dev.hints).toBe(true);
     expect(dev.afterAnswer).toBe('grade');
     expect(configDiff(dev, tpl)).toEqual({ hints: true, afterAnswer: 'grade' });
-    expect(configDiff({ ...tpl, acceptNags: [1, 3, 5] }, tpl)).toEqual({});
+    expect(configDiff({ ...tpl, acceptNags: [1, 3, 5, 8] }, tpl)).toEqual({});
   });
   it('formats a config block the template and the add-on agree on', () => {
     const text = formatConfig({ ...DEFAULT_CONFIG, intro: 'fullGame' });
-    expect(text).toMatch(/^window\.KR_CONFIG = \{\n  acceptNags: \[1, 3, 5\],/);
+    expect(text).toMatch(/^window\.KR_CONFIG = \{\n  acceptNags: \[1, 3, 5, 8\],/);
     expect(text).toContain("  intro: 'fullGame',");
-    expect(text).toMatch(/hints: true\n\};$/);
+    expect(text).toMatch(/liveMaxMoves: 10\n\};$/);
     const loader = readFileSync(new URL('../templates/loader.html', import.meta.url), 'utf8');
     expect(loader).toContain(formatConfig(DEFAULT_CONFIG));
   });

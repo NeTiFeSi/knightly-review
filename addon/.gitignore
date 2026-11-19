@@ -1,2 +1,8 @@
 dist/
 __pycache__/
+.vendor-cache/
+knightly_review/vendor/
+knightly_review/card/
+knightly_review/user_files/*
+!knightly_review/user_files/README.txt
+knightly_review/meta.json

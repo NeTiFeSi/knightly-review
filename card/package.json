@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "chessground": "^9.2.1",
-    "chessops": "^0.15.1"
+    "chessops": "^0.15.1",
+    "stockfish": "19.0.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

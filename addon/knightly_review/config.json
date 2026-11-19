@@ -1,0 +1,28 @@
+{
+  "lichess_user": "",
+  "chesscom_user": "",
+  "stockfish_path": "",
+  "sf_depth": 13,
+  "deck": "Knightly Review",
+  "update_on_startup": true,
+  "update_every_hours": 6,
+  "threads": 0,
+  "hash_mb": 64,
+  "use_lc0": false,
+  "lc0_path": "",
+  "lc0_time": 0.5,
+  "history_days": 90,
+  "time_classes": [
+    "blitz",
+    "rapid",
+    "classical",
+    "correspondence"
+  ],
+  "rated_only": false,
+  "max_games_per_run": 40,
+  "max_new_cards": 10,
+  "include_opponent": false,
+  "min_loss": 10.0,
+  "good_move": 2.0,
+  "setup_done": false
+}

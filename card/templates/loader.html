@@ -3,11 +3,12 @@
 /* Knightly Review settings: the defaults for every device.
    Easiest: open ⚙ on a card. With the desktop add-on, "Save for all devices" rewrites this block.
    Editing by hand: keep Front and Back identical, keep the quotes, and see the card's ⚙ for warnings.
-   acceptNags: NAGs counted as correct (1 !, 2 ?, 3 !!, 4 ??, 5 !?, 6 ?!)
+   acceptNags: NAGs counted as correct (1 !, 2 ?, 3 !!, 4 ??, 5 !?, 6 ?!, 8 □ only move)
    intro: 'lastMove' | 'fullGame'      afterAnswer: 'flip' | 'stay' | 'grade'
-   gradeSolved / gradeHinted / gradeFailed: 1 Again, 2 Hard, 3 Good, 4 Easy      delays in ms */
+   gradeSolved / gradeHinted / gradeFailed: 1 Again, 2 Hard, 3 Good, 4 Easy      delays in ms
+   live: play on with an engine past the PGN      goodMove: win-% a live move may lose      liveMaxMoves */
 window.KR_CONFIG = {
-  acceptNags: [1, 3, 5],
+  acceptNags: [1, 3, 5, 8],
   autoReplyDelay: 400,
   showEval: true,
   evalOnPuzzleFront: false,
@@ -19,7 +20,10 @@ window.KR_CONFIG = {
   gradeSolved: 3,
   gradeHinted: 2,
   gradeFailed: 1,
-  hints: true
+  hints: true,
+  live: true,
+  goodMove: 2,
+  liveMaxMoves: 10
 };
 </script>
 <script>
