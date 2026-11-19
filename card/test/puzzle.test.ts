@@ -1,0 +1,97 @@
+import { describe, expect, it } from 'vitest';
+import { findPuzzle, parseGames } from '../src/pgn';
+import { acceptedMoves, PuzzleRun } from '../src/puzzle';
+import { DEFAULT_ACCEPT } from '../src/nag';
+import { games, mv } from './helpers';
+
+const run = (n: number, accept = DEFAULT_ACCEPT) => new PuzzleRun(findPuzzle(games(), n)!.position, accept);
+
+describe('PuzzleRun', () => {
+  it('accepts a good variation and auto-plays the reply (black to move)', () => {
+    const r = run(1);
+    expect(r.userColor).toBe('black');
+    const out = r.play(mv(r.cur, 'd6e5'));
+    expect(out.kind).toBe('solved');
+    if (out.kind !== 'solved') return;
+    expect(out.played.san).toBe('dxe5');
+    expect(out.reply!.san).toBe('Qxg4');
+    expect(r.status).toBe('solved');
+  });
+
+  it('rejects the mainline blunder', () => {
+    const r = run(1);
+    const out = r.play(mv(r.cur, 'g4d1'));
+    expect(out).toMatchObject({ kind: 'failed', reason: 'rejected', san: 'Bxd1' });
+    expect(r.status).toBe('failed');
+  });
+
+  it('rejects a dubious variation and reports its grade node', () => {
+    const r = run(1);
+    const out = r.play(mv(r.cur, 'g4e6'));
+    expect(out.kind).toBe('failed');
+    if (out.kind === 'failed') expect(out.node!.nags).toEqual([6]);
+  });
+
+  it('fails a legal move that is not in the analysis', () => {
+    const r = run(1);
+    const out = r.play(mv(r.cur, 'a7a6'));
+    expect(out).toMatchObject({ kind: 'failed', reason: 'unknown', san: 'a6' });
+  });
+
+  it('continues a multi-move line and accepts the line move or a good sibling', () => {
+    const a = run(3);
+    expect(a.play(mv(a.cur, 'g7g6')).kind).toBe('continue');
+    expect(a.cur.san).toBe('Qf3');
+    expect(a.accepted().map(n => n.san)).toEqual(['Nf6', 'Qf6']);
+    expect(a.play(mv(a.cur, 'g8f6'))).toMatchObject({ kind: 'solved' });
+
+    const b = run(3);
+    b.play(mv(b.cur, 'g7g6'));
+    expect(b.play(mv(b.cur, 'd8f6')).kind).toBe('solved');
+
+    const c = run(3);
+    c.play(mv(c.cur, 'g7g6'));
+    expect(c.play(mv(c.cur, 'd8e7'))).toMatchObject({ kind: 'failed', reason: 'unknown' });
+    expect(c.played.map(n => n.san)).toEqual(['g6']);
+  });
+
+  it('handles castling dragged as king two squares (white to move)', () => {
+    const r = run(4);
+    expect(r.userColor).toBe('white');
+    expect(r.play(mv(r.cur, 'f3d4')).kind).toBe('continue');
+    expect(r.play(mv(r.cur, 'e1g1'))).toMatchObject({ kind: 'solved' });
+    expect(r.played.map(n => n.san)).toEqual(['Nxd4', 'O-O']);
+  });
+
+  it('also accepts castling as king-takes-rook', () => {
+    const r = run(4);
+    expect(r.play(mv(r.cur, 'e1h1')).kind).toBe('solved'); // 4. O-O!? has no continuation
+  });
+
+  it('first move is graded by NAG only', () => {
+    const p = findPuzzle(games(), 1)!;
+    expect(acceptedMoves(p.position, true, DEFAULT_ACCEPT).map(n => n.san)).toEqual(['dxe5']);
+    expect(acceptedMoves(p.position, true, [1, 3, 5, 6]).map(n => n.san)).toEqual(['dxe5', 'Be6']);
+  });
+
+  it('respects a stricter accept list', () => {
+    const r = run(3, [1, 3]);
+    r.play(mv(r.cur, 'g7g6'));
+    expect(r.play(mv(r.cur, 'd8f6'))).toMatchObject({ kind: 'failed', reason: 'rejected' });
+  });
+
+  it('handles promotion', () => {
+    const [g] = parseGames('[SetUp "1"] [FEN "4k3/P7/8/8/8/8/8/K7 w - - 0 1"] 1. Kb2?? { [%kr 1] } (1. a8=Q+! Kd7 2. Qb7+) (1. a8=N?!) *');
+    const r = new PuzzleRun(findPuzzle([g], 1)!.position, DEFAULT_ACCEPT);
+    expect(r.play(mv(r.cur, 'a7a8q')).kind).toBe('continue');
+    expect(r.play(mv(r.cur, 'a8b7')).kind).toBe('solved');
+    const u = new PuzzleRun(findPuzzle([g], 1)!.position, DEFAULT_ACCEPT);
+    expect(u.play(mv(u.cur, 'a7a8n'))).toMatchObject({ kind: 'failed', reason: 'rejected' });
+  });
+
+  it('give up fails at the current position', () => {
+    const r = run(2);
+    expect(r.giveUp()).toMatchObject({ kind: 'failed', reason: 'gaveup' });
+    expect(() => r.play(mv(r.cur, 'g8f6'))).toThrow();
+  });
+});
