@@ -21,7 +21,7 @@ DEFAULT = {
     "gradeHinted": 2,
     "gradeFailed": 1,
     "hints": True,
-    "live": True,
+    "live": False,
     "goodMove": 2,
     "liveMaxMoves": 10,
 }

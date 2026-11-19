@@ -63,7 +63,7 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
   comment *after* a move. They describe the position reached by that move.
 - **Arrows:** `[%cal Ge2e4]` and `[%csl Re4]` are drawn when that node is shown.
 - **Playing on (live engine):** the PGN holds only the candidate moves and the reply. Where its line
-  ends, a live engine takes over (setting `live`, on by default). You keep playing until mate, a draw,
+  ends, a live engine can take over (setting `live`, off by default: turn it on in âš™ or in `KR_CONFIG`). You keep playing until mate, a draw,
   a quiet position (two or more good moves, no check, no capture just made) or `liveMaxMoves`. Each of
   your moves must be within `goodMove` win-% of the engine's best (its WDL expected score); the
   opponent plays the engine's best reply. Live moves are shown in italics, and on the back too.
@@ -107,7 +107,7 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a â
 | `acceptNags` | `[1, 3, 5, 8]` | NAGs counted as correct. |
 | `autoReplyDelay` | `400` | ms before the opponent's reply. |
 | `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
-| `live` | `true` | Keep playing past the PGN with a live engine. |
+| `live` | `false` | Keep playing past the PGN with a live engine. |
 | `goodMove` | `2` | Live play: win-% a move may lose against the engine's best and still count. |
 | `liveMaxMoves` | `10` | Live play: at most this many of your moves. |
 

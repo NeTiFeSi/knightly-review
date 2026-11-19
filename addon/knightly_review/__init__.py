@@ -77,11 +77,15 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
 
         try:
             engine = live.engine_label(settings.load())
-            if engine:
-                live.service.warm()
         except Exception:
             engine = None
         return True, {"kr": 1, "version": VERSION, "engine": engine}
+    if message == "kr:warm":  # a card with live play on: start the engines early
+        from . import live, settings
+
+        if live.engine_label(settings.load()):
+            live.service.warm()
+        return True, {"ok": True}
     if message.startswith("kr:engine:"):
         from . import live
 

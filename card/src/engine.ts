@@ -109,7 +109,14 @@ export function liveEngine(hello: () => Promise<unknown>, wasm?: () => Promise<L
       .then(r => {
         const h = r as { kr?: number; engine?: string } | undefined;
         const py = (window as unknown as { pycmd?: PyCmd }).pycmd;
-        if (h && h.kr === 1 && h.engine && typeof py === 'function') return new DesktopEngine(h.engine, py) as LiveEngine;
+        if (h && h.kr === 1 && h.engine && typeof py === 'function') {
+          try {
+            py('kr:warm'); // Lc0 needs a few seconds to start
+          } catch (_) {
+            /* only a head start */
+          }
+          return new DesktopEngine(h.engine, py) as LiveEngine;
+        }
         return wasm ? wasm() : undefined;
       })
       .catch(() => undefined);

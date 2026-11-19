@@ -50,7 +50,7 @@ export const DEFAULT_CONFIG: Config = {
   gradeHinted: 2,
   gradeFailed: 1,
   hints: true,
-  live: true,
+  live: false,
   goodMove: 2,
   liveMaxMoves: 10,
 };
