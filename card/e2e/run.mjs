@@ -37,7 +37,13 @@ async function runScenarios(t) {
   const { solve } = await oracle();
   await t.assertSafe();
   const results = [];
+  let errorsInARow = 0;
   for (const s of list) {
+    if (errorsInARow >= 2) {
+      results.push({ target: t.name, scenario: s.name, status: 'SKIP', secs: '0', note: 'stopped after 2 errors in a row' });
+      console.log(`SKIP  ${t.name.padEnd(8)} ${s.name.padEnd(18)}     -   stopped after 2 errors in a row`);
+      continue;
+    }
     const ctx = {
       attached: new WeakSet(),
       attach(page) {
@@ -78,6 +84,7 @@ async function runScenarios(t) {
     try {
       await card.clearOverrides(await t.page());
     } catch (_) {}
+    errorsInARow = status === 'ERROR' ? errorsInARow + 1 : 0;
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     results.push({ target: t.name, scenario: s.name, status, secs, note });
     console.log(`${status.padEnd(5)} ${t.name.padEnd(8)} ${s.name.padEnd(18)} ${secs.padStart(5)}s  ${note}`);

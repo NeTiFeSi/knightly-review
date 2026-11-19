@@ -33,7 +33,9 @@ All commands run from `card/`.
    - `node e2e/run.mjs deploy --target desktop` pushes `dist/` into the test profile and keeps its `KR_CONFIG`;
    - `node e2e/run.mjs --target desktop`.
 3. **Android:**
-   - `node e2e/run.mjs status --target android`. If it says no phone is connected, ask the user for the **IP & port** on the phone's Wireless debugging screen. Ports change whenever Wireless debugging restarts, and pairing is kept. Then pass `--device <ip:port>` to every command, or set `KR_ADB_SERIAL`.
+   - `node e2e/run.mjs status --target android --device <phone-ip>:5555`. The phone usually listens on the **fixed port 5555** (`adb tcpip 5555`), which lasts until the phone restarts.
+   - If it says no phone is connected (the phone restarted, so port 5555 is gone): ask the user to turn on Wireless debugging and send the **IP & port** from that screen (pairing is kept). Then run `adb connect <ip:port>` and `adb -s <ip:port> tcpip 5555`, and use `<ip>:5555` again.
+   - Pass `--device` to every command, or set `KR_ADB_SERIAL`.
    - `node e2e/run.mjs deploy --target android --device <ip:port>` pushes `_knightly.js` into the test app's media. Template changes need a re-import of `dist/knightly-sample.apkg` (`npm run apkg`), done in the test app.
    - `node e2e/run.mjs --target android --device <ip:port>`.
 4. **Pick scenarios** with `--only name1,name2`.
@@ -49,7 +51,11 @@ All commands run from `card/`.
 | `no phone connected` / `Connection refused` | Wireless debugging is off or got a new port: ask the user for the IP & port. |
 | `the test app's WebView` timeout | HTML / JavaScript debugging is off in the test app (Settings → Developer options), or the app wasn't on the study screen. |
 | `the study screen shows deck "…"` | The saved deck ID is stale. Delete `card/e2e/.state.json` and rerun, so the deck is found by name. |
+| Phone stuck on the deck list | The review intent was "delivered to top". The runner already starts it with `--activity-clear-task`; if you call `am start` yourself, do the same. |
+| `protocol fault` from adb | The phone is reachable twice (port 5555 and the paired port). The runner retries once; `adb disconnect` the extra entry if it persists. |
 | `input tap` / `INJECT_EVENTS` errors | On Xiaomi phones, "USB debugging (Security settings)" must be on, and the phone restarted afterwards. |
 | The desktop back side has old settings | Anki caches the rendered card. The add-on re-renders after "Save for all devices"; reopen the deck for other template changes. |
+
+On AnkiDroid, the WebView writes cookies to disk only when the app goes to the background (or about every 30 s). Killing the app straight from the study screen can lose a just-changed ⚙ setting, which no real user can do. `restartApp()` leaves the app first, like a person would.
 
 Desktop `localStorage` doesn't survive an Anki restart (off-the-record profile). AnkiDroid serves each study screen from a new port, so ⚙ settings survive there through the cookie fallback.

@@ -23,7 +23,15 @@ export class AndroidTarget {
   }
 
   adb(...args) {
-    return sh('adb', this.serial ? ['-s', this.serial, ...args] : args).trim();
+    const full = this.serial ? ['-s', this.serial, ...args] : args;
+    try {
+      return sh('adb', full).trim();
+    } catch (e) {
+      // Transient transport errors (e.g. "protocol fault") when the phone is reachable
+      // both over the fixed port and the paired Wireless-debugging port: retry once.
+      if (!/protocol fault|device offline|closed/i.test(String(e.stderr || e.message))) throw e;
+      return sh('adb', full).trim();
+    }
   }
 
   shell(cmd) {
@@ -149,22 +157,53 @@ export class AndroidTarget {
     await this.assertSafe();
     const did = loadState().androidDeckId;
     if (did) {
-      this.shell(`am start -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler --el EXTRA_DECK_ID ${did}`);
+      this.startReview(did);
     } else {
-      // First run: open the deck list and tap the sample deck by name.
+      // First run: find the sample deck. Launching resumes the app where it was; if that is
+      // already the study screen, currentCard() below checks it is the sample deck.
       this.shell(`monkey -p ${ANDROID.pkg} -c android.intent.category.LAUNCHER 1`);
-      await this.tapText(SAMPLE_DECK, 20000);
+      await wait(2000);
+      if (!/Reviewer/.test(this.topActivity())) await this.tapText(SAMPLE_DECK, 20000);
     }
     await wait(1500);
-    const page = await this.page();
+    let page = await this.page();
     const card = await this.currentCard(page); // throws on any other deck
     if (!did || String(card.did) !== String(did)) saveState({ androidDeckId: card.did });
+    // A previous test may have left the study screen on an answer: start it again for a question.
+    for (let i = 0; i < 2 && (await this.side(page)) === 'back'; i++) {
+      this.disconnect();
+      this.startReview(card.did);
+      await wait(1500);
+      page = await this.page();
+      await this.currentCard(page);
+    }
     return page;
   }
 
-  /** Fully close and reopen the test app on the sample deck. */
+  /**
+   * Open the study screen for deck `did` through AnkiDroid's review intent. The task is
+   * cleared first: otherwise Android only brings the app's existing task to the front
+   * ("delivered to top") and the intent is ignored.
+   */
+  startReview(did) {
+    this.disconnect();
+    this.shell(`am start --activity-clear-task -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler --el EXTRA_DECK_ID ${did}`);
+  }
+
+  side(page) {
+    return page.evaluate(() => (document.getElementById('kr-root') || { dataset: {} }).dataset.side || '');
+  }
+
+  /**
+   * Fully close and reopen the test app on the sample deck, like a person would: leave it
+   * (Home), then close it. Leaving first matters: the WebView only writes cookies to disk
+   * when the app goes to the background (or about every 30 s), so killing it straight
+   * from the study screen can lose a setting changed a moment before.
+   */
   async restartApp() {
     this.disconnect();
+    this.shell('input keyevent KEYCODE_HOME');
+    await wait(1500);
     this.shell('am force-stop ' + ANDROID.pkg);
     await wait(1000);
     return this.openDeck();

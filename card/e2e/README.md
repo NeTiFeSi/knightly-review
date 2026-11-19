@@ -33,6 +33,7 @@ Screenshots go to `e2e/out/<target>/`. The exit code is 1 when a scenario fails.
 2. In the test app, turn on Developer options (Settings → About → tap the logo 6 times), then **HTML / JavaScript debugging**. Import `knightly-sample.apkg`.
 3. On the phone, turn on **Wireless debugging**, then pair once with `adb pair IP:PORT CODE`.
 4. On Xiaomi phones, also turn on **USB debugging (Security settings)** and restart the phone, so taps work.
+5. Optional, a fixed port: after connecting once with the Wireless-debugging port, run `adb -s IP:PORT tcpip 5555`. Then use `--device IP:5555` until the phone restarts. Reserving the phone's IP in the router keeps the address stable too.
 
 Settings, through environment variables:
 - `KR_ANKI_BASE`, `KR_ANKI_PROFILE`, `KR_ANKI_PORT` (8766), `KR_DEVTOOLS_PORT` (9222);
@@ -43,4 +44,6 @@ Settings, through environment variables:
 - **Desktop:** the reviewer renders the back from the output cached when the front was shown. The add-on re-renders the card after saving settings.
 - **Desktop:** the card webview uses an off-the-record profile, so `localStorage` doesn't survive a restart.
 - **AnkiDroid:** each study screen is served from a new random port, so `localStorage` is lost. The ⚙ settings survive through the cookie fallback.
+- **AnkiDroid:** the WebView writes cookies to disk only when the app goes to the background (or about every 30 s).
+- **AnkiDroid:** the review intent must be started with `--activity-clear-task`, or Android just brings the existing task forward.
 - **AnkiDroid's JS API** returns `{success, value}` objects.
