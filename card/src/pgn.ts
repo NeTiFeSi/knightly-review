@@ -34,6 +34,8 @@ export interface KNode {
   startingComment: string;
   eval?: Evaluation;
   shapes: CommentShape[];
+  /** `[%hint text]` on a tagged move: optional text hint for its puzzle. */
+  hint?: string;
   /** `[%kr N]` tag on this move. */
   puzzleId?: number;
   parent?: KNode;
@@ -56,6 +58,7 @@ export interface PuzzleRef {
 }
 
 const KR_TAG = /\[%kr\s+(\d+)\s*\]/;
+const HINT_TAG = /\[%hint\s+([^\]]*)\]/;
 
 export function positionOf(node: KNode): Position {
   return Chess.fromSetup(parseFen(node.fen).unwrap()).unwrap();
@@ -129,6 +132,7 @@ function build(src: PgnNode<PgnNodeData>, parent: KNode, pos: Position): void {
     const raw = (child.data.comments || []).join(' ');
     const parsed = parseComment(raw);
     const tag = KR_TAG.exec(raw);
+    const hint = HINT_TAG.exec(raw);
     const node: KNode = {
       id: parent.id + '.' + parent.children.length,
       fen: makeFen(p.toSetup()),
@@ -145,6 +149,7 @@ function build(src: PgnNode<PgnNodeData>, parent: KNode, pos: Position): void {
       eval: parsed.evaluation,
       shapes: parsed.shapes,
       puzzleId: tag ? parseInt(tag[1], 10) : undefined,
+      hint: hint ? hint[1].trim() : undefined,
       parent,
       children: [],
     };

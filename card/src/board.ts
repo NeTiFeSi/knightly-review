@@ -24,9 +24,11 @@ export class Board {
   constructor(
     private readonly el: HTMLElement,
     orientation: Color,
+    initialFen: string,
     private readonly onMove: (move: Move) => void,
   ) {
     this.cg = Chessground(el, {
+      fen: initialFen,
       orientation,
       coordinates: true,
       animation: { enabled: true, duration: 180 },

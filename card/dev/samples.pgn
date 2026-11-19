@@ -7,7 +7,7 @@
 [BlackElo "1480"]
 [Result "1-0"]
 
-1. e4 { [%eval 0.3] } e5 { [%eval 0.3] } 2. Nf3 { [%eval 0.3] } d6 { [%eval 0.5] } 3. Bc4 { [%eval 0.5] } Bg4?! { [%eval 0.9] [%kr 2] Pins nothing yet and invites tactics on f7. } (3... Nf6! { [%eval 0.5] } 4. Nc3 { [%eval 0.5] }) (3... Be7! { [%eval 0.6] }) (3... h6?! { [%eval 0.9] }) 4. Nc3 { [%eval 0.8] } g6? { [%eval 2.5] } 5. Nxe5! { [%eval 2.6] [%cal Ge5f7,Rc4f7] } Bxd1?? { [%eval #3] [%kr 1] Legal's mate: the queen was bait. } (5... dxe5! { [%eval 2.4] Losing a pawn is the lesser evil. } 6. Qxg4 { [%eval 2.4] }) (5... Be6?! { [%eval 3.5] } 6. Bxe6 { [%eval 3.5] }) 6. Bxf7+ { [%eval #2] } Ke7 { [%eval #1] } 7. Nd5# 1-0
+1. e4 { [%eval 0.3] } e5 { [%eval 0.3] } 2. Nf3 { [%eval 0.3] } d6 { [%eval 0.5] } 3. Bc4 { [%eval 0.5] } Bg4?! { [%eval 0.9] [%kr 2] Pins nothing yet and invites tactics on f7. } (3... Nf6! { [%eval 0.5] } 4. Nc3 { [%eval 0.5] }) (3... Be7! { [%eval 0.6] }) (3... h6?! { [%eval 0.9] }) 4. Nc3 { [%eval 0.8] } g6? { [%eval 2.5] } 5. Nxe5! { [%eval 2.6] [%cal Ge5f7,Rc4f7] } Bxd1?? { [%eval #3] [%kr 1] [%hint Which of your pieces can still take back?] Legal's mate: the queen was bait. } (5... dxe5! { [%eval 2.4] Losing a pawn is the lesser evil. } 6. Qxg4 { [%eval 2.4] }) (5... Be6?! { [%eval 3.5] } 6. Bxe6 { [%eval 3.5] }) 6. Bxf7+ { [%eval #2] } Ke7 { [%eval #1] } 7. Nd5# 1-0
 
 [Event "Rated rapid"]
 [Date "2026.10.05"]

@@ -2,11 +2,32 @@
 import { DEFAULT_ACCEPT } from './nag';
 import type { Side } from './pgn';
 
+export type Intro = 'lastMove' | 'fullGame';
+export type AfterAnswer = 'flip' | 'stay' | 'grade';
+
 export interface Config {
+  /** NAGs counted as correct (1 !, 3 !!, 5 !?). */
   acceptNags: number[];
+  /** ms before the opponent's reply is played. */
   autoReplyDelay: number;
   showEval: boolean;
   evalOnPuzzleFront: boolean;
+  /** Front opening: animate only the last move, or replay the game up to the puzzle. */
+  intro: Intro;
+  /** ms per move when intro is 'fullGame'. */
+  introMoveDelay: number;
+  /** When the attempt ends: flip to the back, stay on the front, or flip and grade automatically. */
+  afterAnswer: AfterAnswer;
+  /** ms to show the result before flipping. */
+  flipDelay: number;
+  /** ms on the back before the automatic grade (any tap or key cancels it). */
+  gradeDelay: number;
+  /** Eases used by afterAnswer 'grade' (1 Again, 2 Hard, 3 Good, 4 Easy). */
+  gradeSolved: number;
+  gradeHinted: number;
+  gradeFailed: number;
+  /** Show the "Hint" button. */
+  hints: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -14,6 +35,15 @@ export const DEFAULT_CONFIG: Config = {
   autoReplyDelay: 400,
   showEval: true,
   evalOnPuzzleFront: false,
+  intro: 'lastMove',
+  introMoveDelay: 900,
+  afterAnswer: 'flip',
+  flipDelay: 1200,
+  gradeDelay: 2500,
+  gradeSolved: 3,
+  gradeHinted: 2,
+  gradeFailed: 1,
+  hints: true,
 };
 
 declare global {
@@ -22,15 +52,27 @@ declare global {
   }
 }
 
-export function readConfig(): Config {
-  const c = (typeof window !== 'undefined' && window.KR_CONFIG) || {};
-  return {
-    acceptNags: Array.isArray(c.acceptNags) ? c.acceptNags : DEFAULT_CONFIG.acceptNags,
-    autoReplyDelay: typeof c.autoReplyDelay === 'number' ? c.autoReplyDelay : DEFAULT_CONFIG.autoReplyDelay,
-    showEval: typeof c.showEval === 'boolean' ? c.showEval : DEFAULT_CONFIG.showEval,
-    evalOnPuzzleFront:
-      typeof c.evalOnPuzzleFront === 'boolean' ? c.evalOnPuzzleFront : DEFAULT_CONFIG.evalOnPuzzleFront,
-  };
+const CHOICES: Partial<Record<keyof Config, readonly string[]>> = {
+  intro: ['lastMove', 'fullGame'],
+  afterAnswer: ['flip', 'stay', 'grade'],
+};
+
+/** KR_CONFIG from the template, validated field by field against the defaults. */
+export function readConfig(raw?: Partial<Config>): Config {
+  const c = (raw || (typeof window !== 'undefined' && window.KR_CONFIG) || {}) as Record<string, unknown>;
+  const out = { ...DEFAULT_CONFIG } as Record<string, unknown>;
+  (Object.keys(DEFAULT_CONFIG) as (keyof Config)[]).forEach(k => {
+    const v = c[k];
+    const d = DEFAULT_CONFIG[k];
+    if (v === undefined) return;
+    if (Array.isArray(d)) {
+      if (Array.isArray(v) && v.every(x => typeof x === 'number')) out[k] = v;
+    } else if (typeof v === typeof d) {
+      const allowed = CHOICES[k];
+      if (!allowed || allowed.indexOf(v as string) >= 0) out[k] = v;
+    }
+  });
+  return out as unknown as Config;
 }
 
 /**

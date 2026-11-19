@@ -24,6 +24,7 @@ function bindKeys(): void {
     if (!current || !document.getElementById('kr-root')) return;
     const t = e.target as HTMLElement | null;
     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+    current.cancelGrade();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === 'ArrowLeft') {
       current.prev();

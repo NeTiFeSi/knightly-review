@@ -24,6 +24,10 @@
   <button id="back">Back (show answer)</button>
   <label><input type="checkbox" id="night"> Night mode</label>
   <label><input type="checkbox" id="rebuild"> Rebuild page between sides (AnkiMobile/AnkiWeb)</label>
+  <label>intro <select id="intro"><option>lastMove</option><option>fullGame</option></select></label>
+  <label>afterAnswer <select id="after"><option>flip</option><option>stay</option><option>grade</option></select></label>
+  <label><input type="checkbox" id="pycmd" checked> Fake desktop pycmd</label>
+  <span id="log"></span>
   <details><summary>PGN field</summary><textarea id="pgn"></textarea></details>
 </div>
 <div id="qa"></div>
@@ -50,12 +54,21 @@
 
   // Mimic Anki: cloze rendering, field HTML (<br> for newlines), script execution.
   function render(side) {
+    if (side === 'front') $('log').textContent = '';
     const n = +$('card').value;
     const others = cards().filter(c => c !== n).map(c => `<span class="cloze-inactive" data-ordinal="${c}">${c}</span>`).join(' ');
     const active = side === 'front'
       ? `<span class="cloze" data-cloze="${n}" data-ordinal="${n}">[${n}]</span>`
       : `<span class="cloze" data-ordinal="${n}">${n}</span>`;
+    window.__harnessCfg = { intro: $('intro').value, afterAnswer: $('after').value };
+    if ($('pycmd').checked) {
+      window.pycmd = cmd => {
+        if (cmd === 'ans') render('back');
+        else if (/^ease\d$/.test(cmd)) $('log').textContent = 'graded: ' + ['', 'Again', 'Hard', 'Good', 'Easy'][+cmd[4]];
+      };
+    } else delete window.pycmd;
     const html = tpl[side]
+      .replace('(function () {', 'Object.assign(window.KR_CONFIG, window.__harnessCfg || {});\n(function () {')
       .replace('{{cloze:Cards}}', active + ' ' + others)
       .replace('{{PGN}}', esc($('pgn').value).replace(/\n/g, '<br>'))
       .replace(/\{\{#Notes\}\}[\s\S]*?\{\{\/Notes\}\}/, '<div class="kr-notes"><b>Notes field:</b> example note.</div>');
@@ -74,6 +87,7 @@
   $('front').onclick = () => render('front');
   $('back').onclick = () => render('back');
   $('card').onchange = () => render('front');
+  $('intro').onchange = $('after').onchange = () => render('front');
   $('pgn').oninput = fillCards;
   $('night').onchange = e => document.body.classList.toggle('nightMode', e.target.checked);
   document.addEventListener('keydown', e => {

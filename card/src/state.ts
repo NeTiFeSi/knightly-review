@@ -13,6 +13,10 @@ export interface StoredResult {
   failUci?: string;
   /** Node id of the rejected move, when it is in the PGN. */
   failNode?: string;
+  /** Hints revealed during the attempt. */
+  hints?: number;
+  /** Set once the card was graded automatically, so it is not graded twice. */
+  graded?: boolean;
 }
 
 declare global {

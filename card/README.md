@@ -53,10 +53,25 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
   - Back: the mainline plus this card's variations only. Other cards' tagged moves stay hidden.
   - The same game can appear in other notes with different tags.
 
+- **Hints:** `[%hint text]` on the tagged move is shown as the first hint. The next hint circles the
+  piece(s) to move. Hints are counted, and the back reports how many were used.
+
+## Settings (`KR_CONFIG`, at the top of both templates)
+
+| Setting | Default | Options |
+|---|---|---|
+| `intro` | `'lastMove'` | `'lastMove'` animates the opponent's last move. `'fullGame'` replays the game at `introMoveDelay` ms per move; tap the board to skip. |
+| `afterAnswer` | `'flip'` | `'flip'` shows the back after `flipDelay` ms. `'stay'` stays on the front. `'grade'` flips, then answers automatically after `gradeDelay` ms with `gradeSolved` (3 Good), `gradeHinted` (2 Hard) or `gradeFailed` (1 Again). Any tap or key cancels it. |
+| `hints` | `true` | Show the Hint button. |
+| `acceptNags` | `[1, 3, 5]` | NAGs counted as correct. |
+| `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
+
+Flipping and grading use `pycmd` on desktop and the JS API on AnkiDroid. AnkiMobile and AnkiWeb
+have no such hook, so the card stays on the front there and asks you to show the answer.
+
 ## Anki notes
 
 - The templates load `_knightly.js` with a script tag injected at runtime, and remount on every card,
   because Desktop and AnkiDroid reuse the webview.
 - The front's result reaches the back through `window` and `sessionStorage`. When neither is available,
   the back still works but shows no "you played…" banner.
-- Grading is still manual: press Again after a failure.

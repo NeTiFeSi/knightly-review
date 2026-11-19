@@ -4,6 +4,7 @@ import type { Key } from 'chessground/types';
 import { chessgroundMove } from 'chessops/compat';
 import type { Move } from 'chessops/types';
 import { makeSquare, makeUci, parseUci } from 'chessops/util';
+import { answerCard, canControlReviewer, Ease, showAnswer } from './anki';
 import { Board } from './board';
 import type { CardRef, Config } from './cardRef';
 import { formatEval, whiteShare } from './eval';
@@ -52,6 +53,12 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+const EASE_LABELS: Record<Ease, string> = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
+
+function clampEase(n: number): Ease {
+  return Math.max(1, Math.min(4, Math.round(n))) as Ease;
+}
+
 export function renderError(root: HTMLElement, msg: string): void {
   root.innerHTML = '';
   root.appendChild(h('div', 'kr-error', 'Knightly Review: ' + msg));
@@ -66,6 +73,12 @@ export class App {
   private readonly result?: StoredResult;
   private cursor: KNode;
   private busy = false;
+  /** Front: replaying the game up to the puzzle (intro 'fullGame'). */
+  private replaying = false;
+  /** Back: automatic grade pending (afterAnswer 'grade'). */
+  private gradePending?: { ease: Ease; label: string };
+  /** Shown when the reviewer can't be driven from the card. */
+  private manualNote?: string;
   /** The user's rejected move, for the red arrow. */
   private failMove?: Move;
   private timers: number[] = [];
@@ -78,6 +91,7 @@ export class App {
     status: HTMLElement;
     backBtn: HTMLButtonElement;
     giveUpBtn?: HTMLButtonElement;
+    hintBtn?: HTMLButtonElement;
     prevBtn: HTMLButtonElement;
     nextBtn: HTMLButtonElement;
   };
@@ -116,7 +130,7 @@ export class App {
     };
     if (card.side === 'front') {
       clearResult(this.key);
-      this.run = new PuzzleRun(puzzle.position, cfg.acceptNags);
+      this.run = new PuzzleRun(puzzle.position, cfg.acceptNags, puzzle.gameMove.hint);
     } else {
       this.result = loadResult(this.key);
     }
@@ -126,8 +140,7 @@ export class App {
   }
 
   destroy(): void {
-    this.timers.forEach(t => clearTimeout(t));
-    this.timers = [];
+    this.clearTimers();
     this.board.destroy();
   }
 
@@ -169,6 +182,11 @@ export class App {
     controls.appendChild(nextBtn);
     controls.appendChild(backBtn);
     let giveUpBtn: HTMLButtonElement | undefined;
+    let hintBtn: HTMLButtonElement | undefined;
+    if (this.run && this.cfg.hints) {
+      hintBtn = button('kr-hint', '💡 Hint', 'Get a hint (shown on the back)', () => this.useHint());
+      controls.appendChild(hintBtn);
+    }
     if (this.run) {
       giveUpBtn = button('kr-giveup', 'Show answer', 'Give up and show the answer (counts as failed)', () =>
         this.giveUp(),
@@ -187,8 +205,16 @@ export class App {
     main.appendChild(moves);
     root.appendChild(main);
 
-    this.els = { evalFill, evalText, evalBar, moves, status, backBtn, giveUpBtn, prevBtn, nextBtn };
-    this.board = new Board(boardEl, this.puzzle.position.turn, m => this.onUserMove(m));
+    this.els = { evalFill, evalText, evalBar, moves, status, backBtn, giveUpBtn, hintBtn, prevBtn, nextBtn };
+    this.board = new Board(boardEl, this.puzzle.position.turn, this.introStart().fen, m => this.onUserMove(m));
+    // Tapping the board (or any control) during the replay skips it.
+    boardEl.addEventListener('mousedown', () => this.skipIntro(), true);
+    boardEl.addEventListener('touchstart', () => this.skipIntro(), { capture: true, passive: true });
+    // Any interaction on the back cancels a pending automatic grade.
+    if (this.card.side === 'back') {
+      root.addEventListener('mousedown', () => this.cancelGrade(), true);
+      root.addEventListener('touchstart', () => this.cancelGrade(), { capture: true, passive: true });
+    }
   }
 
   private buildHeader(): HTMLElement {
@@ -230,18 +256,115 @@ export class App {
   // -------------------------------------------------------------------------
   // Flow
 
+  /** Mainline nodes from the game start to the puzzle position. */
+  private introPath(): KNode[] {
+    const path: KNode[] = [];
+    for (let n: KNode | undefined = this.puzzle.position; n; n = n.parent) path.unshift(n);
+    return path;
+  }
+
+  /** Position the board is created with, so the first animation is the intended one. */
+  private introStart(): KNode {
+    const pos = this.puzzle.position;
+    if (this.card.side !== 'front') return pos;
+    if (this.cfg.intro === 'fullGame') return this.puzzle.game.root;
+    return pos.parent || pos;
+  }
+
   private start(): void {
-    const prev = this.puzzle.position.parent;
-    if (this.card.side === 'front' && prev) {
-      // Show the position before, then animate the opponent's last move.
-      this.board.show(prev, { movable: false });
-      this.render(false);
-      this.later(() => this.render(), 250);
-    } else this.render();
+    if (this.card.side === 'back') {
+      this.render();
+      this.scheduleGrade();
+      return;
+    }
+    const path = this.introPath();
+    if (this.cfg.intro === 'fullGame' && path.length > 2) {
+      this.replaying = true;
+      this.cursor = path[0];
+      this.render();
+      path.slice(1).forEach((n, i) =>
+        this.later(() => {
+          this.cursor = n;
+          if (n === this.puzzle.position) this.replaying = false;
+          this.render();
+        }, (i + 1) * this.cfg.introMoveDelay),
+      );
+      return;
+    }
+    // Board starts on the position before; animate the opponent's last move.
+    this.cursor = this.introStart();
+    this.render();
+    this.cursor = this.puzzle.position;
+    this.later(() => this.render(), 250);
+  }
+
+  private skipIntro(): void {
+    if (!this.replaying) return;
+    this.clearTimers();
+    this.replaying = false;
+    this.cursor = this.puzzle.position;
+    this.render();
   }
 
   private later(f: () => void, ms: number): void {
     this.timers.push(window.setTimeout(f, ms));
+  }
+
+  private clearTimers(): void {
+    this.timers.forEach(t => clearTimeout(t));
+    this.timers = [];
+  }
+
+  /** Front: the attempt is over — flip (or not) according to afterAnswer. */
+  private finish(): void {
+    if (this.cfg.afterAnswer === 'stay') return;
+    if (!canControlReviewer()) {
+      this.manualNote = 'Show the answer to continue.';
+      this.render();
+      return;
+    }
+    this.later(() => {
+      if (!showAnswer()) {
+        this.manualNote = 'Show the answer to continue.';
+        this.render();
+      }
+    }, this.cfg.flipDelay);
+  }
+
+  /** Back: grade automatically after a delay, unless the user interacts. */
+  private scheduleGrade(): void {
+    const r = this.result;
+    if (this.cfg.afterAnswer !== 'grade' || !r || r.graded) return;
+    const ease = clampEase(
+      r.status === 'failed' ? this.cfg.gradeFailed : r.hints ? this.cfg.gradeHinted : this.cfg.gradeSolved,
+    );
+    this.gradePending = { ease, label: EASE_LABELS[ease] };
+    this.renderStatus();
+    this.later(() => {
+      if (!this.gradePending) return;
+      this.gradePending = undefined;
+      saveResult({ ...r, graded: true });
+      if (!answerCard(ease)) {
+        this.manualNote = 'Automatic grading is not available here — grade manually.';
+        this.renderStatus();
+      }
+    }, this.cfg.gradeDelay);
+  }
+
+  cancelGrade(): void {
+    if (!this.gradePending) return;
+    this.gradePending = undefined;
+    this.manualNote = 'Automatic grading cancelled — grade manually.';
+    this.renderStatus();
+  }
+
+  private useHint(): void {
+    const run = this.run;
+    this.skipIntro();
+    if (!run || run.status !== 'playing' || this.busy) return;
+    if (!run.hint()) return;
+    this.cursor = run.cur;
+    this.render();
   }
 
   /** Where "Back to puzzle" goes: the position to answer, or where it ended. */
@@ -252,15 +375,18 @@ export class App {
   }
 
   goto(node: KNode): void {
+    this.skipIntro();
     this.cursor = node;
     this.render();
   }
 
   prev(): void {
+    if (this.replaying) return this.skipIntro();
     if (this.cursor.parent) this.goto(this.cursor.parent);
   }
 
   next(): void {
+    if (this.replaying) return this.skipIntro();
     const c = visibleChildren(this.cursor, this.view)[0];
     if (c) this.goto(c);
   }
@@ -280,6 +406,7 @@ export class App {
       this.cursor = out.at;
       this.persist();
       this.render();
+      this.finish();
       return;
     }
     this.view.revealed.add(out.played.id);
@@ -291,6 +418,7 @@ export class App {
       this.busy = false;
       this.persist();
       this.render();
+      this.finish();
       return;
     }
     this.later(() => {
@@ -299,6 +427,7 @@ export class App {
       this.cursor = reply;
       if (out.kind === 'solved') this.persist();
       this.render();
+      if (out.kind === 'solved') this.finish();
     }, this.cfg.autoReplyDelay);
   }
 
@@ -309,6 +438,7 @@ export class App {
     if (out.kind === 'failed') this.cursor = out.at;
     this.persist();
     this.render();
+    this.finish();
   }
 
   private persist(): void {
@@ -324,6 +454,7 @@ export class App {
       failSan: f && f.san,
       failNode: f && f.node && f.node.id,
       failUci: this.failMove && makeUci(this.failMove),
+      hints: run.hintsUsed,
     });
   }
 
@@ -333,7 +464,7 @@ export class App {
   private render(showBoard = true): void {
     const node = this.cursor;
     const run = this.run;
-    const movable = !!run && run.status === 'playing' && !this.busy && node === run.cur;
+    const movable = !!run && run.status === 'playing' && !this.busy && !this.replaying && node === run.cur;
     if (showBoard) this.board.show(node, { movable, shapes: this.shapesFor(node) });
     this.renderEval(node);
     this.renderMoves();
@@ -343,6 +474,10 @@ export class App {
     this.els.prevBtn.disabled = !node.parent;
     this.els.nextBtn.disabled = !visibleChildren(node, this.view).length;
     if (this.els.giveUpBtn) this.els.giveUpBtn.style.display = run && run.status === 'playing' ? '' : 'none';
+    if (this.els.hintBtn) {
+      this.els.hintBtn.style.display = run && run.status === 'playing' ? '' : 'none';
+      this.els.hintBtn.disabled = !run || !run.hasMoreHints() || this.busy;
+    }
   }
 
   private renderEval(node: KNode): void {
@@ -379,7 +514,11 @@ export class App {
     };
     const run = this.run;
 
-    if (run && run.failure && node === run.failure.at) {
+    if (run && run.status === 'playing' && node === run.cur && !this.replaying) {
+      run.hints.forEach(hint => {
+        if (hint.kind === 'piece') hint.squares.forEach(sq => push({ orig: makeSquare(sq) as Key, brush: 'yellow' }));
+      });
+    } else if (run && run.failure && node === run.failure.at) {
       acceptedMoves(node, node === run.start, this.cfg.acceptNags).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.failMove) push(this.moveArrow(this.failMove, 'red'));
     } else if (!run && node === this.puzzle.position) {
@@ -432,29 +571,47 @@ export class App {
     const toMove = capitalize(this.puzzle.position.turn) + ' to move';
     const run = this.run;
 
+    const note = () => this.manualNote && line('kr-status-sub kr-status-note', this.manualNote);
+    const hintCount = (n: number) => n + (n === 1 ? ' hint' : ' hints');
+
     if (run) {
+      if (this.replaying) {
+        line('kr-status-main', 'Replaying the game…');
+        line('kr-status-sub', 'Tap the board to skip to the puzzle.');
+        return;
+      }
       if (run.status === 'playing') {
         if (run.played.length) {
           const last = run.played[run.played.length - 1];
           el.classList.add('kr-good');
           line('kr-status-main', this.moveBadge(last), ' — keep going');
         } else line('kr-status-main', toMove + ' — find the best move.');
+        run.hints.forEach(hint =>
+          line(
+            'kr-status-hint',
+            '💡 ' + (hint.kind === 'text' ? hint.text : 'Move the highlighted piece' + (hint.squares.length > 1 ? 's' : '') + '.'),
+          ),
+        );
         return;
       }
+      const again = this.cfg.afterAnswer === 'grade' ? '.' : ' — press Again.';
       if (run.status === 'solved') {
         el.classList.add('kr-good');
-        line('kr-status-main', '✓ Solved — ', this.moveBadge(run.played[0]));
+        const how = run.hintsUsed ? '✓ Solved with ' + hintCount(run.hintsUsed) + ' — ' : '✓ Solved — ';
+        line('kr-status-main', how, this.moveBadge(run.played[0]));
+        note();
         return;
       }
       const f = run.failure!;
       el.classList.add('kr-bad');
-      if (f.reason === 'gaveup') line('kr-status-main', '✗ Answer shown — press Again.');
-      else if (f.reason === 'unknown') line('kr-status-main', '✗ ' + f.san + ' is not in the analysis — press Again.');
+      if (f.reason === 'gaveup') line('kr-status-main', '✗ Answer shown' + again);
+      else if (f.reason === 'unknown') line('kr-status-main', '✗ ' + f.san + ' is not in the analysis' + again);
       else {
-        line('kr-status-main', '✗ ', this.moveBadge(f.node!), ' — press Again.');
+        line('kr-status-main', '✗ ', this.moveBadge(f.node!), again);
         if (f.node!.comment) line('kr-status-comment', f.node!.comment);
       }
       this.acceptedLine(line, f.at, f.at === run.start);
+      note();
       return;
     }
 
@@ -471,9 +628,14 @@ export class App {
         const at = r.failAt ? findNode(this.games, r.failAt) : undefined;
         line('kr-status-sub', 'Then missed ' + (r.failSan || 'the continuation') + (at && at.san ? ' after ' + at.san : '') + '.');
       }
+      if (r.hints) line('kr-status-sub', 'Used ' + hintCount(r.hints) + '.');
     } else line('kr-status-main', toMove + '.');
     this.acceptedLine(line, this.puzzle.position, true);
     line('kr-status-sub', 'Game: ', this.moveBadge(this.puzzle.gameMove));
+    if (this.puzzle.gameMove.hint) line('kr-status-sub', '💡 Hint: ' + this.puzzle.gameMove.hint);
+    if (this.gradePending)
+      line('kr-status-sub kr-status-note', 'Marking as ' + this.gradePending.label + '… tap anywhere to cancel.');
+    note();
   }
 
   private acceptedLine(

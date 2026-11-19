@@ -121,6 +121,9 @@
 .kr-status.kr-bad { border-color: var(--kr-bad); background: var(--kr-bad-bg); }
 .kr-status-main { font-weight: 600; }
 .kr-status-sub { font-size: 13px; color: var(--kr-muted); margin-top: 2px; }
+.kr-status-hint { font-size: 14px; margin-top: 4px; }
+.kr-status-note { font-style: italic; }
+.kr-hint:not(:disabled) { color: var(--kr-dubious); font-weight: 600; }
 .kr-status-comment { font-size: 13px; margin-top: 4px; font-style: italic; }
 .kr-badge { white-space: nowrap; }
 .kr-badge-san { font-weight: 700; }

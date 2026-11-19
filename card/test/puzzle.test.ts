@@ -95,3 +95,28 @@ describe('PuzzleRun', () => {
     expect(() => r.play(mv(r.cur, 'g8f6'))).toThrow();
   });
 });
+
+describe('hints', () => {
+  it('reveals the text hint first, then the piece to move', () => {
+    const p = findPuzzle(games(), 1)!;
+    expect(p.gameMove.hint).toBe('Which of your pieces can still take back?');
+    const r = new PuzzleRun(p.position, DEFAULT_ACCEPT, p.gameMove.hint);
+    expect(r.hint()).toEqual({ kind: 'text', text: 'Which of your pieces can still take back?' });
+    const piece = r.hint();
+    expect(piece && piece.kind).toBe('piece');
+    expect(r.hasMoreHints()).toBe(false);
+    expect(r.hint()).toBeUndefined();
+    expect(r.hintsUsed).toBe(2);
+  });
+  it('without text, offers the piece; hints reset as the line advances', () => {
+    const r = run(3);
+    const h = r.hint()!;
+    expect(h.kind).toBe('piece');
+    if (h.kind === 'piece') expect(h.squares.length).toBe(2); // g7 (g6) and d8 (Qe7, Qf6)
+    r.play(mv(r.cur, 'g7g6'));
+    expect(r.hints).toEqual([]);
+    expect(r.hasMoreHints()).toBe(true);
+    r.hint();
+    expect(r.hintsUsed).toBe(2);
+  });
+});
