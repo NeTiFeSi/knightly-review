@@ -184,7 +184,7 @@
 .kr-notes { max-width: 980px; margin: 12px auto 0; text-align: left; }
 
 /* Settings: gear, warning banner, dialog */
-.kr-head { position: relative; padding-right: 44px; }
+.kr-head { position: relative; padding-right: 44px; min-height: 40px; }
 .kr-gear {
   position: absolute; right: 0; top: 0; min-width: 36px; padding: 4px 8px; font-size: 18px; line-height: 1;
   color: var(--kr-muted);

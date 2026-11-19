@@ -52,6 +52,12 @@ def _save(card, cfg: dict[str, Any]) -> dict[str, Any]:
     if not replaced:
         return {"ok": False, "error": "no window.KR_CONFIG block in this note type's templates"}
     mw.col.models.update_dict(nt)
+    # The reviewer renders the back from the output cached when the front was shown;
+    # re-render so this card's back already uses the new settings.
+    try:
+        card.question(reload=True)
+    except Exception:
+        pass
     return {"ok": True, "updated": replaced}
 
 
