@@ -10,7 +10,6 @@
   "hash_mb": 64,
   "use_lc0": false,
   "lc0_path": "",
-  "lc0_time": 0.5,
   "history_days": 90,
   "time_classes": [
     "blitz",
@@ -19,7 +18,7 @@
     "correspondence"
   ],
   "rated_only": false,
-  "max_games_per_run": 40,
+  "analysis_minutes": 10,
   "max_new_cards": 10,
   "note_grouping": "game",
   "opening_min_loss": 2.0,

@@ -15,7 +15,7 @@ import chess
 
 from helpers import (FIXTURES, FRENCH, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, FakeAnalyser,
                      FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
-from knightly import http, notes, openings, sources
+from knightly import deepen, http, notes, openings, sources
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
@@ -87,6 +87,11 @@ class CacheTest(unittest.TestCase):
         c.put_eval("p", "stockfish", 25, Eval(25, [Line(S(5, 1, 998, 1), ["e2e4"]), Line(S(1, 1, 998, 1), ["d2d4"])]))
         self.assertEqual(len(c.get_eval("p", "stockfish", multipv=2).lines), 2)
         self.assertEqual(len(c.get_eval("p", "stockfish", multipv=1).lines), 1)  # trimmed to what was asked
+        # The deepest eval of each position, whatever its number of lines.
+        c.put_eval("q", "stockfish", 1, Eval(1, [Line(S(0, 0, 1000, 0), ["e2e4"])]))
+        best = c.best_evals(["p", "q", "none"], "stockfish")
+        self.assertEqual({k: e for k, (e, _) in best.items()}, {"p": 25, "q": 1})
+        self.assertEqual(best["p"][1].score, S(5, 1, 998, 1))
 
     def test_old_cache_without_wdl_is_dropped(self):
         d = tempfile.TemporaryDirectory()
@@ -182,6 +187,24 @@ class LichessTest(unittest.TestCase):
         self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 0)  # already stored
         self.assertEqual(s.requests[1][1]["params"]["since"], newest + 1)
 
+    def test_all_time_and_growing_look_back(self):
+        c = tmpcache(self)
+        body = ("\n".join(self.lines) + "\n").encode()
+        s = FakeSession([("/api/games/user/", FakeResponse(200, body))])
+        self.assertTrue(lichess.needs_backfill(c, "KnightlyMe", 90))  # nothing fetched yet
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30)
+        self.assertGreater(s.requests[0][1]["params"]["since"], 0)
+        self.assertNotIn("max", s.requests[0][1]["params"])
+        self.assertFalse(lichess.needs_backfill(c, "KnightlyMe", 30))
+        self.assertFalse(lichess.needs_backfill(c, "KnightlyMe", 10))
+        self.assertTrue(lichess.needs_backfill(c, "KnightlyMe", 0))
+        # All time: starts over from the very beginning, then is incremental again.
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=0)
+        self.assertEqual(s.requests[1][1]["params"]["since"], 0)
+        self.assertFalse(lichess.needs_backfill(c, "KnightlyMe", -1))
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=0)
+        self.assertGreater(s.requests[2][1]["params"]["since"], 0)
+
 
 class ChesscomTest(unittest.TestCase):
     def test_parse_and_fetch_with_etag(self):
@@ -203,6 +226,25 @@ class ChesscomTest(unittest.TestCase):
         oct_reqs = [kw for url, kw in s.requests if url.endswith("2026/10")]
         self.assertEqual(oct_reqs[1]["headers"]["If-None-Match"], 'W/"abc"')
         self.assertEqual(sum(url.endswith("2026/09") for url, _ in s.requests), 1)  # finished month: once
+
+    def test_all_time_backfill(self):
+        c = tmpcache(self)
+        base = "https://api.chess.com/pub/player/knightlyme/games/"
+        arch = {"archives": [base + "2019/03", base + "2026/09", base + "2026/10"]}
+        s = FakeSession([
+            ("/games/archives", FakeResponse(200, arch)),
+            ("/games/", FakeResponse(200, {"games": []})),
+        ])
+        now = 1793000000  # 2026-10-26
+        months = lambda: [u.rsplit("games/", 1)[1] for u, _ in s.requests if "/games/2" in u]  # noqa: E731
+        chesscom.fetch(c, "KnightlyMe", session=s, history_days=30, now=now)
+        self.assertEqual(months(), ["2026/09", "2026/10"])
+        self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 30, now=now))
+        self.assertTrue(chesscom.needs_backfill(c, "KnightlyMe", 0, now=now))
+        s.requests.clear()
+        chesscom.fetch(c, "KnightlyMe", session=s, history_days=0, now=now)
+        self.assertEqual(months(), ["2019/03", "2026/10"])  # September is done; October is current
+        self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 0, now=now))
 
     def test_cooldown(self):
         c = tmpcache(self)
@@ -506,13 +548,24 @@ class JobsTest(unittest.TestCase):
         c.put_games([g], "knightlyme")
         cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
         res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
-        self.assertEqual((res.analysed_games, res.new_cards, len(res.notes)), (1, 1, 1))
-        self.assertIsNotNone(c.get_analysis(g))
+        self.assertEqual((res.new_cards, len(res.notes)), (1, 1))
+        self.assertGreater(res.analysed_positions, 0)
         # Second run: the position is on a card already, so nothing new.
         again = run_update(cfg, c, fetch=False, existing={g.key: res.notes[0].pgn}, analyser_factory=FakeAnalyser)
-        self.assertEqual((again.analysed_games, again.new_cards, again.notes), (0, 0, []))
+        self.assertEqual((again.new_cards, again.notes), (0, []))
 
-    def test_newest_games_first_across_sites(self):
+    def test_progress_events(self):
+        c = tmpcache(self)
+        c.put_games([scholar_game(end_ts=int(__import__("time").time()))], "knightlyme")
+        events = []
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused", max_new_cards=3)
+        run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser, progress=lambda *e: events.append(e))
+        pos = [(d, t) for s, d, t, _ in events if s == "positions"]
+        self.assertTrue(pos)
+        self.assertTrue(all(0 <= d <= t for d, t in pos))
+        self.assertTrue(all(t == 3 for s, _, t, _ in events if s == "analyse" and t))
+
+    def test_newest_game_gets_a_shared_mistake(self):
         import time as _t
         c = tmpcache(self)
         now = int(_t.time())
@@ -520,10 +573,9 @@ class JobsTest(unittest.TestCase):
         new_cc = scholar_game(source="chesscom", id="new", end_ts=now - 60)
         c.put_games([old_li], "knightlyme")
         c.put_games([new_cc], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", chesscom_user="KnightlyMe", stockfish_path="x", max_games_per_run=1)
-        run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
-        self.assertIsNotNone(c.get_analysis(new_cc))
-        self.assertIsNone(c.get_analysis(old_li))
+        cfg = Config(lichess_user="KnightlyMe", chesscom_user="KnightlyMe", stockfish_path="x")
+        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
+        self.assertEqual([n.key for n in res.notes], [new_cc.key])
 
     def test_cancel(self):
         ev = threading.Event()
@@ -533,10 +585,68 @@ class JobsTest(unittest.TestCase):
         cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
 
         class Cancelling(FakeAnalyser):
-            def analyse_game(self, game, progress=None):
+            def score(self, board, depth):
                 raise http.Cancelled()
 
         self.assertTrue(run_update(cfg, c, fetch=False, cancel=ev, analyser_factory=Cancelling).cancelled)
+
+
+class DeepenTest(unittest.TestCase):
+    """Analysis by increasing depth (deepen.py)."""
+
+    def setUp(self):
+        self.sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
+        self.fr = game_from(FRENCH, white=False, id="f1", end_ts=100)
+        self.cfg = Config(sf_depth=3, max_new_cards=5)
+
+    def run_deepener(self, script, **kw):
+        an = ScriptedAnalyser([self.sic, self.fr], script)
+        p = deepen.collect([self.sic, self.fr], self.cfg)
+        dp = deepen.Deepener(p, an, self.cfg, threshold=self.cfg.min_loss, card_min_loss=None, opponents={},
+                             want=self.cfg.max_new_cards, **kw)
+        dp.run()
+        return p, an, dp
+
+    def test_collect_counts_games(self):
+        p = deepen.collect([self.sic, self.fr], self.cfg)
+        start, after_e4 = p.keys["lichess:s1"][:2]
+        self.assertEqual((p.count[start], p.count[after_e4]), (2, 2))
+        self.assertEqual(p.order[:2], [start, after_e4])  # most-seen first
+        self.assertTrue(all(e.mine for e in p.edges))  # Black's moves only
+        self.assertEqual(len(p.edges), 5 + 2)
+
+    def test_depth_one_first_most_seen_first(self):
+        p, an, dp = self.run_deepener({})
+        first = len(p.fen)
+        self.assertEqual({d for _, d in an.searched[:first]}, {1})
+        self.assertEqual([k for k, _ in an.searched[:2]], p.order[:2])
+        # No mistakes: everything is deepened to the configured depth in the end.
+        self.assertTrue(all(dp.depth[k] >= 3 for k in p.fen))
+        self.assertEqual(dp.confirmed, set())
+
+    def test_candidates_climb_first(self):
+        p, an, dp = self.run_deepener({"s1": {5: 30}})
+        ks = p.keys["lichess:s1"]
+        depth2 = [k for k, d in an.searched if d == 2]
+        self.assertEqual(set(depth2[:2]), {ks[5], ks[6]})
+        self.assertEqual(dp.confirmed, {(ks[5], SICILIAN[5])})
+
+    def test_time_budget(self):
+        t = [0.0]
+
+        class Slow(ScriptedAnalyser):
+            def score(self, board, depth):
+                t[0] += 10  # seconds per position
+                return super().score(board, depth)
+
+        cfg = Config(sf_depth=3, analysis_minutes=1)
+        an = Slow([self.sic, self.fr], {"s1": {5: 30}})
+        p = deepen.collect([self.sic, self.fr], cfg)
+        dp = deepen.Deepener(p, an, cfg, threshold=cfg.min_loss, card_min_loss=None, opponents={}, want=5,
+                             clock=lambda: t[0])
+        dp.run()
+        self.assertEqual(dp.analysed, 6)
+        self.assertEqual(dp.confirmed, set())
 
 
 class AnalyserTest(unittest.TestCase):
@@ -548,12 +658,13 @@ class AnalyserTest(unittest.TestCase):
         cfg = Config(stockfish_path="sf", use_lc0=use_lc0, lc0_path="lc0")
         an = analyse.Analyser(cfg, tmpcache(self))
         self.addCleanup(an.close)
-        an.sf.evaluate = lambda board, n, moves=None: sf
+        self.lc0_ms = []
+        an.sf.evaluate = lambda board, n, moves=None, **kw: sf
         if an.lc0:
-            an.lc0.evaluate = lambda board, n, moves=None: lc
+            an.lc0.evaluate = lambda board, n, moves=None, ms=None, **kw: self.lc0_ms.append(ms) or lc
         return an
 
-    SF = Eval(13, [Line(S(40, 300, 650, 50), ["e2e4"])], "stockfish")
+    SF = Eval(13, [Line(S(40, 300, 650, 50), ["e2e4"])], "stockfish", ms=840)
     LC = Eval(5, [Line(S(20, 200, 650, 150), ["d2d4"])], "lc0")
     SF_MATE = Eval(13, [Line(Score(mate=3, wdl=(1000, 0, 0)), ["e2e4"])], "stockfish")
     LC_MATE = Eval(5, [Line(Score(mate=5, wdl=(990, 10, 0)), ["d2d4"])], "lc0")
@@ -567,6 +678,7 @@ class AnalyserTest(unittest.TestCase):
         an.evaluate(b)
         an.evaluate(b)
         self.assertEqual(an.picked, {"stockfish": 0, "lc0": 2})
+        self.assertEqual(self.lc0_ms, [840, 840])  # Lc0 searches as long as Stockfish took
 
     def test_gate_pauses_analysis(self):
         an = self.analyser(self.SF, self.LC, use_lc0=False)
@@ -597,10 +709,39 @@ class AnalyserTest(unittest.TestCase):
     def test_limits(self):
         from knightly.engine.analyse import Engine
 
-        cfg = Config(sf_depth=22, lc0_time=0.75)
-        self.assertEqual(Engine("stockfish", "x", cfg, None).limit().depth, 22)
-        self.assertEqual(Engine("lc0", "x", cfg, None).limit().time, 0.75)
-        self.assertEqual((Engine("stockfish", "x", cfg, None).effort, Engine("lc0", "x", cfg, None).effort), (22, 750))
+        cfg = Config(sf_depth=22)
+        sf, lc = Engine("stockfish", "x", cfg, None), Engine("lc0", "x", cfg, None)
+        self.assertEqual((sf.limit()[0].depth, sf.limit()[1]), (22, 22))
+        self.assertEqual(sf.limit(depth=3)[0].depth, 3)
+        self.assertEqual((lc.limit(ms=750)[0].time, lc.limit(ms=750)[1]), (0.75, 750))
+        with self.assertRaises(ValueError):
+            lc.limit()
+
+    def test_search_time_is_stored_and_old_results_rerun(self):
+        from knightly.engine.analyse import Engine
+
+        class Proc:
+            calls = 0
+
+            def analyse(self, board, limit, multipv, root_moves=None):
+                Proc.calls += 1
+                return [{"depth": limit.depth, "pv": [chess.Move.from_uci("e2e4")],
+                         "score": chess.engine.PovScore(chess.engine.Cp(20), chess.WHITE),
+                         "wdl": chess.engine.PovWdl(chess.engine.Wdl(300, 650, 50), chess.WHITE)}]
+
+        c = tmpcache(self)
+        b = chess.Board()
+        k = fen_key(b.fen())
+        c.put_eval(k, "stockfish", 13, Eval(13, [Line(S(1, 1, 998, 1), ["d2d4"])], "stockfish"))  # no time
+        eng = Engine("stockfish", "x", Config(sf_depth=13), c)
+        eng._proc = Proc()
+        self.assertEqual(eng.evaluate(b, 1).lines[0].moves, ["d2d4"])  # cached is fine untimed
+        ev = eng.evaluate(b, 1, timed=True)  # but not when its time is needed
+        self.assertEqual((Proc.calls, ev.lines[0].moves), (1, ["e2e4"]))
+        self.assertGreater(ev.ms, 0)
+        self.assertEqual(c.get_eval(k, "stockfish", min_effort=13).ms, ev.ms)  # stored with the result
+        eng.evaluate(b, 1, timed=True)
+        self.assertEqual(Proc.calls, 1)
 
     def test_old_engine_path_setting(self):
         self.assertEqual(Config.from_dict({"engine_path": "/usr/bin/stockfish"}).stockfish_path, "/usr/bin/stockfish")

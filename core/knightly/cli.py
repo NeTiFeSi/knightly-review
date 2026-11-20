@@ -27,13 +27,13 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--lichess", default="")
     up.add_argument("--chesscom", default="")
     up.add_argument("--stockfish", default="", help="Stockfish path (default: the first one found)")
-    up.add_argument("--lc0", default="", help="also analyse with this Lc0, in parallel")
+    up.add_argument("--lc0", default="", help="also analyse with this Lc0, after Stockfish, for as long as it took")
     up.add_argument("--depth", type=int, help="Stockfish depth (default 13)")
     up.add_argument("--cache", default=default_cache())
     up.add_argument("--config", help="JSON file with Config fields")
-    up.add_argument("--max-games", type=int)
+    up.add_argument("--minutes", type=float, help="engine time for this run; 0 = until enough cards are found")
     up.add_argument("--max-cards", type=int)
-    up.add_argument("--days", type=int)
+    up.add_argument("--days", type=int, help="look back this many days; 0 = all time")
     up.add_argument("--by-opening", action="store_true", help="one note per opening and ply (note_grouping=opening)")
     up.add_argument("--out", default="-", help="output JSON file ('-' = stdout)")
 
@@ -71,8 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Config.from_dict(json.loads(Path(args.config).read_text()) if args.config else {})
     cfg.lichess_user = args.lichess or cfg.lichess_user
     cfg.chesscom_user = args.chesscom or cfg.chesscom_user
-    if args.max_games is not None:
-        cfg.max_games_per_run = args.max_games
+    if args.minutes is not None:
+        cfg.analysis_minutes = args.minutes
     if args.max_cards is not None:
         cfg.max_new_cards = args.max_cards
     if args.days is not None:
@@ -95,12 +95,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     def progress(stage: str, done: int, total: int, msg: str) -> None:
-        print(f"[{stage}] {msg}", file=sys.stderr)
+        if stage != "positions":  # one per position: too chatty for a terminal
+            print(f"[{stage}] {msg}", file=sys.stderr)
 
     res = run_update(cfg, SqliteCache(args.cache), progress=progress, force=True)
     out = {
         "new_games": res.new_games,
-        "analysed_games": res.analysed_games,
+        "analysed_positions": res.analysed_positions,
         "new_cards": res.new_cards,
         "cancelled": res.cancelled,
         "warnings": res.warnings,

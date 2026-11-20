@@ -15,7 +15,9 @@ from aqt.qt import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFontDatabase,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -269,11 +271,22 @@ class SettingsDialog(QDialog):
         self.chesscom = QLineEdit(self.cfg.get("chesscom_user", ""))
         self.chesscom.setPlaceholderText("Chess.com username (optional)")
         af.addRow("Chess.com:", self.chesscom)
+        days = int(self.cfg.get("history_days", 90))
         self.days = QSpinBox()
-        self.days.setRange(7, 3650)
-        self.days.setValue(int(self.cfg.get("history_days", 90)))
+        self.days.setRange(1, 36500)
+        self.days.setValue(days if days > 0 else 90)
         self.days.setSuffix(" days")
-        af.addRow("Look back:", self.days)
+        self.all_time = QCheckBox("All time")
+        self.all_time.setToolTip("Download every game you ever played. Analysis then carries on over several\n"
+                                 "updates, the positions you reach most often first.")
+        self.all_time.toggled.connect(lambda on: self.days.setEnabled(not on))
+        self.all_time.setChecked(days <= 0)
+        self.days.setEnabled(days > 0)
+        drow = QHBoxLayout()
+        drow.addWidget(self.days)
+        drow.addWidget(self.all_time)
+        drow.addStretch()
+        af.addRow("Look back:", drow)
         lay.addWidget(acc)
 
         sf = QGroupBox("Stockfish (required)")
@@ -313,7 +326,7 @@ class SettingsDialog(QDialog):
 
         lc = QGroupBox("Lc0 (optional, best with a graphics card)")
         lcf = QFormLayout(lc)
-        self.use_lc0 = QCheckBox("Also analyse with Lc0, in parallel; its judgement is used except in mate positions")
+        self.use_lc0 = QCheckBox("Also analyse with Lc0; its judgement is used except in mate positions")
         self.use_lc0.setChecked(bool(self.cfg.get("use_lc0", False)))
         lcf.addRow(self.use_lc0)
         self.lc0_label = QLabel()
@@ -324,12 +337,10 @@ class SettingsDialog(QDialog):
         lrow2.addWidget(self.lc0_label, 1)
         lrow2.addWidget(lc0_change)
         lcf.addRow(lrow2)
-        self.lc0_time = QDoubleSpinBox()
-        self.lc0_time.setRange(0.1, 60)
-        self.lc0_time.setSingleStep(0.1)
-        self.lc0_time.setSuffix(" s")
-        self.lc0_time.setValue(float(self.cfg.get("lc0_time", 0.5)))
-        lcf.addRow("Time per position:", self.lc0_time)
+        lc0_note = QLabel("Runs after Stockfish on each position, for as long as Stockfish took.")
+        lc0_note.setWordWrap(True)
+        lc0_note.setStyleSheet("color: gray")
+        lcf.addRow(lc0_note)
         lay.addWidget(lc)
 
         work = QGroupBox("Cards and updates")
@@ -340,6 +351,13 @@ class SettingsDialog(QDialog):
         self.max_cards.setRange(1, 200)
         self.max_cards.setValue(int(self.cfg.get("max_new_cards", 10)))
         wf.addRow("New cards per update:", self.max_cards)
+        self.minutes = QSpinBox()
+        self.minutes.setRange(0, 24 * 60)
+        self.minutes.setSuffix(" min")
+        self.minutes.setSpecialValueText("until the cards are found")
+        self.minutes.setValue(int(self.cfg.get("analysis_minutes", 10)))
+        self.minutes.setToolTip("Engine time one update may spend. Analysis carries on in the next update.")
+        wf.addRow("Analysis per update:", self.minutes)
         self.grouping = QComboBox()
         self.grouping.addItem("One note per game, newest games first", "game")
         self.grouping.addItem("One note per game, biggest mistakes first (all games)", "ranked")
@@ -493,15 +511,15 @@ class SettingsDialog(QDialog):
         self.cfg.update(
             lichess_user=self.lichess.text().strip(),
             chesscom_user=self.chesscom.text().strip(),
-            history_days=self.days.value(),
+            history_days=0 if self.all_time.isChecked() else self.days.value(),
             stockfish_path=self.engine_path,
             sf_depth=self.depth.value(),
             hash_mb=self.hash.value(),
             use_lc0=self.use_lc0.isChecked() and bool(self.lc0_path),
             lc0_path=self.lc0_path,
-            lc0_time=round(self.lc0_time.value(), 2),
             deck=self.deck.text().strip() or "Knightly Review",
             max_new_cards=self.max_cards.value(),
+            analysis_minutes=self.minutes.value(),
             include_opponent=self.opponent.isChecked(),
             note_grouping=self.grouping.currentData() or "game",
             opening_min_loss=round(self.opening_loss.value(), 2),
@@ -532,6 +550,10 @@ class SettingsDialog(QDialog):
 
 
 class ProgressWindow(QDialog):
+    """Current step, two bars (puzzles found, and the current analysis step), and a log of the whole run."""
+
+    STAGES = {"fetch": "Downloading", "analyse": "Puzzles", "cards": "Cards", "start": "Starting"}
+
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.setWindowTitle("Knightly Review – update")
@@ -539,13 +561,37 @@ class ProgressWindow(QDialog):
         lay = QVBoxLayout(self)
         self.label = QLabel()
         self.label.setWordWrap(True)
+        f = self.label.font()
+        f.setBold(True)
+        self.label.setFont(f)
+        lay.addWidget(self.label)
+
+        grid = QGridLayout()
+        grid.setColumnStretch(1, 1)
+        self.stage_name = QLabel()
         self.bar = QProgressBar()
+        self.bar.setTextVisible(True)
+        self.pos_name = QLabel("Positions")
+        self.pos_bar = QProgressBar()
+        self.pos_bar.setTextVisible(True)
+        self.pos_bar.setFormat("%v / %m")
+        self.pos_info = QLabel()
+        self.pos_info.setStyleSheet("color: gray")
+        grid.addWidget(self.stage_name, 0, 0)
+        grid.addWidget(self.bar, 0, 1)
+        grid.addWidget(self.pos_name, 1, 0)
+        grid.addWidget(self.pos_bar, 1, 1)
+        grid.addWidget(self.pos_info, 2, 1)
+        lay.addLayout(grid)
+
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(500)
-        lay.addWidget(self.label)
-        lay.addWidget(self.bar)
-        lay.addWidget(self.log)
+        self.log.setMaximumBlockCount(1000)
+        self.log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.log.setPlaceholderText("Each step of an update is logged here.")
+        lay.addWidget(self.log, 1)
+        self._seq = 0
+
         row = QHBoxLayout()
         self.cancel_btn = QPushButton("Cancel update")
         self.cancel_btn.clicked.connect(lambda: updater.stop())
@@ -555,25 +601,49 @@ class ProgressWindow(QDialog):
         row.addStretch()
         row.addWidget(hide)
         lay.addLayout(row)
-        self.resize(520, 300)
+        self.resize(560, 380)
         updater.listeners.append(self.update_progress)
-        self._last_msg = ""
         self.update_progress(*updater.last)
 
     def update_progress(self, stage: str, done: int, total: int, msg: str) -> None:
         self.label.setText(msg)
+        self.stage_name.setText(self.STAGES.get(stage, "Update"))
         if total:
             self.bar.setRange(0, total)
             self.bar.setValue(done)
+            self.bar.setFormat({"analyse": "%v / %m found"}.get(stage, "%v / %m"))
         elif stage in ("done", "error", "idle"):
             self.bar.setRange(0, 1)
             self.bar.setValue(1 if stage == "done" else 0)
+            self.bar.setFormat({"done": "Done", "error": "Failed"}.get(stage, ""))
         else:
-            self.bar.setRange(0, 0)
+            self.bar.setRange(0, 0)  # busy
         self.cancel_btn.setEnabled(updater.running and stage not in ("done", "error"))
-        if msg != self._last_msg and stage != "analyse":
-            self.log.appendPlainText(msg)
-            self._last_msg = msg
+        self._update_positions(stage)
+        self._update_log()
+
+    def _update_positions(self, stage: str) -> None:
+        done, total, msg = updater.positions
+        show = total > 0
+        for w in (self.pos_name, self.pos_bar, self.pos_info):
+            w.setVisible(show)
+        if not show:
+            return
+        self.pos_bar.setRange(0, total)
+        self.pos_bar.setValue(done)
+        self.pos_info.setText("" if self.label.text().startswith(msg) else msg)
+
+    def _update_log(self) -> None:
+        new = updater.history_since(self._seq)
+        if not new:
+            return
+        sb = self.log.verticalScrollBar()
+        at_end = sb.value() >= sb.maximum() - 4
+        for seq, line in new:
+            self.log.appendPlainText(line)
+            self._seq = seq
+        if at_end:
+            sb.setValue(sb.maximum())
 
 
 _progress: Optional[ProgressWindow] = None

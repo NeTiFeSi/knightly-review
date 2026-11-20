@@ -63,6 +63,7 @@ class Cache(Protocol):
     def put_eval(self, key: str, engine: str, effort: int, ev: Eval) -> None: ...
     def put_games(self, games: Iterable[Game], user: str) -> int: ...
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]: ...
+    def best_evals(self, keys: list[str], engine: str) -> dict[str, tuple[int, Eval]]: ...
     def get_analysis(self, game: Game) -> Optional[list[Optional[dict]]]: ...
     def put_analysis(self, game: Game, analysis: list[Optional[dict]]) -> None: ...
     def get_http(self, url: str) -> tuple[Optional[str], Optional[str]]: ...
@@ -116,6 +117,21 @@ class SqliteCache:
         ev = Eval.from_json(json.loads(row[0]))
         ev.lines = ev.lines[: max(multipv, 1)] if multipv > 0 else ev.lines
         return ev
+
+    def best_evals(self, keys: list[str], engine: str) -> dict[str, tuple[int, Eval]]:
+        """The most searched eval of each position (any number of lines): key → (effort, eval)."""
+        best: dict[str, tuple[int, str]] = {}
+        conn = self._conn()
+        for i in range(0, len(keys), 500):
+            chunk = keys[i : i + 500]
+            rows = conn.execute(
+                f"SELECT fen_key, effort, data FROM evals WHERE engine=? AND fen_key IN ({','.join('?' * len(chunk))})",
+                (engine, *chunk),
+            )
+            for k, effort, data in rows:
+                if k not in best or effort > best[k][0]:
+                    best[k] = (effort, data)
+        return {k: (e, Eval.from_json(json.loads(d))) for k, (e, d) in best.items()}
 
     def put_eval(self, key: str, engine: str, effort: int, ev: Eval) -> None:
         with self._conn() as c:
