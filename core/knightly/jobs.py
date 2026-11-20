@@ -20,7 +20,8 @@ from .config import Config
 from .engine.analyse import Analyser
 from .model import CardSpec, Game, NoteSpec, Score
 from .openings import Group
-from .select import build_card, find_candidates, opening_candidates, parse_opening_note_key
+from .select import (build_card, find_candidates, opening_candidates, parse_opening_note_key,
+                     ranked_candidates)
 from .sources import chesscom, lichess
 
 # progress(stage, done, total, message)
@@ -169,7 +170,8 @@ def run_update(
                 cands = opening_candidates(groups, scored, cfg, exclude)
                 min_loss: Optional[float] = cfg.opening_min_loss
             else:
-                cands = find_candidates([(g, scored[g.key]) for g in games if g.key in scored], cfg, exclude)
+                pick = ranked_candidates if cfg.note_grouping == "ranked" else find_candidates
+                cands = pick([(g, scored[g.key]) for g in games if g.key in scored], cfg, exclude)
                 min_loss = None
 
             # Deep pass, in the order above, until we have enough cards.

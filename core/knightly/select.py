@@ -180,6 +180,38 @@ def find_candidates(
     return out
 
 
+def ranked_candidates(
+    analysed: Iterable[tuple[Game, list[Optional[Score]]]],
+    cfg: Config,
+    exclude: set[str] = frozenset(),
+) -> list[Candidate]:
+    """One note per game, mistakes from all games ranked together (the original ordering).
+
+    Moves losing at least `cfg.min_loss` points, one per position, best first by
+    score = loss × weight × (1 + 0.5 × (recurrences − 1)), where weight is 1.0 for your
+    moves in games you didn't win, 0.6 in games you won, and 0.8 for the opponent's
+    mistakes (`cfg.include_opponent`); recurrences counts the games that reached the position.
+    """
+    seen_count: dict[str, int] = {}
+    found: dict[str, Candidate] = {}
+    for game, scores in analysed:
+        my_weight = 1.0 if game.user_result() < 1 else 0.6  # mistakes that cost points matter most
+        for c in move_losses(game, scores, cfg):
+            seen_count[c.fen_key] = seen_count.get(c.fen_key, 0) + 1
+            if c.loss >= cfg.min_loss and c.fen_key not in exclude:
+                c.score = c.loss * (my_weight if c.mine else 0.8)
+                c.note = game.key
+                if c.fen_key not in found or c.score > found[c.fen_key].score:
+                    found[c.fen_key] = c
+    out = []
+    for c in found.values():
+        c.recurrences = seen_count.get(c.fen_key, 1)
+        c.score *= 1 + 0.5 * (c.recurrences - 1)
+        out.append(c)
+    out.sort(key=lambda c: c.score, reverse=True)
+    return out
+
+
 def opening_note_key(group: Group, ply: int) -> str:
     return f"opening:{group.color}:{group.slug}:{ply + 1}"
 

@@ -131,6 +131,8 @@ class Candidate:
     phase: str  # "opening" | "middlegame" | "endgame"
     mine: bool = True  # False: the opponent's mistake
     note: str = ""  # key of the note the card goes in (the game key, or an opening+ply key)
+    recurrences: int = 1  # ranked mode: games that reached this position
+    score: float = 0.0  # ranked mode: priority
 
 
 @dataclass

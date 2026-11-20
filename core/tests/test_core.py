@@ -23,7 +23,7 @@ from knightly.jobs import opening_order, run_update
 from knightly.model import Eval, Game, Line, NoWdl, Score
 from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, SINGULAR, Graded, build_card,
                              find_candidates, grade, line_material, opening_candidates, opening_note_key,
-                             parse_opening_note_key)
+                             parse_opening_note_key, ranked_candidates)
 from knightly.sources import chesscom, lichess
 
 GOLDEN = FIXTURES / "generated_note.pgn"
@@ -293,6 +293,26 @@ class SelectTest(unittest.TestCase):
                          [("lichess:new", 1), ("lichess:new", 3), ("lichess:old", 3), ("lichess:old", 5)])
         self.assertEqual({c.note for c in cands}, {"lichess:new", "lichess:old"})
 
+    def test_ranked_mode_weights(self):
+        g = scholar_game()
+        scores = list(SCHOLAR_SCORES)
+        scores[3:6] = [S(-200, 0, 600, 400)] * 3  # 2. Qh5 (White, the opponent) drops White to 30 %
+        both = ranked_candidates([(g, scores)], Config(include_opponent=True))
+        self.assertEqual(sorted((c.played, c.mine) for c in both), [("d1h5", False), ("g8f6", True)])
+        opp = next(c for c in both if not c.mine)
+        self.assertAlmostEqual(opp.score, opp.loss * 0.8)  # own mistakes rank first at equal loss
+        self.assertEqual(both[0].note, g.key)
+        self.assertEqual(ranked_candidates([(g, SCHOLAR_SCORES)], self.cfg, exclude={PUZZLE_FEN}), [])
+
+    def test_ranked_mode_recurring_positions_rank_higher(self):
+        a = scholar_game()
+        b = scholar_game(id="test0002")
+        one = ranked_candidates([(a, SCHOLAR_SCORES)], self.cfg)[0]
+        two = ranked_candidates([(a, SCHOLAR_SCORES), (b, SCHOLAR_SCORES)], self.cfg)
+        self.assertEqual(len(two), 1)
+        self.assertEqual(two[0].recurrences, 2)
+        self.assertGreater(two[0].score, one.score)
+
     def test_same_position_offered_once_from_newest_game(self):
         a = scholar_game(end_ts=100)
         b = scholar_game(id="test0002", end_ts=200)
@@ -466,6 +486,19 @@ class JobsTest(unittest.TestCase):
         # Newest game first: the French game's card, then the Sicilian's first one.
         self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:f1", 1), ("lichess:s1", 1)])
         self.assertEqual(res.order, [])
+
+    def test_ranked_mode(self):
+        import time as _t
+        c = tmpcache(self)
+        now = int(_t.time())
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
+        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
+        c.put_games([sic, fr], "knightlyme")
+        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2, note_grouping="ranked")
+        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
+        # Biggest scores first, whatever the game: 30 (a loss) beats 20 × 0.6 (a win) and 12.
+        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:s1", 1), ("lichess:f1", 1)])
 
     def test_run_update_without_fetch(self):
         c = tmpcache(self)
