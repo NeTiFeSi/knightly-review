@@ -13,16 +13,17 @@ from pathlib import Path
 
 import chess
 
-from helpers import (FIXTURES, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, FakeAnalyser, FakeResponse,
-                     FakeSession, S, board_at, scholar_game)
-from knightly import http, notes, sources
+from helpers import (FIXTURES, FRENCH, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, FakeAnalyser,
+                     FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
+from knightly import http, notes, openings, sources
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
-from knightly.jobs import run_update
+from knightly.jobs import opening_order, run_update
 from knightly.model import Eval, Game, Line, NoWdl, Score
 from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, SINGULAR, Graded, build_card,
-                             find_candidates, grade, line_material)
+                             find_candidates, grade, line_material, opening_candidates, opening_note_key,
+                             parse_opening_note_key, ranked_candidates)
 from knightly.sources import chesscom, lichess
 
 GOLDEN = FIXTURES / "generated_note.pgn"
@@ -272,8 +273,6 @@ class SelectTest(unittest.TestCase):
         self.assertEqual([c.played for c in find_candidates([(g, scores)], self.cfg)], ["g8f6"])
         both = find_candidates([(g, scores)], Config(include_opponent=True))
         self.assertEqual(sorted((c.played, c.mine) for c in both), [("d1h5", False), ("g8f6", True)])
-        opp = next(c for c in both if not c.mine)
-        self.assertAlmostEqual(opp.score, opp.loss * 0.8)  # own mistakes rank first at equal loss
 
     def test_opponent_card_comment_and_tag(self):
         table = {fen_key(board_at(SCHOLAR_MOVES, 2).fen()): Eval(20, [
@@ -284,14 +283,41 @@ class SelectTest(unittest.TestCase):
         note = notes.build(scholar_game(), SCHOLAR_SCORES, [card])
         self.assertIn("knightly::opponent", note.tags)
 
-    def test_recurring_positions_rank_higher(self):
+    def test_game_by_game_newest_first(self):
+        old = game_from(SICILIAN, white=False, id="old", end_ts=100)
+        new = game_from(FRENCH, white=False, id="new", end_ts=200)
+        analysed = [(old, scores_with({3: 15, 5: 30}, len(SICILIAN))), (new, scores_with({1: 12, 3: 11}, len(FRENCH)))]
+        cands = find_candidates(analysed, self.cfg)
+        # Every qualifying move of the newest game first, in ply order, then the older game's.
+        self.assertEqual([(c.game_key, c.ply) for c in cands],
+                         [("lichess:new", 1), ("lichess:new", 3), ("lichess:old", 3), ("lichess:old", 5)])
+        self.assertEqual({c.note for c in cands}, {"lichess:new", "lichess:old"})
+
+    def test_ranked_mode_weights(self):
+        g = scholar_game()
+        scores = list(SCHOLAR_SCORES)
+        scores[3:6] = [S(-200, 0, 600, 400)] * 3  # 2. Qh5 (White, the opponent) drops White to 30 %
+        both = ranked_candidates([(g, scores)], Config(include_opponent=True))
+        self.assertEqual(sorted((c.played, c.mine) for c in both), [("d1h5", False), ("g8f6", True)])
+        opp = next(c for c in both if not c.mine)
+        self.assertAlmostEqual(opp.score, opp.loss * 0.8)  # own mistakes rank first at equal loss
+        self.assertEqual(both[0].note, g.key)
+        self.assertEqual(ranked_candidates([(g, SCHOLAR_SCORES)], self.cfg, exclude={PUZZLE_FEN}), [])
+
+    def test_ranked_mode_recurring_positions_rank_higher(self):
         a = scholar_game()
         b = scholar_game(id="test0002")
-        one = find_candidates([(a, SCHOLAR_SCORES)], self.cfg)[0]
-        two = find_candidates([(a, SCHOLAR_SCORES), (b, SCHOLAR_SCORES)], self.cfg)
+        one = ranked_candidates([(a, SCHOLAR_SCORES)], self.cfg)[0]
+        two = ranked_candidates([(a, SCHOLAR_SCORES), (b, SCHOLAR_SCORES)], self.cfg)
         self.assertEqual(len(two), 1)
         self.assertEqual(two[0].recurrences, 2)
         self.assertGreater(two[0].score, one.score)
+
+    def test_same_position_offered_once_from_newest_game(self):
+        a = scholar_game(end_ts=100)
+        b = scholar_game(id="test0002", end_ts=200)
+        two = find_candidates([(a, SCHOLAR_SCORES), (b, SCHOLAR_SCORES)], self.cfg)
+        self.assertEqual([c.game_key for c in two], ["lichess:test0002"])
 
     def test_build_card(self):
         card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), self.cfg)
@@ -335,7 +361,145 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(notes.field_to_pgn(notes.pgn_to_field(pgn)), pgn)
 
 
+class OpeningsTest(unittest.TestCase):
+    def test_classify_and_family(self):
+        eco, name = openings.classify(SICILIAN)
+        self.assertEqual((eco, name), ("B90", "Sicilian Defense: Najdorf Variation"))
+        self.assertEqual(openings.family(name), "Sicilian Defense")
+        # A transposition (1. Nf3 c5 2. e4) still lands in the table.
+        self.assertEqual(openings.classify(["g1f3", "c7c5", "e2e4"])[1], "Sicilian Defense")
+        self.assertEqual(openings.classify([]), ("", "Other"))
+
+    def test_rank_weights_results_and_splits_colour(self):
+        games = [
+            game_from(SICILIAN, white=False, id="s1", result="1-0"),  # loss: 4
+            game_from(FRENCH, white=False, id="f1", result="0-1"),  # win: 1
+            game_from(FRENCH, white=False, id="f2", result="1/2-1/2"),  # draw: 2
+            game_from(SICILIAN, white=True, id="s2", result="1-0"),  # a win as White: its own group
+        ]
+        ranked = openings.rank(games)
+        self.assertEqual([(g.label, g.importance) for g in ranked],
+                         [("Sicilian Defense (Black)", 4), ("French Defense (Black)", 3), ("Sicilian Defense (White)", 1)])
+
+    def test_opening_candidates_order(self):
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=100)
+        fr_old = game_from(FRENCH, white=False, id="f1", result="1/2-1/2", end_ts=50)
+        fr_new = game_from(FRENCH + ["b1c3"], white=False, id="f2", result="0-1", end_ts=300)
+        groups = openings.rank([sic, fr_old, fr_new])
+        self.assertEqual([g.family for g in groups], ["Sicilian Defense", "French Defense"])
+        analysed = {
+            "lichess:s1": scores_with({5: 3, 3: 2.5, 1: 1.5}, len(SICILIAN)),  # 1.5 is a good move: no card
+            "lichess:f1": scores_with({1: 5}, len(FRENCH)),
+            "lichess:f2": scores_with({1: 5, 3: 4}, len(FRENCH) + 1),
+        }
+        cands = opening_candidates(groups, analysed, Config())
+        self.assertEqual([(c.game_key, c.ply) for c in cands],
+                         [("lichess:s1", 3), ("lichess:s1", 5), ("lichess:f2", 1), ("lichess:f2", 3)])
+        # f1's 1...e6 is the same position as f2's: offered once, from the newest game.
+        self.assertEqual([c.note for c in cands],
+                         ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6",
+                          "opening:black:french-defense:2", "opening:black:french-defense:4"])
+        self.assertEqual(parse_opening_note_key(cands[0].note), ("black", "sicilian-defense", 3))
+        self.assertIsNone(parse_opening_note_key("lichess:abcd"))
+        # Already-carded positions are skipped; the opponent's moves come in when asked for.
+        skip = {cands[0].fen_key}
+        self.assertNotIn(cands[0].fen_key, [c.fen_key for c in opening_candidates(groups, analysed, Config(), skip)])
+        analysed["lichess:s1"] = scores_with({2: 9}, len(SICILIAN))
+        self.assertEqual([c.ply for c in opening_candidates(groups[:1], analysed, Config())], [])
+        both = opening_candidates(groups[:1], analysed, Config(include_opponent=True))
+        self.assertEqual([(c.ply, c.mine) for c in both], [(2, False)])
+
+    def test_note_tags_roundtrip(self):
+        for key in ("lichess:abcd1234", "chesscom:123", "opening:black:sicilian-defense:10"):
+            self.assertEqual(notes.key_from_tags(["knightly", notes.note_key_tag(key)]), key)
+        self.assertEqual(notes.note_key_tag("opening:white:kings-pawn-game:7"),
+                         "knightly::by-opening::white-kings-pawn-game::ply-007")
+
+    def test_order(self):
+        groups = openings.rank([game_from(SICILIAN, white=False, id="a", result="1-0"),
+                                game_from(FRENCH, white=False, id="b", result="0-1")])
+        keys = {"opening:black:french-defense:2", "opening:black:sicilian-defense:6", "lichess:x",
+                "opening:black:sicilian-defense:2", "opening:white:gone:1"}
+        self.assertEqual(opening_order(groups, keys),
+                         ["opening:black:sicilian-defense:2", "opening:black:sicilian-defense:6",
+                          "opening:black:french-defense:2", "opening:white:gone:1"])
+
+    def test_build_opening_appends_games(self):
+        g1 = scholar_game(id="g1")
+        card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), Config())
+        key = "opening:black:kings-pawn-game:6"
+        n1 = notes.build_opening(key, "King's Pawn Game (Black)", 5, [(g1, SCHOLAR_SCORES, card)])
+        self.assertEqual((n1.cards, n1.new_cards), ("{{c1::1::1}}", 1))
+        self.assertIn("knightly::by-opening::black-kings-pawn-game::ply-006", n1.tags)
+        self.assertIn("knightly::black", n1.tags)
+        self.assertTrue(n1.notes.startswith("King&#x27;s Pawn Game (Black), move 3… (ply 6)"))
+        # A second game, another position at the same ply: the first game stays as it was.
+        g2 = game_from(FRENCH + ["b1c3", "g8f6"], white=False, id="g2", url="https://lichess.org/g2")
+        sc = scores_with({5: 30}, 6)
+        table = {fen_key(board_at(g2.moves, 5).fen()): Eval(20, [
+            Line(S(0, 0, 1000, 0), ["f8b4"]), Line(S(600, 600, 400, 0), ["g8f6"])])}
+        card2 = build_card(board_at(g2.moves, 5), 5, "g8f6", FakeAnalyser(table=table), Config(), min_loss=2)
+        n2 = notes.build_opening(key, "King's Pawn Game (Black)", 5, [(g2, sc, card2)], n1.pgn)
+        self.assertEqual((n2.cards, n2.new_cards), ("{{c1::1::1}} {{c2::2::2}}", 1))
+        self.assertTrue(n2.pgn.startswith(n1.pgn.strip()))
+        self.assertEqual(notes.card_ids(n2.pgn), {PUZZLE_FEN: 1, card2.fen_key: 2})
+        self.assertEqual(n2.notes.count("<a href"), 2)
+        golden = FIXTURES / "generated_opening_note.pgn"  # also parsed by card/test/generated.test.ts
+        if os.environ.get("UPDATE_GOLDEN"):
+            golden.write_text(n2.pgn + "\n")
+        self.assertEqual(n2.pgn + "\n", golden.read_text())
+
+
 class JobsTest(unittest.TestCase):
+    def test_opening_mode_ply_by_ply_across_runs(self):
+        import time as _t
+        c = tmpcache(self)
+        now = int(_t.time())
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
+        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
+        c.put_games([sic, fr], "knightlyme")
+        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", note_grouping="opening", max_new_cards=2)
+        an = lambda *a: ScriptedAnalyser([sic, fr], script)  # noqa: E731
+        res = run_update(cfg, c, fetch=False, analyser_factory=an)
+        # The Sicilian (a loss) outranks the French (a win), whatever the game dates; ply 4 before ply 6.
+        self.assertEqual([n.key for n in res.notes],
+                         ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6"])
+        self.assertEqual(res.new_cards, 2)
+        self.assertEqual(res.order, ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6"])
+        existing = {n.key: n.pgn for n in res.notes}
+        again = run_update(cfg, c, fetch=False, existing=existing, analyser_factory=an)
+        self.assertEqual([n.key for n in again.notes], ["opening:black:french-defense:2"])
+        self.assertEqual(again.order, ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6",
+                                       "opening:black:french-defense:2"])
+
+    def test_game_mode_default(self):
+        import time as _t
+        c = tmpcache(self)
+        now = int(_t.time())
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
+        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
+        c.put_games([sic, fr], "knightlyme")
+        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2)
+        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
+        # Newest game first: the French game's card, then the Sicilian's first one.
+        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:f1", 1), ("lichess:s1", 1)])
+        self.assertEqual(res.order, [])
+
+    def test_ranked_mode(self):
+        import time as _t
+        c = tmpcache(self)
+        now = int(_t.time())
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
+        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
+        c.put_games([sic, fr], "knightlyme")
+        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2, note_grouping="ranked")
+        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
+        # Biggest scores first, whatever the game: 30 (a loss) beats 20 × 0.6 (a win) and 12.
+        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:s1", 1), ("lichess:f1", 1)])
+
     def test_run_update_without_fetch(self):
         c = tmpcache(self)
         g = scholar_game(end_ts=int(__import__("time").time()) - 3600)

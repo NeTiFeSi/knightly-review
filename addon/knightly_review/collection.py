@@ -20,7 +20,8 @@ FIELDS = ("PGN", "Cards", "Notes")
 BUNDLE = "_knightly.js"
 MEDIA = (BUNDLE, "_kr_stockfish.js", "_kr_stockfish.wasm")  # card bundle + built-in engine for other clients
 CARD_DIR = Path(__file__).resolve().parent / "card"
-GAME_TAG_PREFIX = f"{kn.NOTE_TAG}::game::"
+GAME_TAG_PREFIX = kn.GAME_TAG
+OPENING_TAG_PREFIX = kn.OPENING_TAG
 
 
 def _assets(card_dir: Path = CARD_DIR) -> dict[str, Any]:
@@ -103,16 +104,14 @@ def ensure_installed(col: Collection, card_dir: Path = CARD_DIR) -> list[str]:
 
 
 def key_from_tags(tags: list[str]) -> str | None:
-    for t in tags:
-        if t.lower().startswith(GAME_TAG_PREFIX):
-            return t[len(GAME_TAG_PREFIX):].replace("-", ":", 1)
-    return None
+    return kn.key_from_tags(tags)
 
 
 def existing_notes(col: Collection) -> dict[str, str]:
-    """Generated notes in the collection: game key → PGN."""
+    """Generated notes in the collection: note key (a game's, or an opening+ply's) → PGN."""
     out: dict[str, str] = {}
-    for nid in col.find_notes(f'"note:{MODEL}" "tag:{GAME_TAG_PREFIX}*"'):
+    query = f'"note:{MODEL}" ("tag:{GAME_TAG_PREFIX}*" OR "tag:{OPENING_TAG_PREFIX}*")'
+    for nid in col.find_notes(query):
         note = col.get_note(nid)
         key = key_from_tags(note.tags)
         if key:
@@ -120,8 +119,12 @@ def existing_notes(col: Collection) -> dict[str, str]:
     return out
 
 
-def apply_notes(col: Collection, specs: list[NoteSpec], deck: str) -> OpChanges:
-    """Add new notes and update changed ones, as one undoable step."""
+def apply_notes(col: Collection, specs: list[NoteSpec], deck: str, order: list[str] | None = None) -> OpChanges:
+    """Add new notes and update changed ones, as one undoable step.
+
+    `order` (opening mode): note keys in study order; their new cards are moved to the
+    front of the new-card queue in that order (see `reposition_new`).
+    """
     nt = col.models.by_name(MODEL)
     if nt is None:
         raise RuntimeError(f'note type "{MODEL}" is missing')
@@ -140,7 +143,33 @@ def apply_notes(col: Collection, specs: list[NoteSpec], deck: str) -> OpChanges:
             col.update_note(note)
         else:
             col.add_note(note, did)
+    if order:
+        reposition_new(col, order)
     return col.merge_undo_entries(pos)
+
+
+def reposition_new(col: Collection, order: list[str]) -> int:
+    """Put the new (never studied) cards of the notes in `order` first in the new queue, in that order.
+
+    Within a note, cards keep their cloze order. Other new cards are shifted after them.
+    Returns how many cards were repositioned.
+    """
+    cards = []
+    for key in order:
+        for nid in col.find_notes(f'"note:{MODEL}" "tag:{kn.note_key_tag(key)}"'):
+            mine = [col.get_card(cid) for cid in col.card_ids_of_note(nid)]
+            cards += [c for c in sorted(mine, key=lambda c: c.ord) if c.queue == 0 and c.type == 0]
+    if not cards:
+        return 0
+    # Anki's reposition keeps the chosen cards in their current relative order, so it only
+    # makes room at the front (shifting every other new card back); then the order is set.
+    col.sched.reposition_new_cards([c.id for c in cards], starting_from=0, step_size=1, randomize=False,
+                                   shift_existing=True)
+    fresh = [col.get_card(c.id) for c in cards]
+    for pos, c in enumerate(fresh):
+        c.due = pos
+    col.update_cards(fresh)
+    return len(fresh)
 
 
 def count_notes(col: Collection) -> int:

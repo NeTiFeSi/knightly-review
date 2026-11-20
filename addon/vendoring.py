@@ -54,5 +54,5 @@ def vendor_tree(src: Path, dest: Path, names: set[str]) -> None:
         if f.suffix == ".py":
             depth = len(rel.parts)  # vendor/<pkg>/<…>/mod.py → number of packages above mod
             out.write_text(rewrite_imports(f.read_text(encoding="utf-8"), names, depth), encoding="utf-8")
-        elif f.suffix in (".typed",):
+        elif f.suffix in (".typed", ".tsv"):  # .tsv: data files (the opening table)
             shutil.copy2(f, out)

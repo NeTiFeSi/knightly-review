@@ -125,3 +125,62 @@ class FakeSession:
                     return resp.pop(0) if len(resp) > 1 else resp[0]
                 return resp
         return FakeResponse(404, b"{}")
+
+
+# 1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 — the Najdorf.
+SICILIAN = ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6", "b1c3", "a7a6"]
+# 1. e4 e6 2. d4 d5
+FRENCH = ["e2e4", "e7e6", "d2d4", "d7d5"]
+
+
+def game_from(moves: list[str], *, white: bool, **kw) -> Game:
+    d = dict(moves=list(moves), user_is_white=white, white="KnightlyMe" if white else "Opponent",
+             black="Opponent" if white else "KnightlyMe", url="", result="1-0")
+    d.update(kw)
+    return scholar_game(**d)
+
+
+def score_for(white_pct: float) -> Score:
+    """A score whose expected score for White is `white_pct`."""
+    if white_pct >= 50:
+        w = round((white_pct - 50) * 20)
+        return S(0, w, 1000 - w, 0)
+    l = round((50 - white_pct) * 20)
+    return S(0, 0, 1000 - l, l)
+
+
+def scores_with(losses: dict[int, float], n_moves: int) -> list[Score]:
+    """Quick-pass scores where the move at each ply in `losses` loses that much for its side."""
+    e = 50.0
+    out = [score_for(e)]
+    for ply in range(n_moves):
+        loss = losses.get(ply, 0)
+        e += -loss if ply % 2 == 0 else loss
+        out.append(score_for(e))
+    return out
+
+
+class ScriptedAnalyser(FakeAnalyser):
+    """Quick pass from `script` (game id → {ply: loss}); the deep pass agrees with it.
+
+    At each scripted position another legal move holds the balance and the played
+    move loses what the script says.
+    """
+
+    def __init__(self, games: list[Game], script: dict[str, dict[int, float]]):
+        super().__init__(table={})
+        self.games = {g.id: g for g in games}
+        self.script = script
+        for g in games:
+            e = 50.0
+            for ply, u in enumerate(g.moves):
+                b = board_at(g.moves, ply)
+                loss = script.get(g.id, {}).get(ply, 0)
+                after = e - loss if ply % 2 == 0 else e + loss
+                if loss:
+                    alt = next(m.uci() for m in b.legal_moves if m.uci() != u)
+                    self.table[fen_key(b.fen())] = Eval(20, [Line(score_for(e), [alt]), Line(score_for(after), [u])])
+                e = after
+
+    def analyse_game(self, game: Game, progress=None):
+        return scores_with(self.script.get(game.id, {}), len(game.moves))

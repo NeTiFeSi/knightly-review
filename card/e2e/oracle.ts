@@ -4,6 +4,7 @@ import { makeUci } from 'chessops/util';
 import { chessgroundDests } from 'chessops/compat';
 import { findPuzzle, KNode, parseGames, positionOf } from '../src/pgn';
 import { acceptedMoves } from '../src/puzzle';
+import { DEFAULT_ACCEPT } from '../src/nag';
 
 export interface Answer {
   uci: string;
@@ -28,7 +29,7 @@ function answer(n: KNode): Answer {
   return { uci: n.uci || (n.move ? makeUci(n.move) : ''), san: n.san || '' };
 }
 
-export function solve(pgn: string, n: number, accept: number[] = [1, 3, 5]): Solution {
+export function solve(pgn: string, n: number, accept: number[] = DEFAULT_ACCEPT): Solution {
   const puzzle = findPuzzle(parseGames(pgn), n);
   if (!puzzle) throw new Error('no [%kr ' + n + '] in the PGN');
   const start = puzzle.position;

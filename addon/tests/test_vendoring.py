@@ -50,7 +50,12 @@ class RewriteTest(unittest.TestCase):
         src.mkdir(parents=True)
         (src / "__init__.py").write_text("VALUE = 'ours'\n")
         (src / "sub.py").write_text("import lib\nGOT = lib.VALUE\n")
+        (src / "data").mkdir()
+        (src / "data" / "table.tsv").write_text("a\tb\n")
+        (src / "notes.txt").write_text("not shipped\n")
         vendor_tree(src, pkg / "vendor" / "lib", {"lib"})
+        self.assertTrue((pkg / "vendor" / "lib" / "data" / "table.tsv").is_file())
+        self.assertFalse((pkg / "vendor" / "lib" / "notes.txt").exists())
         # A different global `lib` on sys.path must not be picked up.
         (d / "lib.py").write_text("VALUE = 'theirs'\n")
         code = "import addon123.vendor.lib.sub as s, sys; print(s.GOT, 'lib' in sys.modules)"

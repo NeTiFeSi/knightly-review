@@ -7,8 +7,13 @@ Use **Tools → Knightly Review → Settings…** instead of editing this by han
 - `update_on_startup`, `update_every_hours` (0 = off): automatic updates while Anki is open.
 - `history_days`, `time_classes`, `rated_only`: which games count.
 - `max_games_per_run`, `max_new_cards`: how much one update does.
+- `note_grouping`: how cards are made and grouped into notes.
+  - `"game"` (default): one note per game. Games are taken newest first, and every move of a game that loses at least `min_loss` becomes a card before the next game is looked at.
+  - `"ranked"`: one note per game, with mistakes from all games ranked together, biggest first: win rate lost × 1.0 (your move in a game you didn't win), 0.6 (in a game you won) or 0.8 (an opponent's mistake), × 1.5 for each extra game that reached the same position.
+  - `"opening"`: one note per opening family, your colour and ply, e.g. *Sicilian Defense (Black), move 5…*. Openings are ranked by the points they cost you over `history_days` (4 per loss, 2 per draw, 1 per win). The most important one is gone through ply by ply from the first move, then the next opening, and so on, `max_new_cards` at a time. Every move that loses more than `opening_min_loss` becomes a card. After each update, the new cards of these notes are moved to the front of the new-card queue in that order. Notes are tagged `knightly::by-opening::<colour>-<opening>::ply-<n>`.
+- `opening_min_loss` (default 2, the same as `good_move`): in opening mode, a move that loses more than this becomes a card, so by default every ?!, ? and ?? move does.
 - `include_opponent` (off by default): also make cards from your opponents' mistakes, played from their side. They go in the same deck and notes, tagged `knightly::opponent`.
-- `min_loss`: how many points of win rate a move you played must lose to become a card.
+- `min_loss`: how many points of win rate a move you played must lose to become a card (per-game mode).
 - `good_move`: a move within this many points of the best move is a "good move" (accepted as an answer).
 
 Win rate is the engine's own expected score from its win/draw/loss estimate (wins + draws / 2), so the

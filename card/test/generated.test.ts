@@ -39,3 +39,24 @@ describe('generated note', () => {
     expect(r.play(mv(r.cur, 'g8f6'))).toMatchObject({ kind: 'failed', reason: 'rejected', san: 'Nf6' });
   });
 });
+
+// An opening+ply note: one game per card, several games in one PGN field.
+const OPENING = readFileSync(new URL('../../core/tests/fixtures/generated_opening_note.pgn', import.meta.url), 'utf8');
+
+describe('generated opening note', () => {
+  it('finds each card in its own game', () => {
+    const gs = parseGames(OPENING);
+    expect(gs).toHaveLength(2);
+    expect(findPuzzle(gs, 1)).toBeDefined();
+    expect(findPuzzle(gs, 2)).toBeDefined();
+    expect(findPuzzle(gs, 3)).toBeUndefined();
+  });
+
+  it('plays card 2 from the second game', () => {
+    const r = new PuzzleRun(findPuzzle(parseGames(OPENING), 2)!.position, DEFAULT_ACCEPT);
+    expect(r.userColor).toBe('black');
+    expect(r.play(mv(r.cur, 'f8b4')).kind).toBe('solved');
+    const again = new PuzzleRun(findPuzzle(parseGames(OPENING), 2)!.position, DEFAULT_ACCEPT);
+    expect(again.play(mv(again.cur, 'g8f6'))).toMatchObject({ kind: 'failed', reason: 'rejected' });
+  });
+});
