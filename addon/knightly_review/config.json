@@ -21,6 +21,8 @@
   "rated_only": false,
   "max_games_per_run": 40,
   "max_new_cards": 10,
+  "note_grouping": "game",
+  "opening_min_loss": 2.0,
   "include_opponent": false,
   "min_loss": 10.0,
   "good_move": 2.0,

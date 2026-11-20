@@ -33,6 +33,13 @@ class Config:
     rated_only: bool = False
     max_games_per_run: int = 40
     max_new_cards: int = 10
+    # How cards are grouped into notes and which come first:
+    # "game": one note per game, games newest first, every move losing `min_loss` or more.
+    # "opening": one note per opening family + your colour + ply. Openings that cost the most
+    #   points (4 per loss, 2 per draw, 1 per win) first, then ply by ply from the first move,
+    #   every move losing more than `opening_min_loss`.
+    note_grouping: str = "game"
+    opening_min_loss: float = 2.0  # opening mode: any move that isn't a "good move" (?!, ?, ??)
     # Judging moves. All percentages are points of the engine's expected score (WDL: wins + draws / 2).
     min_loss: float = 10.0  # a played move must lose at least this much to become a card
     include_opponent: bool = False  # also make cards from the opponent's mistakes (puzzle from their side)

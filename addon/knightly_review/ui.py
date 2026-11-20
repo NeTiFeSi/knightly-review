@@ -340,6 +340,26 @@ class SettingsDialog(QDialog):
         self.max_cards.setRange(1, 200)
         self.max_cards.setValue(int(self.cfg.get("max_new_cards", 10)))
         wf.addRow("New cards per update:", self.max_cards)
+        self.grouping = QComboBox()
+        self.grouping.addItem("One note per game, newest games first", "game")
+        self.grouping.addItem("By opening and move, costliest openings first", "opening")
+        self.grouping.setCurrentIndex(max(0, self.grouping.findData(self.cfg.get("note_grouping", "game"))))
+        self.grouping.setToolTip(
+            "By opening: one note per opening (and your colour) and move number. Openings where you lost\n"
+            "the most points (4 per loss, 2 per draw, 1 per win) come first, from the first move on, and\n"
+            "new cards are studied in that order.")
+        wf.addRow("Cards:", self.grouping)
+        self.opening_loss = QDoubleSpinBox()
+        self.opening_loss.setRange(0.1, 50)
+        self.opening_loss.setSingleStep(0.5)
+        self.opening_loss.setSuffix(" %")
+        self.opening_loss.setValue(float(self.cfg.get("opening_min_loss", 2.0)))
+        self.opening_loss.setToolTip("By opening: a move you played becomes a card when it loses more than this\n"
+                                     "(in win rate). The default, 2 %, matches \"good move\": every ?!, ? and ??.")
+        wf.addRow("By opening, card moves losing over:", self.opening_loss)
+        self.grouping.currentIndexChanged.connect(
+            lambda _i: self.opening_loss.setEnabled(self.grouping.currentData() == "opening"))
+        self.opening_loss.setEnabled(self.grouping.currentData() == "opening")
         self.opponent = QCheckBox("Also make cards from my opponents' mistakes (played from their side)")
         self.opponent.setChecked(bool(self.cfg.get("include_opponent", False)))
         wf.addRow("", self.opponent)
@@ -480,6 +500,8 @@ class SettingsDialog(QDialog):
             deck=self.deck.text().strip() or "Knightly Review",
             max_new_cards=self.max_cards.value(),
             include_opponent=self.opponent.isChecked(),
+            note_grouping=self.grouping.currentData() or "game",
+            opening_min_loss=round(self.opening_loss.value(), 2),
             update_on_startup=self.on_start.isChecked(),
             update_every_hours=self.every.value(),
             threads=self.threads.value(),

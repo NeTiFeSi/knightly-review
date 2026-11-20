@@ -74,9 +74,39 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("Chess::Knightly", [d.name for d in self.col.decks.all_names_and_ids()])
         self.assertEqual(self.kc.count_notes(self.col), 1)
 
+    def test_opening_notes_and_reposition(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        game = self.spec(key="lichess:old1")
+        self.kc.apply_notes(self.col, [game], "Chess::Knightly")
+        a, b = "opening:black:french-defense:2", "opening:black:sicilian-defense:4"
+        two = "{{c1::1::1}} {{c2::2::2}}"
+        pgn2 = "1. e4 { [%kr 1] } e5 { [%kr 2] } *"
+        self.kc.apply_notes(self.col, [self.spec(key=a, cards=two, pgn=pgn2), self.spec(key=b)], "Chess::Knightly")
+        self.assertEqual(set(self.kc.existing_notes(self.col)), {"lichess:old1", a, b})
+
+        def queue():
+            cids = self.col.find_cards('"note:Knightly Review" is:new')
+            cards = sorted((self.col.get_card(c) for c in cids), key=lambda c: c.due)
+            return [(self.kc.key_from_tags(c.note().tags), c.ord) for c in cards]
+
+        # The Sicilian became the more important opening: its cards go first, then the French note's in
+        # cloze order; the game note's card is shifted after them.
+        self.kc.apply_notes(self.col, [], "Chess::Knightly", [b, a])
+        self.assertEqual(queue(), [(b, 0), (a, 0), (a, 1), ("lichess:old1", 0)])
+        # Studied cards are left alone.
+        first_a = next(c for c in self.col.find_cards(f'"tag:{self.kc.kn.note_key_tag(a)}"')
+                       if self.col.get_card(c).ord == 0)
+        card = self.col.get_card(first_a)
+        card.type = card.queue = 1
+        self.col.update_card(card)
+        self.assertEqual(self.kc.reposition_new(self.col, [a, b]), 2)
+        self.assertEqual(queue(), [(a, 1), (b, 0), ("lichess:old1", 0)])
+
     def test_key_from_tags(self):
         self.assertEqual(self.kc.key_from_tags(["x", "knightly::game::chesscom-123"]), "chesscom:123")
         self.assertIsNone(self.kc.key_from_tags(["knightly"]))
+        self.assertEqual(self.kc.key_from_tags(["knightly::by-opening::white-kings-pawn-game::ply-007"]),
+                         "opening:white:kings-pawn-game:7")
 
 
 if __name__ == "__main__":

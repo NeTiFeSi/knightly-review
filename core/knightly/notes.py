@@ -19,9 +19,32 @@ KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
 
 
+GAME_TAG = f"{NOTE_TAG}::game::"
+OPENING_TAG = f"{NOTE_TAG}::by-opening::"
+_OPENING_TAG_RE = re.compile(re.escape(OPENING_TAG) + r"(white|black)-([a-z0-9-]+)::ply-(\d+)$", re.I)
+
+
 def note_key_tag(key: str) -> str:
-    """Anki tag that finds a game's note again, e.g. knightly::game::lichess-abcd1234."""
-    return f"{NOTE_TAG}::game::" + re.sub(r"[^A-Za-z0-9_-]", "-", key.replace(":", "-"))
+    """Anki tag that finds a note again.
+
+    A game's note: knightly::game::lichess-abcd1234. An opening note (key
+    opening:black:sicilian-defense:10): knightly::by-opening::black-sicilian-defense::ply-010.
+    """
+    if key.startswith("opening:"):
+        _, color, slug, ply = key.split(":")
+        return f"{OPENING_TAG}{color}-{slug}::ply-{int(ply):03d}"
+    return GAME_TAG + re.sub(r"[^A-Za-z0-9_-]", "-", key.replace(":", "-"))
+
+
+def key_from_tags(tags: list[str]) -> Optional[str]:
+    """The note key that `note_key_tag` made, from a note's tags."""
+    for t in tags:
+        if t.lower().startswith(GAME_TAG):
+            return t[len(GAME_TAG):].replace("-", ":", 1)
+        m = _OPENING_TAG_RE.match(t)
+        if m:
+            return f"opening:{m[1].lower()}:{m[2].lower()}:{int(m[3])}"
+    return None
 
 
 def field_to_pgn(field: str) -> str:
@@ -59,28 +82,26 @@ def _join(*parts: str) -> str:
     return " ".join(p for p in parts if p)
 
 
-def build(
-    game: Game,
-    scores: list[Optional[Score]],
-    cards: list[CardSpec],
-    existing_ids: Optional[dict[str, int]] = None,
-) -> NoteSpec:
-    """The note for `game` with `cards` tagged. Positions already in `existing_ids` keep their number."""
+def _assign_ids(cards: list[CardSpec], existing_ids: Optional[dict[str, int]]) -> tuple[dict[str, int], int]:
+    """Cloze number per position: existing ones kept, new ones numbered on in ply order."""
     ids = dict(existing_ids or {})
     nxt = max(ids.values(), default=0) + 1
-    by_ply = {}
     for c in sorted(cards, key=lambda c: c.ply):
         if c.fen_key not in ids:
             ids[c.fen_key] = nxt
             nxt += 1
-        by_ply[c.ply] = c
     new_cards = sum(1 for c in cards if c.fen_key not in (existing_ids or {}))
+    return ids, new_cards
 
+
+def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], ids: dict[str, int]) -> str:
+    """One game with `cards` tagged."""
+    by_ply = {c.ply: c for c in cards}
     pg = chess.pgn.Game()
     h = pg.headers
     h["Event"] = game.event or "?"
     h["Site"] = game.url or "?"
-    h["Date"] = time.strftime("%Y.%m.%d", time.gmtime(game.end_ts)) if game.end_ts else "????.??.??"
+    h["Date"] = _date(game, ".")
     h["White"] = game.white or "?"
     h["Black"] = game.black or "?"
     h["Result"] = game.result
@@ -108,20 +129,99 @@ def build(
             for r in alt.reply:
                 v = v.add_variation(chess.Move.from_uci(r))
                 v.comment = _eval(alt.score)
-    pgn = pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
+    return pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
 
-    numbers = sorted({ids[c.fen_key] for c in cards})
+
+def _date(game: Game, sep: str = "-") -> str:
+    if not game.end_ts:
+        return sep.join(["????", "??", "??"])
+    return time.strftime(f"%Y{sep}%m{sep}%d", time.gmtime(game.end_ts))
+
+
+def _game_link(game: Game) -> str:
+    if not game.url:
+        return ""
+    return f'<a href="{html.escape(game.url)}">{html.escape(game.white)} – {html.escape(game.black)}</a>, {_date(game)}'
+
+
+def _phase_tags(cards: list[CardSpec]) -> list[str]:
     phases = sorted({c.phase for c in cards})
     if any(not c.mine for c in cards):
         phases.append("opponent")  # tag: this note has cards from the opponent's mistakes
-    date = h["Date"].replace(".", "-")
-    notes = f'<a href="{html.escape(game.url)}">{html.escape(game.white)} – {html.escape(game.black)}</a>, {date}' if game.url else ""
+    return [f"{NOTE_TAG}::{p}" for p in phases]
+
+
+def _clozes(ids: dict[str, int], cards: list[CardSpec]) -> str:
+    numbers = sorted({ids[c.fen_key] for c in cards})
+    return " ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in numbers)
+
+
+def build(
+    game: Game,
+    scores: list[Optional[Score]],
+    cards: list[CardSpec],
+    existing_ids: Optional[dict[str, int]] = None,
+) -> NoteSpec:
+    """The note for `game` with `cards` tagged. Positions already in `existing_ids` keep their number."""
+    ids, new_cards = _assign_ids(cards, existing_ids)
     return NoteSpec(
         key=game.key,
+        pgn=_game_pgn(game, scores, cards, ids),
+        cards=_clozes(ids, cards),
+        notes=_game_link(game),
+        tags=[NOTE_TAG, note_key_tag(game.key), f"{NOTE_TAG}::{game.source}"] + _phase_tags(cards),
+        card_ids=ids,
+        new_cards=new_cards,
+    )
+
+
+def move_label(ply: int) -> str:
+    """Ply index 9 → 'move 5…' (Black's 5th move); 8 → 'move 5'."""
+    return f"move {ply // 2 + 1}" + ("…" if ply % 2 else "")
+
+
+def _links_from_pgn(pgn: str) -> list[str]:
+    out = []
+    f = io.StringIO(pgn)
+    while (h := chess.pgn.read_headers(f)) is not None:
+        site = h.get("Site", "?")
+        if site and site != "?":
+            date = h.get("Date", "????.??.??").replace(".", "-")
+            out.append(f'<a href="{html.escape(site)}">{html.escape(h.get("White", "?"))} – '
+                       f'{html.escape(h.get("Black", "?"))}</a>, {date}')
+    return out
+
+
+def build_opening(
+    key: str,
+    label: str,
+    ply: int,
+    entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
+    existing_pgn: str = "",
+) -> NoteSpec:
+    """The note for one opening and ply: one game per card, each with its card tagged.
+
+    `key` is the note key (see select.opening_note_key), `label` e.g. "Sicilian Defense (Black)".
+    The games already in the note (`existing_pgn`) are kept as they are, with their
+    numbers; the new games follow.
+    """
+    old_ids = card_ids(existing_pgn) if existing_pgn else {}
+    cards = [c for _, _, c in entries]
+    ids, new_cards = _assign_ids(cards, old_ids)
+    entries = sorted(entries, key=lambda e: ids[e[2].fen_key])
+    parts = [existing_pgn.strip()] if existing_pgn.strip() else []
+    parts += [_game_pgn(g, s, [c], ids).strip() for g, s, c in entries]
+    pgn = "\n\n".join(parts)
+    head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
+    color = key.split(":")[1]
+    numbers = sorted(set(ids.values()))
+    return NoteSpec(
+        key=key,
         pgn=pgn,
         cards=" ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in numbers),
-        notes=notes,
-        tags=[NOTE_TAG, note_key_tag(game.key), f"{NOTE_TAG}::{game.source}"] + [f"{NOTE_TAG}::{p}" for p in phases],
-        card_ids={k: v for k, v in ids.items()},
+        notes="<br>".join([head] + _links_from_pgn(pgn)),
+        tags=[NOTE_TAG, note_key_tag(key), f"{NOTE_TAG}::{color}"]
+        + sorted({f"{NOTE_TAG}::{g.source}" for g, _, _ in entries}) + _phase_tags(cards),
+        card_ids=ids,
         new_cards=new_cards,
     )

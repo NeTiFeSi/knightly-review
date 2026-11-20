@@ -14,12 +14,13 @@ from typing import Callable, Optional
 
 import chess
 
-from . import http, notes, sources
-from .cache import Cache
+from . import http, notes, openings, sources
+from .cache import Cache, fen_key
 from .config import Config
 from .engine.analyse import Analyser
-from .model import Game, NoteSpec, Score
-from .select import build_card, find_candidates
+from .model import CardSpec, Game, NoteSpec, Score
+from .openings import Group
+from .select import build_card, find_candidates, opening_candidates, parse_opening_note_key
 from .sources import chesscom, lichess
 
 # progress(stage, done, total, message)
@@ -35,6 +36,9 @@ class UpdateResult:
     cancelled: bool = False
     warnings: list[str] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
+    # Opening mode: every opening note (new and existing) in the order its new cards should
+    # be studied. The add-on repositions the new cards to match. Empty in game mode.
+    order: list[str] = field(default_factory=list)
 
 
 def _opponent(g: Game) -> str:
@@ -43,6 +47,46 @@ def _opponent(g: Game) -> str:
 
 def _scores(raw: list) -> list[Optional[Score]]:
     return [Score.from_json(s) if s else None for s in raw]
+
+
+def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, int], by_key: dict[str, Game],
+               scored: dict[str, list[Optional[Score]]], an, cfg: Config, result: UpdateResult) -> Optional[NoteSpec]:
+    """A game's note: its old cards rebuilt (deep evals come from the cache) plus the new ones."""
+    g = by_key[key]
+    cards = [c for _, c in new]
+    if old_ids:
+        board = chess.Board()
+        want = dict(old_ids)
+        for ply, u in enumerate(g.moves):
+            fk = fen_key(board.fen())
+            if fk in want:
+                mine = board.turn == (chess.WHITE if g.user_is_white else chess.BLACK)
+                card = build_card(board.copy(stack=False), ply, u, an, cfg, "" if mine else _opponent(g))
+                if card:
+                    cards.append(card)
+                    del want[fk]
+            board.push_uci(u)
+        if want:
+            result.warnings.append(f"{key}: could not rebuild {len(want)} existing card(s); note left unchanged")
+            return None
+    return notes.build(g, scored.get(g.key, []), cards, old_ids)
+
+
+def _opening_note(key: str, new: list[tuple[Game, CardSpec]], groups: list[Group],
+                  scored: dict[str, list[Optional[Score]]], existing_pgn: str) -> NoteSpec:
+    """An opening+ply note: the games already in it kept as they are, plus one game per new card."""
+    color, slug, ply = parse_opening_note_key(key)  # type: ignore[misc]
+    label = next((gr.label for gr in groups if (gr.color, gr.slug) == (color, slug)), slug)
+    entries = [(g, scored.get(g.key, []), c) for g, c in new]
+    return notes.build_opening(key, label, ply, entries, existing_pgn)
+
+
+def opening_order(groups: list[Group], keys: set[str]) -> list[str]:
+    """Opening note keys by (opening importance, ply). Openings no longer ranked go last."""
+    rank = {(gr.color, gr.slug): i for i, gr in enumerate(groups)}
+    parsed = [(k, parse_opening_note_key(k)) for k in keys]
+    return [k for k, p in sorted(((k, p) for k, p in parsed if p),
+                                 key=lambda kp: (rank.get(kp[1][:2], len(rank)), kp[1][0], kp[1][1], kp[1][2]))]
 
 
 def fetch_all(cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event, progress: Progress,
@@ -118,15 +162,18 @@ def run_update(
             # Positions already on cards (in any note) are never picked again.
             carded: dict[str, dict[str, int]] = {k: notes.card_ids(p) for k, p in existing.items()}
             exclude = {fk for ids in carded.values() for fk in ids}
-            analysed = []
-            for g in games:
-                raw = cache.get_analysis(g)
-                if raw is not None:
-                    analysed.append((g, _scores(raw)))
-            cands = find_candidates(analysed, cfg, exclude)
+            scored = {g.key: _scores(raw) for g in games if (raw := cache.get_analysis(g)) is not None}
+            by_opening = cfg.note_grouping == "opening"
+            if by_opening:
+                groups = openings.rank(games)
+                cands = opening_candidates(groups, scored, cfg, exclude)
+                min_loss: Optional[float] = cfg.opening_min_loss
+            else:
+                cands = find_candidates([(g, scored[g.key]) for g in games if g.key in scored], cfg, exclude)
+                min_loss = None
 
-            # Deep pass on the best candidates until we have enough cards.
-            per_game: dict[str, list] = {}
+            # Deep pass, in the order above, until we have enough cards.
+            per_note: dict[str, list[tuple[Game, CardSpec]]] = {}
             made = 0
             for c in cands:
                 if made >= cfg.max_new_cards:
@@ -136,35 +183,21 @@ def run_update(
                 board = chess.Board()
                 for u in g.moves[: c.ply]:
                     board.push_uci(u)
-                card = build_card(board, c.ply, c.played, an, cfg, "" if c.mine else _opponent(g))
+                card = build_card(board, c.ply, c.played, an, cfg, "" if c.mine else _opponent(g), min_loss)
                 if card:
-                    per_game.setdefault(g.key, []).append(card)
+                    per_note.setdefault(c.note, []).append((g, card))
                     made += 1
 
-            # A game that already has a note gets its old cards rebuilt (from the cache) plus the new ones.
-            for key, new_cards in per_game.items():
-                g = by_key[key]
-                old_ids = carded.get(key, {})
-                cards = list(new_cards)
-                if old_ids:
-                    board = chess.Board()
-                    want = dict(old_ids)
-                    for ply, u in enumerate(g.moves):
-                        fk = " ".join(board.fen().split()[:4])
-                        if fk in want:
-                            mine = board.turn == (chess.WHITE if g.user_is_white else chess.BLACK)
-                            card = build_card(board.copy(stack=False), ply, u, an, cfg, "" if mine else _opponent(g))
-                            if card:
-                                cards.append(card)
-                                del want[fk]
-                        board.push_uci(u)
-                    if want:
-                        result.warnings.append(f"{key}: could not rebuild {len(want)} existing card(s); note left unchanged")
-                        continue
-                raw = cache.get_analysis(g) or []
-                spec = notes.build(g, _scores(raw), cards, old_ids)
-                result.notes.append(spec)
-                result.new_cards += spec.new_cards
+            for key, new in per_note.items():
+                if by_opening:
+                    spec = _opening_note(key, new, groups, scored, existing.get(key, ""))
+                else:
+                    spec = _game_note(key, new, carded.get(key, {}), by_key, scored, an, cfg, result)
+                if spec:
+                    result.notes.append(spec)
+                    result.new_cards += spec.new_cards
+            if by_opening:
+                result.order = opening_order(groups, set(existing) | set(per_note))
             result.stats = dict(an.stats)
     except http.Cancelled:
         result.cancelled = True

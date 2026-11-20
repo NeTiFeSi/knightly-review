@@ -109,7 +109,7 @@ class Updater:
         if res.cancelled:
             self._emit("done", 0, 0, "Cancelled. " + summary, force=True)
             return
-        if not res.notes or mw.col is None:
+        if (not res.notes and not res.order) or mw.col is None:
             self._emit("done", 1, 1, summary, force=True)
             if manual or res.warnings:
                 tooltip("Knightly Review: " + summary, period=5000)
@@ -117,9 +117,10 @@ class Updater:
 
         def done(_changes) -> None:
             self._emit("done", 1, 1, summary, force=True)
-            tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
+            if res.notes or manual:
+                tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
 
-        CollectionOp(parent=mw, op=lambda col: kc.apply_notes(col, res.notes, deck)).success(done).failure(
+        CollectionOp(parent=mw, op=lambda col: kc.apply_notes(col, res.notes, deck, res.order)).success(done).failure(
             lambda e: self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
         ).run_in_background()
 

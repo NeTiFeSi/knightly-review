@@ -121,17 +121,16 @@ class Eval:
 
 @dataclass
 class Candidate:
-    """A user move that lost enough win chance to be worth a card."""
+    """A move that lost enough win chance to be worth a card."""
 
     game_key: str
-    ply: int  # index into Game.moves of the user's (bad) move
+    ply: int  # index into Game.moves of the (bad) move
     fen_key: str  # position before the move
     played: str  # UCI
     loss: float  # win-% points lost (quick pass)
     phase: str  # "opening" | "middlegame" | "endgame"
-    recurrences: int = 1
-    score: float = 0.0
     mine: bool = True  # False: the opponent's mistake
+    note: str = ""  # key of the note the card goes in (the game key, or an opening+ply key)
 
 
 @dataclass

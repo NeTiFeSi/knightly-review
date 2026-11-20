@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--max-games", type=int)
     up.add_argument("--max-cards", type=int)
     up.add_argument("--days", type=int)
+    up.add_argument("--by-opening", action="store_true", help="one note per opening and ply (note_grouping=opening)")
     up.add_argument("--out", default="-", help="output JSON file ('-' = stdout)")
 
     eng = sub.add_parser("engines", help="list the supported engines (Stockfish, Lc0) found on this computer")
@@ -76,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         cfg.max_new_cards = args.max_cards
     if args.days is not None:
         cfg.history_days = args.days
+    if args.by_opening:
+        cfg.note_grouping = "opening"
     if args.depth is not None:
         cfg.sf_depth = args.depth
     cfg.stockfish_path = args.stockfish or cfg.stockfish_path
@@ -103,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         "warnings": res.warnings,
         "stats": res.stats,
         "notes": [n.to_json() for n in res.notes],
+        "order": res.order,
     }
     text = json.dumps(out, indent=2)
     if args.out == "-":

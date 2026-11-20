@@ -21,9 +21,12 @@ python -m knightly update --lichess USER --chesscom USER --max-games 5 --max-car
 | `cache.py` | SQLite (WAL) cache: games, evals, HTTP validators, cursors. Safe across threads and processes |
 | `engine/discover.py`, `engine/install.py` | Find Stockfish and Lc0 (no other engines are supported); package-manager commands; official Stockfish download |
 | `engine/analyse.py` | Stockfish (fixed depth) and optional Lc0 (fixed time) in parallel, always with WDL; Lc0's answer is used except in mate positions; cached per engine |
-| `select.py` | Win-rate loss (engine WDL), phase, recurrence; good-move and sacrifice tests, NAGs |
-| `notes.py` | PGN with `[%kr N]` tags and stable card numbers |
+| `select.py` | Win-rate loss (engine WDL) and phase; which moves become cards, in which order (game by game, or by opening and ply); good-move and sacrifice tests, NAGs |
+| `openings.py` | Names a game's opening (family) and ranks openings by points lost (4 per loss, 2 per draw, 1 per win), per colour |
+| `notes.py` | PGN with `[%kr N]` tags and stable card numbers; one note per game, or per opening and ply (one game per card) |
 | `jobs.py` | `run_update()`: the single entry point the add-on calls (pauses while `gate` is cleared) |
 | `live.py` | Answers a card's live-play questions (best lines, or specific moves only) |
+
+`data/openings.tsv` is Lichess's [chess-openings](https://github.com/lichess-org/chess-openings) table (CC0), stored as the position each named line reaches (FEN without move counters), so transpositions are recognised.
 
 `tests/fixtures/generated_note.pgn` is a golden file that the card's own tests also parse (`card/test/generated.test.ts`). After a deliberate format change, regenerate it with `UPDATE_GOLDEN=1 python -m unittest discover -s tests` and run `npm test` in `card/`.
