@@ -13,10 +13,11 @@ You need [Anki](https://apps.ankiweb.net/) on a computer (Windows, macOS or Linu
    |---|---|---|
    | Windows 10/11 | `winget install --id Stockfish.Stockfish -e` (the add-on can run it for you) | **Download Stockfish for me** |
    | macOS | `brew install stockfish` if you use Homebrew (the add-on can run it for you) | **Download Stockfish for me** |
-   | Arch, Manjaro | `sudo pacman -S stockfish` | **Download Stockfish for me** |
+   | Arch, Manjaro, EndeavourOS | `yay -S stockfish` or `paru -S stockfish` (it's in the [AUR](https://aur.archlinux.org/packages/stockfish), not the official repos; the add-on only shows this if `yay` or `paru` is installed) | **Download Stockfish for me** |
    | Debian, Ubuntu, Mint | `sudo apt install stockfish` | **Download Stockfish for me** |
    | Fedora | `sudo dnf install stockfish` | **Download Stockfish for me** |
    | openSUSE | `sudo zypper install stockfish` | **Download Stockfish for me** |
+   | Anything else (NixOS, Void, Alpine, RHEL…) | your package manager, if it has Stockfish | **Download Stockfish for me** |
 
    **Download Stockfish for me** fetches the official build from the Stockfish GitHub releases, checks it, and keeps it inside the add-on's folder. No admin rights needed.
 
