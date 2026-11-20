@@ -6,6 +6,7 @@
 //   node e2e/run.mjs stop                          close it
 //   node e2e/run.mjs deploy --target desktop|android   push dist/ into the test profile / test app
 //   node e2e/run.mjs deploy --target user [--yes]  push dist/ into YOUR Anki (dry run without --yes)
+//   node e2e/run.mjs import --target android       import dist/knightly-sample.apkg into the test app (after npm run apkg)
 //   node e2e/run.mjs status [--target ...]         is everything reachable? what card is on screen?
 //   node e2e/run.mjs reset --target desktop        make every sample card new again
 //   node e2e/run.mjs list                          list scenarios
@@ -127,6 +128,11 @@ async function main() {
     await t.assertSafe();
     const changes = await deploy(DESKTOP.port, { apply: true });
     console.log(changes.length ? 'test profile updated:\n  - ' + changes.join('\n  - ') : 'test profile already up to date');
+    return 0;
+  }
+  if (cmd === 'import') {
+    if ((args.target || 'android') !== 'android') throw new Error('import only does the Android test app; import the .apkg by hand on desktop');
+    console.log(await new AndroidTarget(args.device).importApkg());
     return 0;
   }
   if (cmd === 'reset') {

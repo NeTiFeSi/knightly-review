@@ -1,4 +1,5 @@
 // One mounted card (front or back): wires board, eval bar, move list and puzzle.
+import { cancelZoom } from './zoom';
 import type { DrawShape } from 'chessground/draw';
 import type { Key } from 'chessground/types';
 import { chessgroundMove } from 'chessops/compat';
@@ -240,6 +241,7 @@ export class App {
     if (this.puzzle.position.turn === 'black') evalBar.classList.add('kr-flip');
 
     const wrap = h('div', 'kr-board-wrap');
+    cancelZoom(wrap, root); // AnkiDroid's html zoom would otherwise shrink the board (see zoom.ts)
     const boardEl = h('div', 'kr-board');
     wrap.appendChild(boardEl);
     row.appendChild(evalBar);

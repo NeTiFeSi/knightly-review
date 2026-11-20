@@ -8,8 +8,16 @@ const REAL_ANKIDROID = 'com.ichi2.anki';
 export const ANDROID = {
   /** The test app: an AnkiDroid "parallel" build, never your real AnkiDroid. */
   pkg: env.KR_DROID_PACKAGE || 'com.ichi2.anki.a',
+  /**
+   * Android user of the test app. Empty for a separate package (`com.ichi2.anki.a`). Set it (e.g. 999,
+   * the Xiaomi "Dual apps"/XSpace clone) when the test app is a CLONE of AnkiDroid: it then has the
+   * SAME package name as your real one, so it is told apart only by its user id (never 0).
+   */
+  user: env.KR_DROID_USER || '',
   /** Collection media folder of the test app (where `deploy` puts _knightly.js). */
-  media: env.KR_DROID_MEDIA || '/sdcard/AnkiDroid/collection.media',
+  media:
+    env.KR_DROID_MEDIA ||
+    (env.KR_DROID_USER ? `/storage/emulated/${env.KR_DROID_USER}/AnkiDroid/collection.media` : '/sdcard/AnkiDroid/collection.media'),
   devtools: Number(env.KR_DROID_DEVTOOLS_PORT || 9223),
   serial: env.KR_ADB_SERIAL || '',
 };
@@ -70,14 +78,27 @@ export class AndroidTarget {
 
   /** Refuse to drive anything but the separate test app. */
   async assertSafe() {
-    if (ANDROID.pkg === REAL_ANKIDROID) throw new Error('KR_DROID_PACKAGE points at your real AnkiDroid; refusing');
+    if (ANDROID.pkg === REAL_ANKIDROID && (!/^[1-9]\d*$/.test(ANDROID.user)))
+      throw new Error('KR_DROID_PACKAGE points at your real AnkiDroid (set KR_DROID_USER to the clone\'s non-zero user id); refusing');
     await this.ensureDevice();
-    if (!this.shell('pm list packages ' + ANDROID.pkg).split('\n').some(l => l.trim() === 'package:' + ANDROID.pkg))
-      throw new Error(ANDROID.pkg + ' is not installed on ' + this.serial);
+    if (!this.shell('pm list packages ' + this.userFlag() + ANDROID.pkg).split('\n').some(l => l.trim() === 'package:' + ANDROID.pkg))
+      throw new Error(ANDROID.pkg + ' is not installed' + (ANDROID.user ? ' for user ' + ANDROID.user : '') + ' on ' + this.serial);
+  }
+
+  /** `--user N ` for commands that take it, or '' for a separate package. */
+  userFlag() {
+    return ANDROID.user ? '--user ' + ANDROID.user + ' ' : '';
   }
 
   pid() {
-    return this.shell('pidof ' + ANDROID.pkg).split(/\s+/)[0] || '';
+    if (!ANDROID.user) return this.shell('pidof ' + ANDROID.pkg).split(/\s+/)[0] || '';
+    // A clone has the same process name as the real app: pick the one owned by the clone's user (u<N>_a…).
+    const rows = this.shell('ps -A -o USER,PID,NAME').split('\n');
+    for (const r of rows) {
+      const [user, pid, name] = r.trim().split(/\s+/);
+      if (name === ANDROID.pkg && user.startsWith('u' + ANDROID.user + '_')) return pid;
+    }
+    return '';
   }
 
   topActivity() {
@@ -153,6 +174,67 @@ export class AndroidTarget {
     this.shell(`input tap ${Math.round((x1 + x2) / 2)} ${Math.round((y1 + y2) / 2)}`);
   }
 
+  /** Tap the on-screen element with this resource id (language-independent; e.g. a dialog's "android:id/button1"). */
+  async tapId(id, timeout = 10000) {
+    const bounds = await until(() => {
+      this.shell('uiautomator dump /sdcard/kr-ui.xml >/dev/null 2>&1');
+      const xml = this.shell('cat /sdcard/kr-ui.xml');
+      const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const m = xml.match(new RegExp('resource-id="' + esc + '"[^>]*?bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"'));
+      return m && m.slice(1).map(Number);
+    }, id + ' on screen', timeout, 700);
+    const [x1, y1, x2, y2] = bounds;
+    this.shell(`input tap ${Math.round((x1 + x2) / 2)} ${Math.round((y1 + y2) / 2)}`);
+  }
+
+  /**
+   * Import `dist/knightly-sample.apkg` into the test app: push it to the app's own shared storage,
+   * open it through a content:// URI (AnkiDroid rejects file:// ones) and confirm the dialogs.
+   * Template changes only reach the test collection this way.
+   */
+  async importApkg(file = CARD_DIR + 'dist/knightly-sample.apkg') {
+    await this.assertSafe();
+    readFileSync(file); // fails early if not built (npm run apkg)
+    const root = '/storage/emulated/' + (ANDROID.user || '0');
+    const dest = root + '/Download/knightly-sample.apkg';
+    this.adb('push', file, dest);
+    // MediaStore gives the file a content URI; make sure it is indexed first.
+    this.shell(`am broadcast --user ${ANDROID.user || 0} -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${dest} >/dev/null 2>&1`);
+    const id = await until(
+      () => (this.shell(`content query --user ${ANDROID.user || 0} --uri content://media/external/file --projection _id --where "_data='${dest}'"`).match(/_id=(\d+)/) || [])[1],
+      'the pushed .apkg in the media store',
+      15000,
+      700,
+    );
+    this.disconnect();
+    this.shell(
+      `am start ${this.userFlag()}--activity-clear-task --grant-read-uri-permission -a android.intent.action.VIEW -t application/octet-stream ` +
+        `-d content://${ANDROID.user ? ANDROID.user + '@' : ''}media/external/file/${id} -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler`,
+    );
+    await this.tapId('android:id/button1', 20000); // "Add" in the confirmation dialog
+    // Next comes AnkiDroid's import-options screen (a WebView, language-independent via DevTools): press its primary button.
+    await this.connect();
+    const opts = await until(
+      async () => {
+        for (const p of await this.browser.pages()) if (await p.$('button.label-button.primary').catch(() => null)) return p;
+        return null;
+      },
+      "AnkiDroid's import options screen",
+      20000,
+      700,
+    );
+    await opts.evaluate(() => document.querySelector('button.label-button.primary').click());
+    // The overview of what was imported follows; wait for it, then leave to the deck list.
+    // The overview lists what happened in a table; the options screen has none.
+    await until(async () => opts.isClosed() || !!(await opts.$('table').catch(() => null)), 'the import to finish', 30000, 700);
+    await wait(1500);
+    this.disconnect();
+    // Restart the app: otherwise the study screen keeps rendering the cards with the old template.
+    this.shell('am force-stop ' + this.userFlag() + ANDROID.pkg);
+    await wait(1000);
+    return 'imported ' + file + ' into ' + ANDROID.pkg + (ANDROID.user ? ' (user ' + ANDROID.user + ')' : '');
+  }
+
   /** Open the sample deck's study screen and return the card page (front). */
   async openDeck() {
     await this.assertSafe();
@@ -162,7 +244,7 @@ export class AndroidTarget {
     } else {
       // First run: find the sample deck. Launching resumes the app where it was; if that is
       // already the study screen, currentCard() below checks it is the sample deck.
-      this.shell(`monkey -p ${ANDROID.pkg} -c android.intent.category.LAUNCHER 1`);
+      this.launch();
       await wait(2000);
       if (!/Reviewer/.test(this.topActivity())) await this.tapText(SAMPLE_DECK, 20000);
     }
@@ -188,7 +270,19 @@ export class AndroidTarget {
    */
   startReview(did) {
     this.disconnect();
-    this.shell(`am start --activity-clear-task -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler --el EXTRA_DECK_ID ${did}`);
+    this.shell(`am start ${this.userFlag()}--activity-clear-task -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler --el EXTRA_DECK_ID ${did}`);
+  }
+
+  /**
+   * Bring the test app back like a launcher tap: resume where it was. A clone has no `monkey --user`,
+   * and its launcher activity restarts at the deck list, so bring the study screen's task forward.
+   */
+  launch() {
+    if (!ANDROID.user) return this.shell(`monkey -p ${ANDROID.pkg} -c android.intent.category.LAUNCHER 1`);
+    const top = this.shell('dumpsys activity activities');
+    const reviewer = /u${ANDROID.user} ${ANDROID.pkg}\/(\.Reviewer|\.previewer\.CardViewerActivity)/.exec(top);
+    if (reviewer) this.shell(`am start ${this.userFlag()}-f 0x20000 -n ${ANDROID.pkg}/${reviewer[1]}`); // REORDER_TO_FRONT
+    else this.shell(`am start ${this.userFlag()}-f 0x10200000 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler`);
   }
 
   side(page) {
@@ -205,7 +299,7 @@ export class AndroidTarget {
     this.disconnect();
     this.shell('input keyevent KEYCODE_HOME');
     await wait(1500);
-    this.shell('am force-stop ' + ANDROID.pkg);
+    this.shell('am force-stop ' + this.userFlag() + ANDROID.pkg);
     await wait(1000);
     return this.openDeck();
   }
@@ -214,13 +308,16 @@ export class AndroidTarget {
   async deploy() {
     await this.assertSafe();
     const real = this.shell(`appops get ${REAL_ANKIDROID} MANAGE_EXTERNAL_STORAGE`);
-    if (/allow/.test(real) && !ANDROID.media.includes('/Android/data/' + ANDROID.pkg + '/'))
+    const own = ANDROID.user
+      ? ANDROID.media.startsWith(`/storage/emulated/${ANDROID.user}/`) // the clone's own storage, apart from user 0's
+      : ANDROID.media.includes('/Android/data/' + ANDROID.pkg + '/');
+    if (/allow/.test(real) && !own)
       throw new Error(
         'your real AnkiDroid has all-files access and may share ' + ANDROID.media + '; set KR_DROID_MEDIA to the test app’s own folder',
       );
     for (const f of MEDIA) readFileSync(CARD_DIR + 'dist/' + f); // fails early if not built
     for (const f of MEDIA) this.adb('push', CARD_DIR + 'dist/' + f, ANDROID.media + '/' + f);
-    this.shell('am force-stop ' + ANDROID.pkg); // drop the WebView's copy
+    this.shell('am force-stop ' + this.userFlag() + ANDROID.pkg); // drop the WebView's copy
     return 'pushed ' + MEDIA.join(', ') + ' to ' + ANDROID.media + ' (templates are not updated: re-import the .apkg for template changes)';
   }
 

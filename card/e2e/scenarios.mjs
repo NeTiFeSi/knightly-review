@@ -323,7 +323,7 @@ export const scenarios = [
       t.disconnect();
       t.shell('input keyevent KEYCODE_HOME');
       await wait(13000); // longer than the whole limit
-      t.shell('monkey -p com.ichi2.anki.a -c android.intent.category.LAUNCHER 1');
+      t.launch();
       await wait(3000);
       expect(/Reviewer/.test(t.topActivity()), 'the study screen did not come back: ' + t.topActivity());
       page = await t.page();
