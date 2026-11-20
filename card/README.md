@@ -117,6 +117,11 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a �
 | `live` | `false` | Keep playing past the PGN with a live engine. |
 | `goodMove` | `2` | Live play: win-% a move may lose against the engine's best and still count. |
 | `liveMaxMoves` | `10` | Live play: at most this many of your moves. |
+| `timed` | `false` | Timed puzzles: a clock runs on the front while you think (not during the opponent's reply or the engine's), and the back shows the time taken. |
+| `timeLimit` | `30` | Timed: seconds for the whole puzzle (5–600). |
+| `timeAffects` | `'nothing'` | Timed: when time is up, `'nothing'` only shows the time, `'fail'` ends the attempt as failed and shows the answer, `'grade'` lets you finish but a solve over the limit is graded `gradeSlow` (with `afterAnswer: 'grade'`). |
+| `gradeSlow` | `2` | Ease for a slow solve (1 Again … 4 Easy). It never grades better than the hint/solved ease. |
+| `showClock` | `true` | Show the clock on the front; off shows the time only on the back. |
 
 Flipping and grading use `pycmd` on desktop and the JS API on AnkiDroid. AnkiMobile and AnkiWeb
 have no such hook, so the card stays on the front there and asks you to show the answer.

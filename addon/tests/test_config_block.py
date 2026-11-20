@@ -25,6 +25,11 @@ DEFAULT = {
     "live": False,
     "goodMove": 2,
     "liveMaxMoves": 10,
+    "timed": False,
+    "timeLimit": 30,
+    "timeAffects": "nothing",
+    "gradeSlow": 2,
+    "showClock": True,
 }
 
 
@@ -37,6 +42,8 @@ class ConfigBlockTest(unittest.TestCase):
         self.assertIn("gradeSolved", validate({**DEFAULT, "gradeSolved": True}))
         self.assertIn("unknown", validate({**DEFAULT, "intr": "x"}))
         self.assertIn("missing", validate({k: v for k, v in DEFAULT.items() if k != "hints"}))
+        self.assertIn("timeLimit", validate({**DEFAULT, "timeLimit": 2}))
+        self.assertIn("timeAffects", validate({**DEFAULT, "timeAffects": "slow"}))
         self.assertIn("acceptNags", validate({**DEFAULT, "acceptNags": ["!"]}))
 
     def test_rewrite_template(self):

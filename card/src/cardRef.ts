@@ -4,6 +4,7 @@ import type { Side } from './pgn';
 
 export type Intro = 'lastMove' | 'fullGame';
 export type AfterAnswer = 'flip' | 'stay' | 'grade';
+export type TimeAffects = 'nothing' | 'fail' | 'grade';
 
 export interface Config {
   /** NAGs counted as correct (1 !, 3 !!, 5 !?). */
@@ -36,6 +37,16 @@ export interface Config {
   goodMove: number;
   /** Live play: at most this many of your moves. */
   liveMaxMoves: number;
+  /** Timed puzzles: a clock runs while you think. */
+  timed: boolean;
+  /** Seconds for the whole puzzle. */
+  timeLimit: number;
+  /** When time is up: nothing (just show the time), fail the attempt, or grade a slow solve lower. */
+  timeAffects: TimeAffects;
+  /** Ease for a solve over the time limit (afterAnswer 'grade' with timeAffects 'grade'). */
+  gradeSlow: number;
+  /** Show the clock on the front (off: the time shows only on the back). */
+  showClock: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -56,6 +67,11 @@ export const DEFAULT_CONFIG: Config = {
   live: false,
   goodMove: 2,
   liveMaxMoves: 10,
+  timed: false,
+  timeLimit: 30,
+  timeAffects: 'nothing',
+  gradeSlow: 2,
+  showClock: true,
 };
 
 declare global {
@@ -68,6 +84,7 @@ declare global {
 const CHOICES: Partial<Record<keyof Config, readonly string[]>> = {
   intro: ['lastMove', 'fullGame'],
   afterAnswer: ['flip', 'stay', 'grade'],
+  timeAffects: ['nothing', 'fail', 'grade'],
 };
 
 /** [min, max, integer] for numeric settings. */
@@ -81,6 +98,8 @@ const RANGES: Partial<Record<keyof Config, [number, number, boolean]>> = {
   gradeFailed: [1, 4, true],
   goodMove: [0.1, 20, false],
   liveMaxMoves: [1, 30, true],
+  timeLimit: [5, 600, true],
+  gradeSlow: [1, 4, true],
 };
 
 export const CONFIG_KEYS = Object.keys(DEFAULT_CONFIG) as (keyof Config)[];

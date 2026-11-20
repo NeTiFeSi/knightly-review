@@ -13,7 +13,7 @@ import { EndReason, LiveLine, LiveOptions } from './live';
 import { isAccepted, isRejected } from './nag';
 import { KNode, positionOf } from './pgn';
 
-export type FailReason = 'rejected' | 'unknown' | 'gaveup' | 'live';
+export type FailReason = 'rejected' | 'unknown' | 'gaveup' | 'live' | 'timeout';
 
 export type Outcome =
   | { kind: 'continue'; played: KNode; reply: KNode }
@@ -349,6 +349,11 @@ export class PuzzleRun {
 
   giveUp(): Outcome {
     return this.fail({ kind: 'failed', reason: 'gaveup', at: this.cur });
+  }
+
+  /** Time ran out (timed puzzles, timeAffects 'fail'). */
+  timeout(): Outcome {
+    return this.fail({ kind: 'failed', reason: 'timeout', at: this.cur });
   }
 
   private fail(o: Extract<Outcome, { kind: 'failed' }>): Outcome {

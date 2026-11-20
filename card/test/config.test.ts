@@ -24,6 +24,23 @@ describe('readConfig', () => {
   });
 });
 
+describe('timed puzzle settings', () => {
+  it('are off by default', () => {
+    expect(DEFAULT_CONFIG).toMatchObject({ timed: false, timeLimit: 30, timeAffects: 'nothing', gradeSlow: 2, showClock: true });
+  });
+  it('drops invalid values with a warning', () => {
+    const r = checkConfig({ timed: 'yes', timeLimit: 2, timeAffects: 'slow', gradeSlow: 9, showClock: false });
+    expect(r.config.timed).toBe(false);
+    expect(r.config.timeLimit).toBe(30);
+    expect(r.config.timeAffects).toBe('nothing');
+    expect(r.config.gradeSlow).toBe(2);
+    expect(r.config.showClock).toBe(false);
+    expect(r.warnings).toHaveLength(4);
+    expect(checkConfig({ timeLimit: 45.5 }).warnings[0]).toMatch(/whole number/);
+    expect(checkConfig({ timed: true, timeLimit: 45, timeAffects: 'fail' }).warnings).toEqual([]);
+  });
+});
+
 describe('checkConfig', () => {
   it('warns about bad values, wrong types and unknown keys', () => {
     const r = checkConfig({ intro: 'fullgame', hints: 'yes', intr: 'x', gradeSolved: 5, flipDelay: 800 });
@@ -53,7 +70,7 @@ describe('checkConfig', () => {
     const text = formatConfig({ ...DEFAULT_CONFIG, intro: 'fullGame' });
     expect(text).toMatch(/^window\.KR_CONFIG = \{\n  acceptNags: \[1, 3, 5, 8\],/);
     expect(text).toContain("  intro: 'fullGame',");
-    expect(text).toMatch(/liveMaxMoves: 10\n\};$/);
+    expect(text).toMatch(/showClock: true\n\};$/);
     const loader = readFileSync(new URL('../templates/loader.html', import.meta.url), 'utf8');
     expect(loader).toContain(formatConfig(DEFAULT_CONFIG));
   });

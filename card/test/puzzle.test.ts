@@ -96,6 +96,15 @@ describe('PuzzleRun', () => {
   });
 });
 
+describe('timeout', () => {
+  it('fails at the current position with reason timeout', () => {
+    const r = run(2);
+    expect(r.timeout()).toMatchObject({ kind: 'failed', reason: 'timeout' });
+    expect(r.status).toBe('failed');
+    expect(() => r.play(mv(r.cur, 'g8f6'))).toThrow();
+  });
+});
+
 describe('hints', () => {
   it('reveals the text hint first, then the piece to move', () => {
     const p = findPuzzle(games(), 1)!;
