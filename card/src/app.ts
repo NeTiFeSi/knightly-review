@@ -94,6 +94,8 @@ export interface AppExtras {
   engine?: Promise<LiveEngine | undefined>;
   /** Re-mounted after the settings dialog closed: don't start an automatic grade again. */
   resumed: boolean;
+  /** Thinking time (ms) already spent before a re-mount, so the settings dialog can't reset the clock. */
+  elapsed?: number;
   openSettings: () => void;
 }
 
@@ -169,6 +171,7 @@ export class App {
     puzzle: PuzzleRef,
   ) {
     this.games = games;
+    this.elapsed = extras.elapsed || 0;
     this.puzzle = puzzle;
     this.key = cardKey(card.pgn, card.n);
     this.view = {
@@ -469,6 +472,17 @@ export class App {
     this.skipIntro();
     this.cancelGrade();
     this.syncClock();
+  }
+
+  /** The settings dialog closed without a re-mount: carry on. */
+  resume(): void {
+    this.paused = false;
+    this.syncClock();
+  }
+
+  /** Thinking time spent so far (ms). */
+  elapsedMs(): number {
+    return this.elapsedNow();
   }
 
   private skipIntro(): void {

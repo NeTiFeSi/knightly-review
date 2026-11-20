@@ -89,7 +89,7 @@ const GROUPS: Group[] = [
     title: 'Timed puzzles',
     fields: [
       { key: 'timed', label: 'Time limit on the puzzle', kind: 'toggle', help: 'The clock runs while you think, not during the opponent’s reply. The back shows the time taken.' },
-      { key: 'timeLimit', label: 'Time to solve', kind: 'range', min: 5, max: 180, step: 5, format: v => v + ' s', when: c => c.timed },
+      { key: 'timeLimit', label: 'Time to solve', kind: 'range', min: 5, max: 600, step: 5, format: v => v + ' s', when: c => c.timed },
       {
         key: 'timeAffects',
         label: 'When time is up',
