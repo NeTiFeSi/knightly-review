@@ -178,6 +178,21 @@ def reposition_new(col: Collection, order: list[str]) -> int:
     return len(fresh)
 
 
+def sibling_bury_hint(col: Collection, deck: str, new_cards: int, notes: int) -> str | None:
+    """A note for the update summary when "Bury new siblings" will hide some of the new cards today.
+
+    Cards of one note (an opening+ply, or a game) are siblings, so with that deck option on,
+    Anki shows only one of them per day: `new_cards` cards in `notes` notes show as `notes`.
+    """
+    if notes <= 0 or new_cards <= notes:
+        return None
+    did = col.decks.id_for_name(deck or MODEL)
+    if not did or not col.decks.config_dict_for_deck_id(did)["new"].get("bury"):
+        return None
+    return (f'{new_cards} new cards are in {notes} note{"s" if notes != 1 else ""}, and the deck option '
+            f'"Bury new siblings" shows only one card per note a day. Turn it off to study them all today.')
+
+
 def count_notes(col: Collection) -> int:
     return len(col.find_notes(f'"note:{MODEL}" "tag:{kn.NOTE_TAG}"'))
 

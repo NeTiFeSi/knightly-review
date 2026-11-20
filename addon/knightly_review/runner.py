@@ -152,7 +152,8 @@ class Updater:
             return
 
         def done(_changes) -> None:
-            self._emit("done", 1, 1, summary, force=True)
+            hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
+            self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
             if res.notes or manual:
                 tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
 
