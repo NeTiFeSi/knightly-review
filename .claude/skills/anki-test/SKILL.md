@@ -37,7 +37,10 @@ All commands run from `card/`.
    - `node e2e/run.mjs status --target android --device <phone-ip>:5555`. The phone usually listens on the **fixed port 5555** (`adb tcpip 5555`), which lasts until the phone restarts.
    - If it says no phone is connected (the phone restarted, so port 5555 is gone): ask the user to turn on Wireless debugging and send the **IP & port** from that screen (pairing is kept). Then run `adb connect <ip:port>` and `adb -s <ip:port> tcpip 5555`, and use `<ip>:5555` again.
    - Pass `--device` to every command, or set `KR_ADB_SERIAL`.
-   - `node e2e/run.mjs deploy --target android --device <ip:port>` pushes `_knightly.js` into the test app's media. Template changes need a re-import of `dist/knightly-sample.apkg` (`npm run apkg`), done in the test app.
+   - `node e2e/run.mjs deploy --target android` pushes `_knightly.js` into the test app's media.
+   - **Template / CSS changes:** `npm run apkg && node e2e/run.mjs import --target android`. It pushes the apkg to the test app's own storage, opens it through a `content://` URI, presses Add and Import, and restarts the app (the study screen caches the old template otherwise). Don't ask the user to import by hand.
+   - **Test app as a clone ("Dual apps"):** if the test app is the Xiaomi clone of AnkiDroid (same package `com.ichi2.anki`, Android user 999), set `KR_DROID_USER=999 KR_DROID_PACKAGE=com.ichi2.anki` (plus `KR_ADB_SERIAL`). The runner tells it apart from the real app by its non-zero user id, uses `/storage/emulated/999`, and refuses user 0. Check with `adb shell pm list users`.
+   - **AnkiDroid 2.25+:** the legacy reviewer (activity `Reviewer`) works with the JS API. The "New study screen" (Settings → New study screen) has no JS API, so the runner cannot drive it; turn it off in the test app for e2e.
    - `node e2e/run.mjs --target android --device <ip:port>`.
 4. **Pick scenarios** with `--only name1,name2`.
 5. **Report** the PASS/FAIL table, and look at the screenshots in `card/e2e/out/<target>/` (`<scenario>-<step>.png`, plus `-failure.png`) before calling something fixed. A FAIL is a wrong result; an ERROR is a broken step (timeout, missing element). Read the note in either case.
