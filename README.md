@@ -22,7 +22,7 @@ You need [Anki](https://apps.ankiweb.net/) on a computer (Windows, macOS or Linu
 
    Stockfish searches every position to a fixed depth: 13 by default, which is quick. 20 or more gives better judgements if your computer can take it. Its hash table size (RAM) is in the same box.
 
-   Optional: **Lc0** as a second engine (much faster with a graphics card; get it from [lczero.org](https://lczero.org/play/download/)). When it's on, both engines analyse each position in parallel. Lc0's judgement is used, except in mate positions, where Stockfish's is. Lc0 is searched for a fixed time per position (0.5 s by default). Only Stockfish and Lc0 are supported.
+   Optional: **Lc0** as a second engine (much faster with a graphics card; get it from [lczero.org](https://lczero.org/play/download/)). When it's on, Lc0 analyses each position after Stockfish, for as long as Stockfish took there. Lc0's judgement is used, except in mate positions, where Stockfish's is. Only Stockfish and Lc0 are supported.
 4. Save. The first update fetches your recent games and analyses them in the background (a few minutes; Anki stays usable). New cards appear in the **Knightly Review** deck.
 
 After that, updates run when Anki starts and every few hours while it's open. **Tools → Knightly Review → Update now** runs one right away. Lichess: logging in (optional, in Settings) makes downloads faster; your password stays on lichess.org. Chess.com refreshes its game lists only a few times a day, so new Chess.com games can take a few hours to show up.

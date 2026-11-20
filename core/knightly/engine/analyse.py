@@ -1,10 +1,10 @@
 """Position evaluation with Stockfish (required) and Lc0 (optional), always with WDL.
 
-- Stockfish is searched to a fixed depth (`cfg.sf_depth`), Lc0 for a fixed time
-  (`cfg.lc0_time`). Both must report win/draw/loss (UCI_ShowWDL).
-- With Lc0 on, both engines analyse each position at the same time. The answer
-  comes from Lc0, except in mate positions (either engine's best line is a mate),
-  where Stockfish's answer is used.
+- Stockfish is searched to a fixed depth (`cfg.sf_depth`). Both engines must report
+  win/draw/loss (UCI_ShowWDL).
+- With Lc0 on, Lc0 runs after Stockfish, for as long as Stockfish took on that
+  position (stored with Stockfish's cached result). The answer comes from Lc0, except
+  in mate positions (either engine's best line is a mate), where Stockfish's is used.
 - Results are cached per engine and position; a cached result counts when it was
   searched at least as hard (Stockfish: depth; Lc0: milliseconds).
 """
@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
 from typing import Iterable, Optional
 
 import chess
@@ -63,14 +63,15 @@ class Engine:
         self.name = ""
         self.calls = 0
 
-    @property
-    def effort(self) -> int:
-        return self.cfg.sf_depth if self.kind == STOCKFISH else int(round(self.cfg.lc0_time * 1000))
-
-    def limit(self) -> chess.engine.Limit:
+    def limit(self, depth: Optional[int] = None, ms: Optional[int] = None) -> tuple[chess.engine.Limit, int]:
+        """The search limit and the cache effort it stands for: Stockfish by depth (`cfg.sf_depth`
+        unless `depth`), Lc0 by time (`ms`, required)."""
         if self.kind == STOCKFISH:
-            return chess.engine.Limit(depth=self.cfg.sf_depth)
-        return chess.engine.Limit(time=self.cfg.lc0_time)
+            d = depth or self.cfg.sf_depth
+            return chess.engine.Limit(depth=d), d
+        if not ms:
+            raise ValueError("Lc0 needs a time limit")
+        return chess.engine.Limit(time=ms / 1000), ms
 
     def proc(self) -> chess.engine.SimpleEngine:
         if self._proc is None:
@@ -96,23 +97,24 @@ class Engine:
         return self._proc
 
     def evaluate(self, board: chess.Board, multipv: int, moves: Optional[list[str]] = None,
-                 depth: Optional[int] = None) -> Eval:
-        """With `moves`, only those root moves are searched (not cached). `depth` (Stockfish
-        only) searches to that depth instead of the configured one."""
+                 depth: Optional[int] = None, ms: Optional[int] = None, timed: bool = False) -> Eval:
+        """With `moves`, only those root moves are searched (not cached). `depth` (Stockfish)
+        searches to that depth instead of the configured one; `ms` is Lc0's time. `timed`: a
+        cached result must know how long it took (`Eval.ms`), or the search is run again."""
         key = fen_key(board.fen())
-        shallow = depth is not None and self.kind == STOCKFISH
-        effort = depth if shallow else self.effort
+        limit, effort = self.limit(depth, ms)
         if not moves:
             ev = self.cache.get_eval(key, self.kind, multipv=multipv, min_effort=effort)
-            if ev:
+            if ev and (ev.ms or not timed):
                 return ev
         root = [chess.Move.from_uci(m) for m in moves] if moves else None
-        limit = chess.engine.Limit(depth=depth) if shallow else self.limit()
+        t0 = time.monotonic()
         infos = self.proc().analyse(board, limit, multipv=multipv, root_moves=root)
+        took = max(1, round((time.monotonic() - t0) * 1000))
         if isinstance(infos, dict):
             infos = [infos]
         lines = [Line(_score(i), [m.uci() for m in i.get("pv", [])]) for i in infos if "score" in i]
-        ev = Eval(depth=int(min(i.get("depth", 0) for i in infos)), lines=lines, source=self.kind)
+        ev = Eval(depth=int(min(i.get("depth", 0) for i in infos)), lines=lines, source=self.kind, ms=took)
         self.calls += 1
         if not moves:
             self.cache.put_eval(key, self.kind, effort, ev)
@@ -138,7 +140,6 @@ class Analyser:
         self.gate = gate
         self.sf = Engine(STOCKFISH, cfg.stockfish_path, cfg, cache)
         self.lc0 = Engine(LC0, cfg.lc0_path, cfg, cache) if cfg.use_lc0 and cfg.lc0_path else None
-        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="knightly-engine") if self.lc0 else None
         self.picked = {STOCKFISH: 0, LC0: 0}
 
     @property
@@ -158,8 +159,6 @@ class Analyser:
         self.sf.close()
         if self.lc0:
             self.lc0.close()
-        if self._pool:
-            self._pool.shutdown(wait=True)
 
     def _check(self) -> None:
         if self.cancel.is_set():
@@ -178,13 +177,13 @@ class Analyser:
         if board.is_game_over():
             return Eval(depth=99, lines=[Line(terminal(board), [])], source="rules")
         n = min(multipv, len(moves) if moves else board.legal_moves.count())
-        if self.lc0 is None or self._pool is None:
+        if self.lc0 is None:
             ev = self.sf.evaluate(board, n, moves)
             self.picked[STOCKFISH] += 1
             return ev
-        f_sf = self._pool.submit(self.sf.evaluate, board.copy(stack=False), n, moves)
-        f_lc = self._pool.submit(self.lc0.evaluate, board.copy(stack=False), n, moves)
-        sf, lc = f_sf.result(), f_lc.result()
+        sf = self.sf.evaluate(board, n, moves, timed=True)
+        self._check()
+        lc = self.lc0.evaluate(board, n, moves, ms=sf.ms)  # as long as Stockfish took
         if is_mate(sf) or is_mate(lc):  # Stockfish is the authority on mates
             self.picked[STOCKFISH] += 1
             return sf

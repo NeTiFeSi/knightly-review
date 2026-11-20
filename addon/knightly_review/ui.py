@@ -326,7 +326,7 @@ class SettingsDialog(QDialog):
 
         lc = QGroupBox("Lc0 (optional, best with a graphics card)")
         lcf = QFormLayout(lc)
-        self.use_lc0 = QCheckBox("Also analyse with Lc0, in parallel; its judgement is used except in mate positions")
+        self.use_lc0 = QCheckBox("Also analyse with Lc0; its judgement is used except in mate positions")
         self.use_lc0.setChecked(bool(self.cfg.get("use_lc0", False)))
         lcf.addRow(self.use_lc0)
         self.lc0_label = QLabel()
@@ -337,12 +337,10 @@ class SettingsDialog(QDialog):
         lrow2.addWidget(self.lc0_label, 1)
         lrow2.addWidget(lc0_change)
         lcf.addRow(lrow2)
-        self.lc0_time = QDoubleSpinBox()
-        self.lc0_time.setRange(0.1, 60)
-        self.lc0_time.setSingleStep(0.1)
-        self.lc0_time.setSuffix(" s")
-        self.lc0_time.setValue(float(self.cfg.get("lc0_time", 0.5)))
-        lcf.addRow("Time per position:", self.lc0_time)
+        lc0_note = QLabel("Runs after Stockfish on each position, for as long as Stockfish took.")
+        lc0_note.setWordWrap(True)
+        lc0_note.setStyleSheet("color: gray")
+        lcf.addRow(lc0_note)
         lay.addWidget(lc)
 
         work = QGroupBox("Cards and updates")
@@ -519,7 +517,6 @@ class SettingsDialog(QDialog):
             hash_mb=self.hash.value(),
             use_lc0=self.use_lc0.isChecked() and bool(self.lc0_path),
             lc0_path=self.lc0_path,
-            lc0_time=round(self.lc0_time.value(), 2),
             deck=self.deck.text().strip() or "Knightly Review",
             max_new_cards=self.max_cards.value(),
             analysis_minutes=self.minutes.value(),

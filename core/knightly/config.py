@@ -24,7 +24,6 @@ class Config:
     hash_mb: int = 64  # Stockfish hash table (RAM), in MB
     use_lc0: bool = False
     lc0_path: str = ""
-    lc0_time: float = 0.5  # seconds per Lc0 analysis (Lc0 is searched by time, not depth)
     lc0_weights: str = ""  # network file; empty = Lc0 finds one itself
     deep_multipv: int = 0  # lines analysed at a puzzle position; 0 = every legal move
     # What to fetch and how much work one run does.

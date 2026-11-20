@@ -76,7 +76,7 @@ class LiveService:
 
     # worker thread -----------------------------------------------------------
     def _analyser_for(self, cfg: Config) -> Analyser:
-        key = (cfg.stockfish_path, cfg.sf_depth, cfg.threads, cfg.hash_mb, cfg.use_lc0, cfg.lc0_path, cfg.lc0_time)
+        key = (cfg.stockfish_path, cfg.sf_depth, cfg.threads, cfg.hash_mb, cfg.use_lc0, cfg.lc0_path)
         if self._analyser is None or key != self._cfg_key:
             if self._analyser is not None:
                 self._analyser.close()

@@ -2,7 +2,7 @@ Use **Tools → Knightly Review → Settings…** instead of editing this by han
 
 - `lichess_user`, `chesscom_user`: whose games to fetch. Either can be empty.
 - `stockfish_path` (required), `sf_depth` (fixed search depth; 13 by default, 20+ recommended), `threads` (0 = half the CPU cores), `hash_mb` (Stockfish's hash table in MB of RAM).
-- `use_lc0`, `lc0_path`, `lc0_time` (seconds per position): Lc0 as a second engine, run in parallel with Stockfish. Its judgement is used except in mate positions, where Stockfish's is.
+- `use_lc0`, `lc0_path`: Lc0 as a second engine. It runs after Stockfish on each position, for as long as Stockfish took there. Its judgement is used except in mate positions, where Stockfish's is. Lc0 only joins in the last step, where a card is made; the depth-by-depth steps before it are Stockfish alone.
 - `deck`: where new cards go.
 - `update_on_startup`, `update_every_hours` (0 = off): automatic updates while Anki is open.
 - `history_days`, `time_classes`, `rated_only`: which games count. `history_days` is how far back to look; `0` (or any negative number) means all time. Raising it later downloads the older games on the next update.

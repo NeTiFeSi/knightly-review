@@ -10,7 +10,6 @@
   "hash_mb": 64,
   "use_lc0": false,
   "lc0_path": "",
-  "lc0_time": 0.5,
   "history_days": 90,
   "time_classes": [
     "blitz",

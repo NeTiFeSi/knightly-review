@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--lichess", default="")
     up.add_argument("--chesscom", default="")
     up.add_argument("--stockfish", default="", help="Stockfish path (default: the first one found)")
-    up.add_argument("--lc0", default="", help="also analyse with this Lc0, in parallel")
+    up.add_argument("--lc0", default="", help="also analyse with this Lc0, after Stockfish, for as long as it took")
     up.add_argument("--depth", type=int, help="Stockfish depth (default 13)")
     up.add_argument("--cache", default=default_cache())
     up.add_argument("--config", help="JSON file with Config fields")

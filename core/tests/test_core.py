@@ -658,12 +658,13 @@ class AnalyserTest(unittest.TestCase):
         cfg = Config(stockfish_path="sf", use_lc0=use_lc0, lc0_path="lc0")
         an = analyse.Analyser(cfg, tmpcache(self))
         self.addCleanup(an.close)
-        an.sf.evaluate = lambda board, n, moves=None: sf
+        self.lc0_ms = []
+        an.sf.evaluate = lambda board, n, moves=None, **kw: sf
         if an.lc0:
-            an.lc0.evaluate = lambda board, n, moves=None: lc
+            an.lc0.evaluate = lambda board, n, moves=None, ms=None, **kw: self.lc0_ms.append(ms) or lc
         return an
 
-    SF = Eval(13, [Line(S(40, 300, 650, 50), ["e2e4"])], "stockfish")
+    SF = Eval(13, [Line(S(40, 300, 650, 50), ["e2e4"])], "stockfish", ms=840)
     LC = Eval(5, [Line(S(20, 200, 650, 150), ["d2d4"])], "lc0")
     SF_MATE = Eval(13, [Line(Score(mate=3, wdl=(1000, 0, 0)), ["e2e4"])], "stockfish")
     LC_MATE = Eval(5, [Line(Score(mate=5, wdl=(990, 10, 0)), ["d2d4"])], "lc0")
@@ -677,6 +678,7 @@ class AnalyserTest(unittest.TestCase):
         an.evaluate(b)
         an.evaluate(b)
         self.assertEqual(an.picked, {"stockfish": 0, "lc0": 2})
+        self.assertEqual(self.lc0_ms, [840, 840])  # Lc0 searches as long as Stockfish took
 
     def test_gate_pauses_analysis(self):
         an = self.analyser(self.SF, self.LC, use_lc0=False)
@@ -707,10 +709,39 @@ class AnalyserTest(unittest.TestCase):
     def test_limits(self):
         from knightly.engine.analyse import Engine
 
-        cfg = Config(sf_depth=22, lc0_time=0.75)
-        self.assertEqual(Engine("stockfish", "x", cfg, None).limit().depth, 22)
-        self.assertEqual(Engine("lc0", "x", cfg, None).limit().time, 0.75)
-        self.assertEqual((Engine("stockfish", "x", cfg, None).effort, Engine("lc0", "x", cfg, None).effort), (22, 750))
+        cfg = Config(sf_depth=22)
+        sf, lc = Engine("stockfish", "x", cfg, None), Engine("lc0", "x", cfg, None)
+        self.assertEqual((sf.limit()[0].depth, sf.limit()[1]), (22, 22))
+        self.assertEqual(sf.limit(depth=3)[0].depth, 3)
+        self.assertEqual((lc.limit(ms=750)[0].time, lc.limit(ms=750)[1]), (0.75, 750))
+        with self.assertRaises(ValueError):
+            lc.limit()
+
+    def test_search_time_is_stored_and_old_results_rerun(self):
+        from knightly.engine.analyse import Engine
+
+        class Proc:
+            calls = 0
+
+            def analyse(self, board, limit, multipv, root_moves=None):
+                Proc.calls += 1
+                return [{"depth": limit.depth, "pv": [chess.Move.from_uci("e2e4")],
+                         "score": chess.engine.PovScore(chess.engine.Cp(20), chess.WHITE),
+                         "wdl": chess.engine.PovWdl(chess.engine.Wdl(300, 650, 50), chess.WHITE)}]
+
+        c = tmpcache(self)
+        b = chess.Board()
+        k = fen_key(b.fen())
+        c.put_eval(k, "stockfish", 13, Eval(13, [Line(S(1, 1, 998, 1), ["d2d4"])], "stockfish"))  # no time
+        eng = Engine("stockfish", "x", Config(sf_depth=13), c)
+        eng._proc = Proc()
+        self.assertEqual(eng.evaluate(b, 1).lines[0].moves, ["d2d4"])  # cached is fine untimed
+        ev = eng.evaluate(b, 1, timed=True)  # but not when its time is needed
+        self.assertEqual((Proc.calls, ev.lines[0].moves), (1, ["e2e4"]))
+        self.assertGreater(ev.ms, 0)
+        self.assertEqual(c.get_eval(k, "stockfish", min_effort=13).ms, ev.ms)  # stored with the result
+        eng.evaluate(b, 1, timed=True)
+        self.assertEqual(Proc.calls, 1)
 
     def test_old_engine_path_setting(self):
         self.assertEqual(Config.from_dict({"engine_path": "/usr/bin/stockfish"}).stockfish_path, "/usr/bin/stockfish")
