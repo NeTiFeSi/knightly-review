@@ -8,6 +8,8 @@ export type AfterAnswer = 'flip' | 'stay' | 'grade';
 export interface Config {
   /** NAGs counted as correct (1 !, 3 !!, 5 !?). */
   acceptNags: number[];
+  /** In a forced mate, accept only the fastest mate (otherwise any move that keeps a forced mate). */
+  strictMate: boolean;
   /** ms before the opponent's reply is played. */
   autoReplyDelay: number;
   showEval: boolean;
@@ -38,6 +40,7 @@ export interface Config {
 
 export const DEFAULT_CONFIG: Config = {
   acceptNags: DEFAULT_ACCEPT,
+  strictMate: false,
   autoReplyDelay: 400,
   showEval: true,
   evalOnPuzzleFront: false,

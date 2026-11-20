@@ -6,6 +6,8 @@
 // - the move limit is reached → solved.
 // Otherwise the user's move must be a good move (within `goodMove` win-% of the best);
 // the opponent then plays the engine's best reply.
+// When the best move mates by force, a good move is one that keeps a forced mate
+// (with `strictMate`, one as fast as the best), and the position is never quiet.
 import { Chess, normalizeMove } from 'chessops/chess';
 import { makeFen, parseFen } from 'chessops/fen';
 import { makeSan } from 'chessops/san';
@@ -18,6 +20,15 @@ export interface LiveOptions {
   goodMove: number;
   /** Most user moves played live. */
   maxMoves: number;
+  /** In a forced mate, only a mate as fast as the engine's best counts. */
+  strictMate?: boolean;
+}
+
+/** Forced mate for the user in this many moves along `l`, or undefined. */
+export function mateIn(l: ELine, white: boolean): number | undefined {
+  const m = l.mate;
+  if (m === undefined || m === null || m === 0) return undefined;
+  return (white ? m > 0 : m < 0) ? Math.abs(m) : undefined;
 }
 
 export type EndReason = 'mate' | 'draw' | 'quiet' | 'limit';
@@ -25,7 +36,18 @@ export type EndReason = 'mate' | 'draw' | 'quiet' | 'limit';
 export type LiveStep =
   | { kind: 'continue'; move: string; reply: string; replyLine: ELine }
   | { kind: 'solved'; move: string; reason: EndReason; reply?: string; replyLine?: ELine }
-  | { kind: 'failed'; move: string; san: string; best: string; bestSan: string; loss: number; line: ELine };
+  | {
+      kind: 'failed';
+      move: string;
+      san: string;
+      best: string;
+      bestSan: string;
+      loss: number;
+      line: ELine;
+      /** In a forced mate: the best mate, and this move's (undefined when it drops the mate). */
+      bestMate?: number;
+      mate?: number;
+    };
 
 function position(fen: string): Chess {
   return Chess.fromSetup(parseFen(fen).unwrap()).unwrap();
@@ -87,10 +109,21 @@ export class LiveLine {
     if (o) return o;
     if (this.movesPlayed >= this.opts.maxMoves) return 'limit';
     const lines = await this.prefetch();
-    const white = this.user === 'white';
-    const good = lines.filter(l => expectation(lines[0], white) - expectation(l, white) <= this.opts.goodMove);
+    if (mateIn(lines[0], this.user === 'white') !== undefined) return undefined; // play the mate out
+    const good = lines.filter(l => this.good(lines[0], l));
     const quiet = good.length >= 2 && !position(this.fen).isCheck() && !this.lastCapture;
     return quiet ? 'quiet' : undefined;
+  }
+
+  /** Whether `l` is good enough next to the engine's `best`. */
+  private good(best: ELine, l: ELine): boolean {
+    const white = this.user === 'white';
+    const target = mateIn(best, white);
+    if (target !== undefined) {
+      const m = mateIn(l, white);
+      return m !== undefined && (!this.opts.strictMate || m <= target);
+    }
+    return expectation(best, white) - expectation(l, white) <= this.opts.goodMove;
   }
 
   /** Best move here (for hints), once analysed. */
@@ -106,7 +139,7 @@ export class LiveLine {
     let mine = lines.find(l => l.uci === uci);
     if (!mine) mine = (await this.engine.analyse(this.fen, 1, [uci]))[0];
     const loss = expectation(best, white) - expectation(mine, white);
-    if (loss > this.opts.goodMove)
+    if (!this.good(best, mine))
       return {
         kind: 'failed',
         move: uci,
@@ -115,6 +148,8 @@ export class LiveLine {
         bestSan: san(this.fen, best.uci),
         loss,
         line: mine,
+        bestMate: mateIn(best, white),
+        mate: mateIn(mine, white),
       };
 
     this.movesPlayed++;

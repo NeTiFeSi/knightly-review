@@ -11,6 +11,7 @@ from typing import Any
 # Key order matches DEFAULT_CONFIG in card/src/cardRef.ts (and the template).
 SCHEMA: dict[str, tuple] = {
     "acceptNags": ("nags",),
+    "strictMate": ("bool",),
     "autoReplyDelay": ("num", 0, 10000, False),
     "showEval": ("bool",),
     "evalOnPuzzleFront": ("bool",),

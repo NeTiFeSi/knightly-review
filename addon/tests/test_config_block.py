@@ -9,6 +9,7 @@ LOADER = pathlib.Path(__file__).resolve().parents[2] / "card" / "templates" / "l
 
 DEFAULT = {
     "acceptNags": [1, 3, 5, 8],
+    "strictMate": False,
     "autoReplyDelay": 400,
     "showEval": True,
     "evalOnPuzzleFront": False,

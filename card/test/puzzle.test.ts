@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findPuzzle, parseGames } from '../src/pgn';
-import { acceptedMoves, PuzzleRun } from '../src/puzzle';
+import { acceptedMoves, mateMiss, PuzzleRun } from '../src/puzzle';
 import { DEFAULT_ACCEPT } from '../src/nag';
 import { games, mv } from './helpers';
 
@@ -118,5 +118,46 @@ describe('hints', () => {
     expect(r.hasMoreHints()).toBe(true);
     r.hint();
     expect(r.hintsUsed).toBe(2);
+  });
+});
+
+describe('forced mates', () => {
+  // Ra8 mates at once; "Ra7" is scripted as a slower forced mate; Kf1 is won but no mate.
+  const PGN = `[FEN "6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1"]
+[SetUp "1"]
+
+1. h3 $4 { [%eval 4.5] [%kr 1] } ( 1. Ra8# $1 { [%eval #1] } ) ( 1. Ra7 $1 { [%eval #3] } ) ( 1. Kf1 $1 { [%eval 6.5] } ) 1... h6 *`;
+  const mateRun = (strict = false) => new PuzzleRun(findPuzzle(parseGames(PGN), 1)!.position, DEFAULT_ACCEPT, undefined, undefined, strict);
+
+  it('accepts any move that keeps a forced mate, and nothing else', () => {
+    expect(mateRun().accepted().map(n => n.san)).toEqual(['Ra8#', 'Ra7']);
+    expect(mateRun().play(mv(mateRun().cur, 'a1a7')).kind).toBe('solved');
+    const r = mateRun();
+    expect(r.play(mv(r.cur, 'g1f1'))).toMatchObject({ kind: 'failed', reason: 'rejected', san: 'Kf1' });
+  });
+
+  it('accepts only the fastest mate when strict', () => {
+    expect(mateRun(true).accepted().map(n => n.san)).toEqual(['Ra8#']);
+    const pos = findPuzzle(parseGames(PGN), 1)!.position;
+    expect(acceptedMoves(pos, true, DEFAULT_ACCEPT, true).map(n => n.san)).toEqual(['Ra8#']);
+  });
+
+  it('says why a move fell short of the mate', () => {
+    const pos = findPuzzle(parseGames(PGN), 1)!.position;
+    const child = (san: string) => pos.children.find(c => c.san === san)!;
+    expect(mateMiss(pos, child('Kf1'), false)).toEqual({ kind: 'drops', best: 1 });
+    expect(mateMiss(pos, child('Ra7'), false)).toBeUndefined();
+    expect(mateMiss(pos, child('Ra7'), true)).toEqual({ kind: 'slower', mate: 3, best: 1 });
+    expect(mateMiss(pos, child('Ra8#'), true)).toBeUndefined();
+  });
+
+  it("ignores the opponent's mates (Black to move, White's evals)", () => {
+    const pgn = `[FEN "r5k1/5ppp/8/8/8/8/5PPP/6K1 b - - 0 1"]
+[SetUp "1"]
+
+1... h6 $4 { [%eval -4.5] [%kr 1] } ( 1... Ra1# $1 { [%eval #-1] } ) ( 1... Ra2 $1 { [%eval #-3] } ) ( 1... Kf8 $1 { [%eval -6.5] } ) *`;
+    const pos = findPuzzle(parseGames(pgn), 1)!.position;
+    expect(acceptedMoves(pos, true, DEFAULT_ACCEPT).map(n => n.san)).toEqual(['Ra1#', 'Ra2']);
+    expect(acceptedMoves(pos, true, DEFAULT_ACCEPT, true).map(n => n.san)).toEqual(['Ra1#']);
   });
 });

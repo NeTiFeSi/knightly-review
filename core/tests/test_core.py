@@ -287,6 +287,17 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(self.g([("best", 0, 0), ("a", 1.5, 0)])["a"], GOOD)
         self.assertEqual(self.g([("best", 0, 0), ("a", 1.5, 0)], good_move=1.0)["a"], DUBIOUS)
 
+    def test_forced_mate_needs_a_mating_move(self):
+        def g(moves, legal=20):
+            return {m.move: m.nag for m in grade([Graded(mv, loss, 0, mate=mate) for mv, loss, mate in moves], legal, self.cfg)}
+        # Any forced mate is good, however long; a won position without the mate is not.
+        self.assertEqual(g([("m3", 0, 3), ("m5", 0, 5), ("won", 0, None), ("worse", 15, None)]),
+                         {"m3": GOOD, "m5": GOOD, "won": DUBIOUS, "worse": MISTAKE})
+        # The only move that keeps the mate is the singular move.
+        self.assertEqual(g([("m2", 0, 2), ("won", 0, None)]), {"m2": SINGULAR, "won": DUBIOUS})
+        # Being mated isn't a mate to keep: plain WDL grading.
+        self.assertEqual(g([("a", 0, -3), ("b", 0, -2)]), {"a": GOOD, "b": GOOD})
+
     def test_line_material(self):
         b = chess.Board()
         # Counted at 4 plies, but Nxf7 is a capture in progress: follow it through Kxf7.

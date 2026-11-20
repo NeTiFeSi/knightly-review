@@ -12,6 +12,10 @@ Grading (NAGs) of the candidate moves at a puzzle position:
   further while captures or checks are still going on), the side that moved has
   at least `cfg.sacrifice_points` of material (1/3/3/5/9) less than it has now,
   and at least that much less than the analysed alternative that keeps the most.
+- In a **forced mate** (the best move mates by force), only moves that keep a
+  forced mate count as good; a move that gives it up is ?! at best, even when
+  the engine still calls the position won. How fast the mate is doesn't matter
+  here (the card's `strictMate` setting asks for the fastest).
 
 | NAG | When |
 |---|---|
@@ -94,6 +98,7 @@ class Graded:
     loss: float  # expected-score points below the best move
     material: int  # short-term material balance along the line
     nag: int = 0
+    mate: Optional[int] = None  # forced mate in this many moves, from the mover's side (negative: getting mated)
 
 
 def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) -> list[Graded]:
@@ -105,9 +110,16 @@ def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) 
     if not moves:
         return moves
     most = max(m.material for m in moves)
-    good = [m for m in moves if m.loss <= cfg.good_move]
+    mating = any(m.mate is not None and m.mate > 0 for m in moves)
+
+    def is_good(m: Graded) -> bool:
+        if mating:  # a forced mate on the board: only moves that keep one
+            return m.mate is not None and m.mate > 0
+        return m.loss <= cfg.good_move
+
+    good = [m for m in moves if is_good(m)]
     for m in moves:
-        if m.loss > cfg.good_move:
+        if not is_good(m):
             m.nag = DUBIOUS if m.loss <= 10 else MISTAKE if m.loss <= 20 else BLUNDER
             continue
         sacrifice = m.material <= min(current, most) - cfg.sacrifice_points
@@ -272,7 +284,8 @@ def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[st
     white = board.turn == chess.WHITE
     best = max(l.score.win_pct(white) for l in by_move.values())
     graded = [
-        Graded(m, max(0.0, best - l.score.win_pct(white)), line_material(board, l.moves, cfg.sacrifice_plies, analyser))
+        Graded(m, max(0.0, best - l.score.win_pct(white)), line_material(board, l.moves, cfg.sacrifice_plies, analyser),
+               mate=None if l.score.mate is None else (l.score.mate if white else -l.score.mate))
         for m, l in by_move.items()
     ]
     return grade(graded, board.legal_moves.count(), cfg, material(board, board.turn)), by_move
