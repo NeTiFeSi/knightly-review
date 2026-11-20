@@ -157,6 +157,20 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(self.kc.reposition_new(self.col, [a, b]), 2)
         self.assertEqual(queue(), [(a, 1), (b, 0), ("lichess:old1:opening", 0)])
 
+    def test_motif_notes_are_found_again_and_keep_their_tags(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        key = "motif:fork:1"
+        tag = "knightly::motif::fork"
+        self.kc.apply_notes(self.col, [self.spec(key=key, tags=(tag,))], "Chess::Knightly", [key])
+        self.assertEqual(list(self.kc.existing_notes(self.col)), [key])
+        # A later run adds a game with another motif: the note keeps the earlier tags (like an opening note).
+        two = "{{c1::1::1}} {{c2::2::2}}"
+        self.kc.apply_notes(self.col, [self.spec(key=key, cards=two, tags=("knightly::motif::pin",))], "Chess::Knightly")
+        (nid,) = self.col.find_notes(f'"tag:{self.kc.kn.note_key_tag(key)}"')
+        tags = set(self.col.get_note(nid).tags)
+        self.assertTrue({tag, "knightly::motif::pin"} <= tags)
+        self.assertEqual(len(self.col.find_cards(f'"tag:{self.kc.kn.note_key_tag(key)}"')), 2)
+
     def test_key_from_tags(self):
         self.assertEqual(self.kc.key_from_tags(["x", "knightly::game::chesscom-123::endgame"]), "chesscom:123:endgame")
         self.assertIsNone(self.kc.key_from_tags(["knightly::game::chesscom-123"]))  # from before phases
