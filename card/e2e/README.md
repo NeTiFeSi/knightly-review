@@ -3,7 +3,7 @@
 `run.mjs` drives the card in **real Anki desktop** (over AnkiConnect + Chrome DevTools) and in **AnkiDroid on a phone** (over adb on Wi-Fi + WebView DevTools). It runs the same scenarios on both. It works only with a separate test install, never your own collection:
 
 - **Desktop:** the profile `Knightly Test` in its own base folder, with AnkiConnect on port 8766.
-- **Phone:** the AnkiDroid "parallel" build `com.ichi2.anki.a`.
+- **Phone:** a separate AnkiDroid install: the "parallel" build `com.ichi2.anki.a`, or a clone ("Dual apps", Android user 999) with `KR_DROID_USER=999 KR_DROID_PACKAGE=com.ichi2.anki`. Both AnkiDroid study screens (old reviewer, new study screen) are driven.
 
 ```sh
 node e2e/run.mjs list                                  # scenarios
@@ -37,7 +37,7 @@ Screenshots go to `e2e/out/<target>/`. The exit code is 1 when a scenario fails.
 
 Settings, through environment variables:
 - `KR_ANKI_BASE`, `KR_ANKI_PROFILE`, `KR_ANKI_PORT` (8766), `KR_DEVTOOLS_PORT` (9222);
-- `KR_ADB_SERIAL`, `KR_DROID_PACKAGE` (`com.ichi2.anki.a`), `KR_DROID_MEDIA`, `KR_DROID_DEVTOOLS_PORT` (9223).
+- `KR_ADB_SERIAL`, `KR_DROID_PACKAGE` (`com.ichi2.anki.a`), `KR_DROID_USER` (empty; 999 for a clone), `KR_DROID_MEDIA`, `KR_DROID_DEVTOOLS_PORT` (9223).
 
 ## Anki quirks found this way
 
@@ -46,4 +46,7 @@ Settings, through environment variables:
 - **AnkiDroid:** each study screen is served from a new random port, so `localStorage` is lost. The ⚙ settings survive through the cookie fallback.
 - **AnkiDroid:** the WebView writes cookies to disk only when the app goes to the background (or about every 30 s).
 - **AnkiDroid:** the review intent must be started with `--activity-clear-task`, or Android just brings the existing task forward.
-- **AnkiDroid's JS API** returns `{success, value}` objects.
+- **AnkiDroid 2.25 has two study screens.** The old reviewer's globals `showAnswer()` / `buttonAnswerEaseN()` navigate to `signal:` URLs. The new study screen (`previewer.CardViewerActivity`, Settings → New study screen) runs Anki's own reviewer scripts (`window.ankiPlatform === 'ankidroid'`): `showAnswer()` works there, but any `signal:` URL (so `buttonAnswerEaseN()` and the `AnkiDroidJS` API) only raises its "features not yet supported" dialog and does nothing. The runner therefore never uses the JS API; it grades with the native button ids (`com.ichi2.anki:id/again_button`) when a scenario needs the next card.
+- **AnkiDroid new study screen:** its activity is not exported, so `am start` can't bring it forward; `launch()` moves its task to the front with `am task lock` / `lock stop`. It keeps neither cookies nor localStorage over an app restart (the `settings-survive` scenario is skipped there).
+- **AnkiDroid's "Enable AnkiDroid API"** (the ContentProvider) can't be used from `adb shell` (`Permission not granted for: CardContentProvider.query`).
+- **AnkiDroid:** AnkiDroid's `reviewer.css` gives bare `<button>`s a margin; the card resets it (`.kr-root :where(button, …)`) so the gear and controls stay aligned.
