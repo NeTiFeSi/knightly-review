@@ -174,6 +174,9 @@ class Updater:
 
 
 def _summary(res: UpdateResult) -> str:
+    if res.skipped:
+        text = "Nothing changed since the last update."
+        return text + (" Warnings: " + "; ".join(res.warnings) if res.warnings else "")
     parts = [
         f"{res.new_games} new game{'s' if res.new_games != 1 else ''}",
         f"{res.analysed_positions} position{'s' if res.analysed_positions != 1 else ''} analysed",

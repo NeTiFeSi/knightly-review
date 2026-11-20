@@ -124,6 +124,7 @@ class Deepener:
         self.tried: set[Edge] = set()
         self.confirmed: set[tuple[str, str]] = set()  # (fen key, move) that made a card
         self.analysed = 0  # positions searched by the engine in this run
+        self.finished = False  # run() left nothing to continue: enough cards, or every position at full depth
         self._bg_level, self._bg_list, self._bg_i = 1, [], 0
         self._step = ""
 
@@ -241,3 +242,4 @@ class Deepener:
                 self._climb(heapq.nsmallest(batch_size, self.pending, key=self._priority))
             elif not self._background():
                 break
+        self.finished = len(self.confirmed) >= self.want or not self.out_of_time()

@@ -7,9 +7,12 @@ Anki collection: it takes the existing notes' PGN in and gives NoteSpecs out.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
+import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import chess
 
@@ -40,6 +43,18 @@ class UpdateResult:
     # Opening mode: every opening note (new and existing) in the order its new cards should
     # be studied. The add-on repositions the new cards to match. Empty in game mode.
     order: list[str] = field(default_factory=list)
+    skipped: bool = False  # same inputs as the last finished run: nothing was collected or analysed
+
+
+STATE_KEY = "last_run"
+
+
+def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
+    """Hash of everything a run depends on: the settings (minus tokens), the games used, the positions on cards."""
+    d = cfg.to_dict()
+    d.pop("lichess_token", None)
+    blob = json.dumps([d, sorted(game_keys), sorted(exclude)], sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
 
 
 def _opponent(g: Game) -> str:
@@ -172,6 +187,14 @@ def run_update(
         threshold = cfg.opening_min_loss if by_opening else cfg.min_loss
         min_loss: Optional[float] = cfg.opening_min_loss if by_opening else None
 
+        fp = fingerprint(cfg, by_key, exclude)
+        last = cache.get(STATE_KEY) or {}
+        if not force and last.get("finished") and last.get("fingerprint") == fp:
+            result.skipped = True
+            progress("analyse", 0, 0, "Nothing changed since the last update.")
+            return result
+        cache.set(STATE_KEY, {"fingerprint": fp, "finished": False, "ts": time.time()})
+
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
         positions = deepen.collect(games, cfg, exclude)
         groups = openings.rank(games) if by_opening else []
@@ -220,6 +243,10 @@ def run_update(
             if by_opening:
                 result.order = opening_order(groups, set(existing) | set(per_note))
             result.stats = dict(an.stats)
+            # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and
+            # if they never reach the collection (cancelled, write failed) the next run must try again.
+            if dp.finished and not result.new_cards:
+                cache.set(STATE_KEY, {"fingerprint": fp, "finished": True, "ts": time.time()})
     except http.Cancelled:
         result.cancelled = True
     return result
