@@ -342,9 +342,12 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
     assert played_choice is not None
     if not any(c.nag in ACCEPTED for c in choices):
         return None
-    best_graded = next(g for g in graded if g.move == choices[0].move)
     best_line = by_move[choices[0].move]
-    found = motifs_mod.detect(board, best_line.moves, best_graded.mate, choices[0].nag in (BRILLIANT, INTERESTING))
+    sc = best_line.score
+    cp = 10000 * (1 if sc.mate > 0 else -1) if sc.mate is not None else (sc.cp or 0)
+    if board.turn == chess.BLACK:
+        cp = -cp
+    found = motifs_mod.detect(board, best_line.moves, cp, choices[0].nag in (BRILLIANT, INTERESTING))
     best_san = board.san(chess.Move.from_uci(choices[0].move))
     played_san = board.san(chess.Move.from_uci(played))
     if opponent:

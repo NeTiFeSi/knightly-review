@@ -1,199 +1,90 @@
 """Tactical motifs of a puzzle, found from the best move and the engine's line.
 
-Names follow the themes of Lichess puzzles. The detectors are written here from the
-definitions (they are not a port of lichess-puzzler, which is AGPL), so they are
-simpler: they look at the position after the best move, and at the line that follows.
+The tagging is lichess-puzzler's (`cook.py`, ported in cook.py and cookutil.py), so the names are
+Lichess's puzzle themes, in kebab-case: `fork`, `back-rank-mate`, `mate-in-2`, `discovered-attack`…
+It needs the opponent's last move before the puzzle position (Lichess puzzles start there), so
+a puzzle at the first move of a game, or a line the tagger can't read, gets `other`.
 
 `detect` returns the motifs most important first; the first is the card's main motif.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 import chess
+import chess.pgn
 
-VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 100}
-MAX_MATE = 5
+from . import cook
+
 OTHER = "other"
+SOLUTION_PLIES = 7  # the engine line is cut to this many plies (the solver's moves come first and last)
 
-# Most important first; also the order `detect` returns them in. "mate-in-N" goes where "mate" is.
-PRIORITY = ["back-rank-mate", "mate", "promotion", "fork", "skewer", "pin", "discovered-attack",
-            "hanging-piece", "sacrifice", "quiet-move"]
+# Lichess tags that say how a puzzle looks or what the position is, not what the tactic is.
+_NOT_MOTIFS = {"short", "long", "veryLong", "oneMove", "crushing", "advantage", "equality", "mate",
+               "pawnEndgame", "knightEndgame", "bishopEndgame", "rookEndgame", "queenEndgame",
+               "queenRookEndgame"}
 
-
-def _value(board: chess.Board, sq: int) -> int:
-    p = board.piece_at(sq)
-    return VALUES[p.piece_type] if p else 0
-
-
-def _defended(board: chess.Board, sq: int, by: chess.Color) -> bool:
-    return bool(board.attackers(by, sq))
-
-
-def _back_rank_mate(board: chess.Board) -> bool:
-    """`board` is checkmate with the king on its back rank, boxed in by its own pieces."""
-    if not board.is_checkmate():
-        return False
-    king = board.king(board.turn)
-    assert king is not None
-    if chess.square_rank(king) != (0 if board.turn == chess.WHITE else 7):
-        return False
-    checkers = list(board.checkers())
-    if not all(chess.square_rank(c) == chess.square_rank(king) for c in checkers):
-        return False
-    # Every flight square off the back rank is taken by the king's own pieces.
-    step = 1 if board.turn == chess.WHITE else -1
-    for df in (-1, 0, 1):
-        f = chess.square_file(king) + df
-        if 0 <= f < 8:
-            sq = chess.square(f, chess.square_rank(king) + step)
-            p = board.piece_at(sq)
-            if p is None or p.color != board.turn:
-                return False
-    return True
+# Most important first: specific mates, then the tactics that name the idea, then the general ones.
+PRIORITY = [
+    "smotheredMate", "backRankMate", "anastasiaMate", "hookMate", "arabianMate", "bodenMate",
+    "doubleBishopMate", "dovetailMate", "mateIn1", "mateIn2", "mateIn3", "mateIn4", "mateIn5",
+    "underPromotion", "promotion", "enPassant", "fork", "skewer", "discoveredAttack", "doubleCheck", "pin",
+    "hangingPiece", "trappedPiece", "deflection", "attraction", "overloading", "interference", "intermezzo",
+    "clearance", "xRayAttack", "capturingDefender", "exposedKing", "attackingF2F7", "collinearMove",
+    "zugzwang", "advancedPawn", "sacrifice", "defensiveMove", "quietMove", "castling", "kingsideAttack",
+    "queensideAttack", "coercion",
+]
 
 
-def _fork(after: chess.Board, move: chess.Move, mover: chess.Color) -> bool:
-    """The moved piece attacks two or more pieces worth winning, and can't be taken for free."""
-    piece = after.piece_at(move.to_square)
-    if piece is None:
-        return False
-    mine = VALUES[piece.piece_type]
-    if piece.piece_type == chess.KING:
-        return False
-    targets = 0
-    for sq in after.attacks(move.to_square):
-        p = after.piece_at(sq)
-        if p is None or p.color == mover:
-            continue
-        if VALUES[p.piece_type] > mine or not _defended(after, sq, not mover):
-            if p.piece_type != chess.PAWN or piece.piece_type == chess.PAWN or VALUES[p.piece_type] > mine:
-                targets += 1
-    if targets < 2:
-        return False
-    # Not simply lost: nothing cheaper attacks it, or it is defended.
-    cheaper = [a for a in after.attackers(not mover, move.to_square)
-               if VALUES[after.piece_at(a).piece_type] < mine]  # type: ignore[union-attr]
-    return not cheaper and (not after.attackers(not mover, move.to_square)
-                            or _defended(after, move.to_square, mover))
+def slug(tag: str) -> str:
+    """'backRankMate' → 'back-rank-mate'; 'mateIn2' → 'mate-in-2'."""
+    return re.sub(r"(?<=[a-z])(?=[A-Z0-9])", "-", tag).lower()
 
 
-def _pin(before: chess.Board, after: chess.Board, mover: chess.Color) -> bool:
-    """The move pins an enemy piece to its king (a pin that wasn't there before)."""
-    enemy = not mover
-    return any(after.is_pinned(enemy, sq) and not before.is_pinned(enemy, sq)
-               for sq in chess.scan_forward(after.occupied_co[enemy]))
+def _puzzle(board: chess.Board, line: list[str], cp: int) -> Optional[cook.Puzzle]:
+    """The Lichess-style puzzle: the game before the opponent's last move, that move, then `line`."""
+    if not board.move_stack:
+        return None
+    root = board.copy()
+    previous = root.pop()
+    game = chess.pgn.Game()
+    game.setup(root)
+    node = game.add_variation(previous)
+    b = board.copy(stack=False)
+    for i, u in enumerate(line):
+        move = chess.Move.from_uci(u)
+        if move not in b.legal_moves:
+            break
+        node = node.add_variation(move)
+        b.push(move)
+        if b.is_checkmate() or i + 1 >= SOLUTION_PLIES:
+            break
+    end = game.end()
+    if len(list(game.mainline())) % 2 == 1 and end.parent is not None:  # ends on the opponent's move: drop it
+        end.parent.variations.remove(end)
+    if len(list(game.mainline())) < 2:
+        return None
+    return cook.Puzzle("kr", game, cp)
 
 
-def _skewer(after: chess.Board, move: chess.Move, mover: chess.Color) -> bool:
-    """The moved slider attacks an enemy piece with a less valuable one behind it on the same line."""
-    piece = after.piece_at(move.to_square)
-    if piece is None or piece.piece_type not in (chess.BISHOP, chess.ROOK, chess.QUEEN):
-        return False
-    for front in after.attacks(move.to_square):
-        p = after.piece_at(front)
-        if p is None or p.color == mover:
-            continue
-        # Walk on past `front`, along the same direction.
-        df = chess.square_file(front) - chess.square_file(move.to_square)
-        dr = chess.square_rank(front) - chess.square_rank(move.to_square)
-        step_f = (df > 0) - (df < 0)
-        step_r = (dr > 0) - (dr < 0)
-        f, r = chess.square_file(front) + step_f, chess.square_rank(front) + step_r
-        while 0 <= f < 8 and 0 <= r < 8:
-            sq = chess.square(f, r)
-            behind = after.piece_at(sq)
-            if behind is not None:
-                if behind.color != mover and VALUES[p.piece_type] > VALUES[behind.piece_type]:
-                    return True
-                break
-            f, r = f + step_f, r + step_r
-    return False
-
-
-def _discovered(before: chess.Board, after: chess.Board, move: chess.Move, mover: chess.Color) -> bool:
-    """Moving the piece opens a line for another of ours onto something it didn't attack before."""
-    for sq in chess.scan_forward(after.occupied_co[mover]):
-        p = after.piece_at(sq)
-        if sq == move.to_square or p is None or p.piece_type not in (chess.BISHOP, chess.ROOK, chess.QUEEN):
-            continue
-        newly = int(after.attacks(sq)) & ~int(before.attacks(sq)) & after.occupied_co[not mover]
-        for t in chess.scan_forward(newly):
-            if chess.between(sq, t) & chess.BB_SQUARES[move.from_square]:
-                if after.is_check() and t == after.king(not mover) or VALUES[after.piece_at(t).piece_type] >= 3:  # type: ignore[union-attr]
-                    return True
-    return False
-
-
-def _hanging(before: chess.Board, move: chess.Move, mover: chess.Color) -> bool:
-    """The move takes a piece that nothing defended."""
-    if not before.is_capture(move) or before.is_en_passant(move):
-        return False
-    target = before.piece_at(move.to_square)
-    if target is None or target.piece_type == chess.PAWN:
-        return False
-    return not _defended(before, move.to_square, not mover)
-
-
-def detect(board: chess.Board, line: list[str], mate: Optional[int] = None, sacrifice: bool = False) -> list[str]:
+def detect(board: chess.Board, line: list[str], cp: int = 0, sacrifice: bool = False) -> list[str]:
     """Motifs of the puzzle at `board` (before the best move), most important first.
 
-    `line` is the engine's line from the best move on (UCI). `mate` is the forced mate
-    in this many moves for the side to move (None if there is none). `sacrifice`: the
-    best move gives up material for a better position (graded in select.py).
+    `board` should carry its move stack (the opponent's last move). `line` is the engine's line from
+    the best move on (UCI). `cp`: its score for the side to move, in centipawns (mate: ±10000).
+    `sacrifice`: the best move gives up material (graded in select.py), which adds `sacrifice`.
     """
-    if not line:
-        return [OTHER]
-    mover = board.turn
+    tags: list[str] = []
     try:
-        move = chess.Move.from_uci(line[0])
-    except ValueError:
-        return [OTHER]
-    if move not in board.legal_moves:
-        return [OTHER]
-    found: set[str] = set()
-    after = board.copy(stack=False)
-    after.push(move)
-
-    # The line, played out: a mate or a promotion by the mover.
-    b = board.copy(stack=False)
-    mating = False
-    for i, u in enumerate(line):
-        mv = chess.Move.from_uci(u)
-        if mv not in b.legal_moves:
-            break
-        if i % 2 == 0 and mv.promotion:
-            found.add("promotion")
-        b.push(mv)
-        if b.is_checkmate():
-            mating = b.turn != mover
-            if mating and _back_rank_mate(b):
-                found.add("back-rank-mate")
-            break
-    if mate is not None and 0 < mate <= MAX_MATE:
-        found.add(f"mate-in-{mate}")
-    elif mating and (len(line) + 1) // 2 <= MAX_MATE:
-        found.add(f"mate-in-{(len(line) + 1) // 2}")
-
-    if _fork(after, move, mover):
-        found.add("fork")
-    if _skewer(after, move, mover):
-        found.add("skewer")
-    if _pin(board, after, mover):
-        found.add("pin")
-    if _discovered(board, after, move, mover):
-        found.add("discovered-attack")
-    if _hanging(board, move, mover):
-        found.add("hanging-piece")
-    if sacrifice:
-        found.add("sacrifice")
-    if not found and not board.is_capture(move) and not after.is_check():
-        found.add("quiet-move")
-
-    def rank(m: str) -> int:
-        name = "mate" if m.startswith("mate-in-") else m
-        return PRIORITY.index(name)
-
-    out = sorted(found, key=lambda m: (rank(m), m))
-    return out or [OTHER]
+        puzzle = _puzzle(board, line, cp)
+        if puzzle is not None:
+            tags = [t for t in cook.cook(puzzle) if t not in _NOT_MOTIFS]
+    except Exception:  # the tagger meets positions Lichess puzzles never have
+        tags = []
+    if sacrifice and "sacrifice" not in tags:
+        tags.append("sacrifice")
+    rank = {t: i for i, t in enumerate(PRIORITY)}
+    tags.sort(key=lambda t: (rank.get(t, len(rank)), t))
+    return [slug(t) for t in tags] or [OTHER]

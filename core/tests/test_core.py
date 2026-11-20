@@ -433,7 +433,7 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(n.cards, "{{c1::1::1}}")
         self.assertEqual(n.key, "lichess:test0001:opening")
         self.assertTrue(n.notes.startswith("Opening · <a href"))
-        self.assertEqual(n.tags, ["knightly", "knightly::game::lichess-test0001::opening", "knightly::color::black", "knightly::motif::quiet-move",
+        self.assertEqual(n.tags, ["knightly", "knightly::game::lichess-test0001::opening", "knightly::color::black", "knightly::motif::other",
                                   "knightly::opening::king-s-pawn-game", "knightly::phase::opening", "knightly::rated",
                                   "knightly::result::loss", "knightly::severity::blunder", "knightly::site::lichess",
                                   "knightly::time::blitz"])

@@ -44,3 +44,7 @@ card/      the interactive card (TypeScript), built into one media file
 The add-on bundles only pure-Python code (python-chess and the core), so one file installs on every OS. Heavier work planned for later (personal engines that need ML libraries) will run in a separate helper process with its own Python, not inside Anki.
 
 See [card/README.md](card/README.md) for the card and its PGN format, [addon/README.md](addon/README.md) for building the add-on, and [core/README.md](core/README.md) for the command line.
+
+## Licence
+
+GNU Affero General Public License v3 or later (see `LICENSE`). The motif tagger in `core/knightly/cook.py` and `cookutil.py` is ported from [lichess-puzzler](https://github.com/ornicar/lichess-puzzler) (AGPL-3.0).

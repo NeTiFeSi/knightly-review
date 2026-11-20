@@ -77,8 +77,8 @@ def vendor() -> None:
         src = next(tmp.glob(f"{name}-{version}/{name}"))
         vendor_tree(src, VENDOR / name, names)
     vendor_tree(ROOT / "core" / "knightly", VENDOR / "knightly", names)
-    licence = "\n".join(f"{n} {v}: GPL-3.0-or-later compatible, see https://pypi.org/project/{n}/{v}/" for n, v, _ in packages)
-    (VENDOR / "VENDORED.txt").write_text(licence + "\nknightly: this repository's core/ (GPL-3.0-or-later)\n")
+    licence = "\n".join(f"{n} {v}: AGPL-3.0-or-later compatible, see https://pypi.org/project/{n}/{v}/" for n, v, _ in packages)
+    (VENDOR / "VENDORED.txt").write_text(licence + "\nknightly: this repository's core/ (AGPL-3.0-or-later)\n")
 
 
 def card() -> None:

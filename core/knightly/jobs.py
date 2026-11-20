@@ -87,7 +87,7 @@ def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, in
             fk = fen_key(board.fen())
             if fk in want:
                 mine = board.turn == (chess.WHITE if g.user_is_white else chess.BLACK)
-                card = build_card(board.copy(stack=False), ply, u, an, cfg, "" if mine else _opponent(g))
+                card = build_card(board.copy(), ply, u, an, cfg, "" if mine else _opponent(g))
                 if card:
                     cards.append(card)
                     del want[fk]
