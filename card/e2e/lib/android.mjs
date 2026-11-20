@@ -226,7 +226,19 @@ export class AndroidTarget {
     await opts.evaluate(() => document.querySelector('button.label-button.primary').click());
     // The overview of what was imported follows; wait for it, then leave to the deck list.
     // The overview lists what happened in a table; the options screen has none.
-    await until(async () => opts.isClosed() || !!(await opts.$('table').catch(() => null)), 'the import to finish', 30000, 700);
+    // A closed page is not proof of success (it also closes when the screen navigates away mid-import),
+    // so only the overview table counts; a closed page is accepted only once the app has left the import screens.
+    let sawTable = false;
+    await until(
+      async () => {
+        if (!opts.isClosed()) return (sawTable = !!(await opts.$('table').catch(() => null)));
+        return /DeckPicker/.test(this.topActivity());
+      },
+      'the import to finish',
+      30000,
+      700,
+    );
+    if (process.env.KR_DEBUG) console.error('import finished via ' + (sawTable ? 'results table' : 'page closed'));
     await wait(1500);
     this.disconnect();
     // Restart the app: otherwise the study screen keeps rendering the cards with the old template.
