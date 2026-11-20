@@ -155,7 +155,6 @@ class CardSpec:
     played: Choice
     alternatives: list[Choice]  # best first, without the played move
     loss: float
-    phase: str
     comment: str = ""
     mine: bool = True
 

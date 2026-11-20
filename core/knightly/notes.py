@@ -11,9 +11,11 @@ from typing import Optional
 import chess
 import chess.pgn
 
+from . import openings, phases
 from .cache import fen_key
 from .engine.analyse import MATED
 from .model import CardSpec, Game, NoteSpec, Score
+from .select import BLUNDER, DUBIOUS, MISTAKE, game_note_key, parse_game_note_key
 
 KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
@@ -21,26 +23,34 @@ NOTE_TAG = "knightly"
 
 GAME_TAG = f"{NOTE_TAG}::game::"
 OPENING_TAG = f"{NOTE_TAG}::by-opening::"
+_GAME_TAG_RE = re.compile(re.escape(GAME_TAG) + r"([a-z]+)-(.+)::(" + "|".join(phases.PHASES) + ")$", re.I)
 _OPENING_TAG_RE = re.compile(re.escape(OPENING_TAG) + r"(white|black)-([a-z0-9-]+)::ply-(\d+)$", re.I)
+SEVERITY = {BLUNDER: "blunder", MISTAKE: "mistake", DUBIOUS: "inaccuracy"}
+RESULT = {1.0: "win", 0.5: "draw", 0.0: "loss"}
 
 
 def note_key_tag(key: str) -> str:
     """Anki tag that finds a note again.
 
-    A game's note: knightly::game::lichess-abcd1234. An opening note (key
-    opening:black:sicilian-defense:10): knightly::by-opening::black-sicilian-defense::ply-010.
+    A game's note for one phase (key lichess:abcd1234:endgame): knightly::game::lichess-abcd1234::endgame.
+    An opening note (key opening:black:sicilian-defense:10): knightly::by-opening::black-sicilian-defense::ply-010.
     """
     if key.startswith("opening:"):
         _, color, slug, ply = key.split(":")
         return f"{OPENING_TAG}{color}-{slug}::ply-{int(ply):03d}"
-    return GAME_TAG + re.sub(r"[^A-Za-z0-9_-]", "-", key.replace(":", "-"))
+    parsed = parse_game_note_key(key)
+    if parsed is None:
+        raise ValueError(f"not a note key: {key}")
+    game_key, phase = parsed
+    return f"{GAME_TAG}{re.sub(r'[^A-Za-z0-9_-]', '-', game_key.replace(':', '-'))}::{phase}"
 
 
 def key_from_tags(tags: list[str]) -> Optional[str]:
-    """The note key that `note_key_tag` made, from a note's tags."""
+    """The note key that `note_key_tag` made, from a note's tags (None for notes from before phases)."""
     for t in tags:
-        if t.lower().startswith(GAME_TAG):
-            return t[len(GAME_TAG):].replace("-", ":", 1)
+        m = _GAME_TAG_RE.match(t)
+        if m:
+            return game_note_key(f"{m[1].lower()}:{m[2]}", m[3].lower())
         m = _OPENING_TAG_RE.match(t)
         if m:
             return f"opening:{m[1].lower()}:{m[2].lower()}:{int(m[3])}"
@@ -144,11 +154,29 @@ def _game_link(game: Game) -> str:
     return f'<a href="{html.escape(game.url)}">{html.escape(game.white)} – {html.escape(game.black)}</a>, {_date(game)}'
 
 
-def _phase_tags(cards: list[CardSpec]) -> list[str]:
-    phases = sorted({c.phase for c in cards})
-    if any(not c.mine for c in cards):
-        phases.append("opponent")  # tag: this note has cards from the opponent's mistakes
-    return [f"{NOTE_TAG}::{p}" for p in phases]
+def card_phase(game: Game, card: CardSpec) -> str:
+    return phases.phase_at(phases.divide(game.moves), card.ply)
+
+
+def _tags(entries: list[tuple[Game, CardSpec]]) -> list[str]:
+    """Tags from the games and cards of a note: each group is the union over its cards."""
+    t: set[str] = set()
+    for g, c in entries:
+        t |= {
+            f"phase::{card_phase(g, c)}",
+            f"site::{g.source}",
+            f"color::{openings.color(g)}",
+            f"result::{RESULT.get(g.user_result(), 'draw')}",
+            "rated" if g.rated else "casual",
+            f"opening::{openings.slug(openings.family(openings.classify(g.moves)[1]))}",
+        }
+        if g.time_class:
+            t.add(f"time::{g.time_class}")
+        if c.played.nag in SEVERITY:
+            t.add(f"severity::{SEVERITY[c.played.nag]}")
+        if not c.mine:
+            t.add("opponent")  # cards from the opponent's mistakes
+    return [f"{NOTE_TAG}::{x}" for x in sorted(t)]
 
 
 def _clozes(ids: dict[str, int], cards: list[CardSpec]) -> str:
@@ -162,14 +190,22 @@ def build(
     cards: list[CardSpec],
     existing_ids: Optional[dict[str, int]] = None,
 ) -> NoteSpec:
-    """The note for `game` with `cards` tagged. Positions already in `existing_ids` keep their number."""
+    """The note for one phase of `game`, with `cards` (all in that phase) tagged.
+
+    Positions already in `existing_ids` keep their number.
+    """
+    found = {card_phase(game, c) for c in cards}
+    if len(found) != 1:
+        raise ValueError(f"{game.key}: a note needs cards from one phase, got {sorted(found)}")
+    phase = found.pop()
     ids, new_cards = _assign_ids(cards, existing_ids)
+    key = game_note_key(game.key, phase)
     return NoteSpec(
-        key=game.key,
+        key=key,
         pgn=_game_pgn(game, scores, cards, ids),
         cards=_clozes(ids, cards),
-        notes=_game_link(game),
-        tags=[NOTE_TAG, note_key_tag(game.key), f"{NOTE_TAG}::{game.source}"] + _phase_tags(cards),
+        notes=" · ".join(p for p in (phase.capitalize(), _game_link(game)) if p),
+        tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, c) for c in cards]),
         card_ids=ids,
         new_cards=new_cards,
     )
@@ -213,15 +249,13 @@ def build_opening(
     parts += [_game_pgn(g, s, [c], ids).strip() for g, s, c in entries]
     pgn = "\n\n".join(parts)
     head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
-    color = key.split(":")[1]
     numbers = sorted(set(ids.values()))
     return NoteSpec(
         key=key,
         pgn=pgn,
         cards=" ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in numbers),
         notes="<br>".join([head] + _links_from_pgn(pgn)),
-        tags=[NOTE_TAG, note_key_tag(key), f"{NOTE_TAG}::{color}"]
-        + sorted({f"{NOTE_TAG}::{g.source}" for g, _, _ in entries}) + _phase_tags(cards),
+        tags=[NOTE_TAG, note_key_tag(key)] + _tags([(g, c) for g, _, c in entries]),
         card_ids=ids,
         new_cards=new_cards,
     )

@@ -37,6 +37,7 @@ from typing import Iterable, Iterator, Optional
 
 import chess
 
+from . import phases
 from .cache import fen_key
 from .config import Config
 from .model import Candidate, CardSpec, Choice, Game, Line, Score
@@ -132,19 +133,6 @@ def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) 
     return moves
 
 
-def phase(board: chess.Board, ply: int) -> str:
-    pieces = sum(
-        len(board.pieces(pt, c)) * v
-        for pt, v in ((chess.KNIGHT, 3), (chess.BISHOP, 3), (chess.ROOK, 5), (chess.QUEEN, 9))
-        for c in (chess.WHITE, chess.BLACK)
-    )
-    if pieces <= 26:  # e.g. a rook and two minors each, or less
-        return "endgame"
-    if ply < 24:
-        return "opening"
-    return "middlegame"
-
-
 def move_losses(game: Game, scores: list[Optional[Score]], cfg: Config) -> Iterator[Candidate]:
     """Every scored move of `game` with its quick-pass loss, in ply order.
 
@@ -152,6 +140,7 @@ def move_losses(game: Game, scores: list[Optional[Score]], cfg: Config) -> Itera
     """
     board = chess.Board()
     user = chess.WHITE if game.user_is_white else chess.BLACK
+    division = phases.divide(game.moves)
     for ply, u in enumerate(game.moves):
         mine = board.turn == user
         if mine or cfg.include_opponent:
@@ -165,7 +154,7 @@ def move_losses(game: Game, scores: list[Optional[Score]], cfg: Config) -> Itera
                     fen_key=fen_key(board.fen()),
                     played=u,
                     loss=before.win_pct(white) - after.win_pct(white),
-                    phase=phase(board, ply),
+                    phase=phases.phase_at(division, ply),
                     mine=mine,
                 )
         board.push_uci(u)
@@ -176,7 +165,7 @@ def find_candidates(
     cfg: Config,
     exclude: set[str] = frozenset(),
 ) -> list[Candidate]:
-    """One note per game: moves that lost at least `cfg.min_loss` points, game by game.
+    """One note per game and phase: moves that lost at least `cfg.min_loss` points, game by game.
 
     Games newest first, each game's moves in order. A position is offered once (from
     the newest game that reached it) and never if it is in `exclude` (already on a card).
@@ -187,7 +176,7 @@ def find_candidates(
         for c in move_losses(game, scores, cfg):
             if c.loss >= cfg.min_loss and c.fen_key not in seen:
                 seen.add(c.fen_key)
-                c.note = game.key
+                c.note = game_note_key(game.key, c.phase)
                 out.append(c)
     return out
 
@@ -197,7 +186,7 @@ def ranked_candidates(
     cfg: Config,
     exclude: set[str] = frozenset(),
 ) -> list[Candidate]:
-    """One note per game, mistakes from all games ranked together (the original ordering).
+    """One note per game and phase, mistakes from all games ranked together (the original ordering).
 
     Moves losing at least `cfg.min_loss` points, one per position, best first by
     score = loss × weight × (1 + 0.5 × (recurrences − 1)), where weight is 1.0 for your
@@ -212,7 +201,7 @@ def ranked_candidates(
             seen_count[c.fen_key] = seen_count.get(c.fen_key, 0) + 1
             if c.loss >= cfg.min_loss and c.fen_key not in exclude:
                 c.score = c.loss * (my_weight if c.mine else 0.8)
-                c.note = game.key
+                c.note = game_note_key(game.key, c.phase)
                 if c.fen_key not in found or c.score > found[c.fen_key].score:
                     found[c.fen_key] = c
     out = []
@@ -222,6 +211,19 @@ def ranked_candidates(
         out.append(c)
     out.sort(key=lambda c: c.score, reverse=True)
     return out
+
+
+def game_note_key(game_key: str, phase: str) -> str:
+    """'lichess:abcd1234' + 'endgame' → 'lichess:abcd1234:endgame'."""
+    return f"{game_key}:{phase}"
+
+
+def parse_game_note_key(key: str) -> Optional[tuple[str, str]]:
+    """(game key, phase) of a game note key, or None for another key."""
+    game_key, _, phase = key.rpartition(":")
+    if phase not in phases.PHASES or ":" not in game_key or key.startswith("opening:"):
+        return None
+    return game_key, phase
 
 
 def opening_note_key(group: Group, ply: int) -> str:
@@ -336,7 +338,6 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         played=played_choice,
         alternatives=choices,
         loss=g_played.loss,
-        phase=phase(board, ply),
         comment=comment,
         mine=not opponent,
     )
