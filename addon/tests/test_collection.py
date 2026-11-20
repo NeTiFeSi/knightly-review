@@ -63,6 +63,34 @@ class CollectionTest(unittest.TestCase):
         media = pathlib.Path(self.col.media.dir()) / "_knightly.js"
         self.assertEqual(media.read_bytes(), b"// v2")
 
+    def test_run_writer_adds_as_it_goes_and_merges_into_one_undo_step(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        w = self.kc.RunWriter(self.col, "Chess::Knightly")
+        w.add(self.spec())
+        self.assertEqual(self.kc.count_notes(self.col), 1)  # already there before the run ends
+        two = self.spec(cards="{{c1::1::1}}\n{{c2::2::1}}", pgn="1. e4 { [%kr 1] } e5 { [%kr 2] } *")
+        w.add(two)  # the same note, updated in place
+        w.add(self.spec(key="lichess:other000:opening"))
+        self.assertEqual(self.kc.count_notes(self.col), 2)
+        w.finish()
+        self.assertTrue(w.clean)
+        self.assertEqual(self.col.undo_status().undo, self.kc.UNDO_NAME)
+        self.col.undo()
+        self.assertEqual(self.kc.count_notes(self.col), 0)
+
+    def test_run_writer_does_not_swallow_other_undo_steps(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        w = self.kc.RunWriter(self.col, "K")
+        w.add(self.spec())
+        other = self.col.new_note(self.col.models.by_name(self.kc.MODEL))
+        other["PGN"] = "x"
+        self.col.add_note(other, self.col.decks.id("K"))  # the user's own change in between
+        w.add(self.spec(key="lichess:other000:opening"))
+        w.finish()
+        self.assertFalse(w.clean)
+        self.col.undo()  # undoes only the last write
+        self.assertEqual(len(self.col.find_notes(f'"note:{self.kc.MODEL}"')), 2)
+
     def test_apply_adds_then_updates(self):
         self.kc.ensure_installed(self.col, self.card_dir)
         self.kc.apply_notes(self.col, [self.spec()], "Chess::Knightly")

@@ -172,11 +172,16 @@ def run_update(
     analyser_factory: Optional[Callable[..., Analyser]] = None,
     gate: Optional[threading.Event] = None,
     precalculate: bool = False,
+    on_note: Optional[Callable[[NoteSpec], None]] = None,
 ) -> UpdateResult:
     """`gate`: analysis waits while it is cleared (live play during review takes priority).
     `precalculate`: no card cap and no cards made: keep deepening and confirming candidates, and save them
     (as every run does) so the next update adds cards right away. `analysis_minutes` still bounds it.
-    `existing` maps note key → PGN of notes already in the collection."""
+    `existing` maps note key → PGN of notes already in the collection.
+    `on_note`: called with a note's whole spec as soon as a card of it is built, so the caller can write cards
+    while the run goes on. A note gets several calls when it gets several cards; each spec replaces the
+    previous one for its key (and is built from `existing`, never from an earlier call). `result.notes` ends
+    with the same final specs, and holds those made so far if the run is cancelled."""
     progress = progress or (lambda *a: None)
     cancel = cancel or threading.Event()
     existing = existing or {}
@@ -243,6 +248,8 @@ def run_update(
 
             # Deep pass, in the order above, until we have enough cards.
             per_note: dict[str, list[tuple[Game, CardSpec]]] = {}
+            specs: dict[str, NoteSpec] = {}  # the latest spec of each note, in the order notes were first made
+            failed: set[str] = set()
             made = 0
             for c in cands:
                 if made >= cfg.max_new_cards:
@@ -253,18 +260,27 @@ def run_update(
                 for u in g.moves[: c.ply]:
                     board.push_uci(u)
                 card = build_card(board, c.ply, c.played, an, cfg, "" if c.mine else _opponent(g), min_loss)
-                if card:
-                    per_note.setdefault(c.note, []).append((g, card))
-                    made += 1
-
-            for key, new in per_note.items():
+                if not card:
+                    continue
+                made += 1
+                key = c.note
+                if key in failed:
+                    continue
+                per_note.setdefault(key, []).append((g, card))
                 if by_opening:
-                    spec = _opening_note(key, new, groups, scored, existing.get(key, ""))
+                    spec = _opening_note(key, per_note[key], groups, scored, existing.get(key, ""))
                 else:
-                    spec = _game_note(key, new, carded.get(key, {}), by_key, scored, an, cfg, result)
-                if spec:
-                    result.notes.append(spec)
-                    result.new_cards += spec.new_cards
+                    spec = _game_note(key, per_note[key], carded.get(key, {}), by_key, scored, an, cfg, result)
+                if not spec:
+                    failed.add(key)
+                    specs.pop(key, None)
+                    continue
+                specs[key] = spec
+                result.notes = list(specs.values())
+                result.new_cards = sum(sp.new_cards for sp in result.notes)
+                if on_note:
+                    on_note(spec)
+
             if by_opening:
                 result.order = opening_order(groups, set(existing) | set(per_note))
             result.stats = dict(an.stats)

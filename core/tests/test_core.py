@@ -657,6 +657,26 @@ class JobsTest(unittest.TestCase):
         c.put_games([scholar_game(end_ts=int(_t.time()) - 60, id="other")], "knightlyme")
         self.assertFalse(run(existing=existing).skipped)
 
+    def test_on_note_gets_each_note_as_its_card_is_built(self):
+        import time as _t
+        c = tmpcache(self)
+        c.put_games([scholar_game(end_ts=int(_t.time()) - 3600)], "knightlyme")
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
+        seen = []
+        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser, on_note=seen.append)
+        self.assertEqual(res.new_cards, 1)
+        self.assertEqual(seen, res.notes)
+        # A cancel after the first note keeps it in the result.
+        c2 = tmpcache(self)
+        c2.put_games([scholar_game(end_ts=int(_t.time()) - 3600)], "knightlyme")
+        ev = threading.Event()
+
+        def stop(spec):
+            ev.set()
+
+        res = run_update(cfg, c2, fetch=False, analyser_factory=FakeAnalyser, on_note=stop, cancel=ev)
+        self.assertEqual(len(res.notes), 1)
+
     def test_precalculate_saves_candidates_for_the_next_update(self):
         import time as _t
         c = tmpcache(self)

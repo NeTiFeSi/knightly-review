@@ -2,8 +2,8 @@
 
 The long part (download + engine analysis) runs in a plain thread with no
 collection access, so reviewing stays responsive and the job can be cancelled
-when the profile closes. Notes are written afterwards on the main thread as one
-undoable CollectionOp.
+when the profile closes. Each note is written on the main thread as soon as its card is
+built (kc.RunWriter); when the run ends, the study order is fixed and the writes become one undo step.
 """
 
 from __future__ import annotations
@@ -125,23 +125,44 @@ class Updater:
             core.analysis_minutes = min(core.analysis_minutes or left_min, max(0.05, left_min))
         self.cancel = threading.Event()
         cancel = self.cancel
+        writer = kc.RunWriter(mw.col, deck)
         self.positions, self._logged = (0, 0, ""), ""
         self.log("── " + {"more": "Next batch of cards", "precalc": "Pre-calculating for later updates"}.get(
             _round, "Update" if manual else "Automatic update") + " ──")
         self._emit("start", 0, 0, "Starting…" + (f" ({'; '.join(changes)})" if changes else ""), force=True)
+
+        def on_note(spec) -> None:
+            """Analysis thread: hand the note to the main thread and wait, so writes stay in order."""
+            done, failure = threading.Event(), []
+
+            def write() -> None:
+                try:
+                    if mw.col is not None and not cancel.is_set():
+                        writer.add(spec)
+                except Exception as e:  # raised again in the analysis thread
+                    failure.append(e)
+                finally:
+                    done.set()
+
+            mw.taskman.run_on_main(write)
+            while not done.wait(0.2):
+                if cancel.is_set():  # the profile is closing and the main thread may be waiting for us
+                    return
+            if failure:
+                raise failure[0]
 
         def work() -> None:
             cache = SqliteCache(settings.CACHE_PATH)
             try:
                 res = run_update(core, cache, existing=existing, progress=self._emit, cancel=cancel,
                                  force=manual and not _round, gate=self.gate, precalculate=_round == "precalc",
-                                 fetch=_round == "")
+                                 fetch=_round == "", on_note=on_note)
                 err = None
             except Exception as e:  # reported on the main thread
                 res, err = None, (e, traceback.format_exc())
             finally:
                 cache.close()
-            mw.taskman.run_on_main(lambda: self._finish(res, err, deck, manual, core.keep_running, _round))
+            mw.taskman.run_on_main(lambda: self._finish(res, err, deck, manual, core.keep_running, _round, writer))
 
         self.thread = threading.Thread(target=work, name="knightly-update", daemon=True)
         self.thread.start()
@@ -187,7 +208,21 @@ class Updater:
                        else "Stopped analysing in the background.", force=True)
 
     def _finish(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str = "off",
-                round_: str = "") -> None:
+                round_: str = "", writer: Optional[kc.RunWriter] = None) -> None:
+        """The run is over: fix the study order, merge what it wrote into one undo step, then report."""
+        order = res.order if res is not None and not res.cancelled else []
+
+        def failed(e: Exception) -> None:
+            self.keeping = False
+            self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
+
+        if writer is None or (not writer.written and not order) or mw.col is None:
+            self._report(res, err, deck, manual, mode, round_)
+            return
+        CollectionOp(parent=mw, op=lambda col: writer.finish(order)).success(
+            lambda _changes: self._report(res, err, deck, manual, mode, round_)).failure(failed).run_in_background()
+
+    def _report(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str, round_: str) -> None:
         if err is not None:
             self.keeping = False
             e, tb = err
@@ -202,24 +237,14 @@ class Updater:
             self.keeping = False
             self._emit("done", 0, 0, "Cancelled. " + summary, force=True)
             return
-        if (not res.notes and not res.order) or mw.col is None:
-            self._emit("done", 1, 1, summary, force=True)
-            if (manual or res.warnings) and not round_:
-                tooltip("Knightly Review: " + summary, period=5000)
-            self._next_round(res, mode, round_)
-            return
-
-        def done(_changes) -> None:
-            hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
-            self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
-            if (res.notes or manual) and not round_:
+        hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
+        self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
+        if not round_:
+            if res.notes or (manual and res.order):
                 tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
-            self._next_round(res, mode, round_)
-
-        CollectionOp(parent=mw, op=lambda col: kc.apply_notes(col, res.notes, deck, res.order)).success(done).failure(
-            lambda e: (setattr(self, "keeping", False),
-                       self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True))
-        ).run_in_background()
+            elif manual or res.warnings:
+                tooltip("Knightly Review: " + summary, period=5000)
+        self._next_round(res, mode, round_)
 
     # scheduling
     def reschedule(self) -> None:
