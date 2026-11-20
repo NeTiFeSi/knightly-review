@@ -75,6 +75,19 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("Chess::Knightly", [d.name for d in self.col.decks.all_names_and_ids()])
         self.assertEqual(self.kc.count_notes(self.col), 1)
 
+    def test_sibling_bury_hint(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.assertIsNone(self.kc.sibling_bury_hint(self.col, "KR", 20, 7))  # deck doesn't exist yet
+        did = self.col.decks.id("KR")
+        conf = self.col.decks.config_dict_for_deck_id(did)
+        conf["new"]["bury"] = False
+        self.col.decks.update_config(conf)
+        self.assertIsNone(self.kc.sibling_bury_hint(self.col, "KR", 20, 7))
+        conf["new"]["bury"] = True
+        self.col.decks.update_config(conf)
+        self.assertIn("20 new cards are in 7 notes", self.kc.sibling_bury_hint(self.col, "KR", 20, 7))
+        self.assertIsNone(self.kc.sibling_bury_hint(self.col, "KR", 7, 7))  # one card per note: nothing hidden
+
     def test_game_note_tags_are_replaced(self):
         self.kc.ensure_installed(self.col, self.card_dir)
         self.kc.apply_notes(self.col, [self.spec(tags=("knightly::result::loss", "knightly::severity::mistake"))], "K")
