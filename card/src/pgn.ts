@@ -207,7 +207,10 @@ export interface ViewOptions {
 
 export function visibleChildren(node: KNode, o: ViewOptions): KNode[] {
   if (o.side === 'front')
-    return node.children.filter((c, i) => (i === 0 && node.mainline) || o.revealed.has(c.id));
+    return node.children.filter(
+      (c, i) =>
+        (i === 0 && node.mainline && node.ply < o.puzzle.position.ply) || o.revealed.has(c.id),
+    );
   // Back: the mainline, plus everything below this card's puzzle position.
   if (node.mainline && node !== o.puzzle.position) return node.children.slice(0, 1);
   return node.children.slice();
