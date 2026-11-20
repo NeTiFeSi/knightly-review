@@ -120,9 +120,9 @@ class Updater:
             self.keeping = core.keep_running in ("precalculate", "unlimited")
         left_min = (self.keep_until - time.monotonic()) / 60
         if _round == "precalc":  # runs for the rest of the time, or until everything is at full depth
-            core.analysis_minutes = max(1.0, left_min) if left_min != math.inf else 0
+            core.analysis_minutes = max(0.05, left_min) if left_min != math.inf else 0
         elif _round and left_min != math.inf:
-            core.analysis_minutes = min(core.analysis_minutes or left_min, max(1.0, left_min))
+            core.analysis_minutes = min(core.analysis_minutes or left_min, max(0.05, left_min))
         self.cancel = threading.Event()
         cancel = self.cancel
         self.positions, self._logged = (0, 0, ""), ""
@@ -149,6 +149,8 @@ class Updater:
 
     def stop(self, wait: float = 0) -> None:
         self.stopped = True
+        if not self.running:  # between two rounds: nothing to cancel, just end the session
+            self._end_keeping()
         self.cancel.set()
         if wait and self.thread is not None:
             self.thread.join(wait)
@@ -165,9 +167,18 @@ class Updater:
             elif not res.skipped and (res.new_cards or not res.finished):
                 again = "more"
         if again and mw.col is not None:
-            QTimer.singleShot(500, lambda: self.start(manual=False, _round=again) or self._end_keeping())
+            QTimer.singleShot(500, lambda: self._start_round(again))
         else:
             self._end_keeping(res)
+
+    def _start_round(self, round_: str) -> None:
+        """The timer's side of `_next_round`: stop, closing the profile or another update may have happened since."""
+        if self.stopped or not self.keeping or mw.col is None:
+            self._end_keeping()
+        elif self.running:  # an update started by hand or the schedule took over; it resets the session
+            self.keeping = False
+        elif not self.start(manual=False, _round=round_):
+            self._end_keeping()
 
     def _end_keeping(self, res: Optional[UpdateResult] = None) -> None:
         if self.keeping:
@@ -201,7 +212,7 @@ class Updater:
         def done(_changes) -> None:
             hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
             self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
-            if res.notes or manual:
+            if (res.notes or manual) and not round_:
                 tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
             self._next_round(res, mode, round_)
 

@@ -643,7 +643,7 @@ class ProgressWindow(QDialog):
             self.bar.setFormat({"done": "Done", "error": "Failed"}.get(stage, ""))
         else:
             self.bar.setRange(0, 0)  # busy
-        self.cancel_btn.setEnabled(updater.running and stage not in ("done", "error"))
+        self.cancel_btn.setEnabled(updater.keeping or (updater.running and stage not in ("done", "error")))
         self._update_positions(stage)
         self._update_log()
 

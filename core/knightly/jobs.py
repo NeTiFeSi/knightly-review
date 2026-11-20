@@ -222,9 +222,11 @@ def run_update(
                                  opponents={g.key: _opponent(g) for g in games},
                                  want=deepen.UNBOUNDED if precalculate else cfg.max_new_cards,
                                  rank=_card_rank(cfg, by_key, groups), progress=progress, confirmed=known)
-            dp.run()
+            try:
+                dp.run()
+            finally:  # a cancelled run keeps what it confirmed
+                cache.set(PRECALC_KEY, {"signature": sig, "confirmed": sorted(dp.confirmed | set(known))})
             result.analysed_positions = dp.analysed
-            cache.set(PRECALC_KEY, {"signature": sig, "confirmed": sorted(dp.confirmed | set(known))})
             if precalculate:
                 result.stats = dict(an.stats)
                 result.finished = dp.finished
