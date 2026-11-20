@@ -19,6 +19,7 @@ import chess.pgn
 from . import cook
 
 OTHER = "other"
+MATE_CP = 10000  # select.build_card gives a forced mate as ±this; its line is followed to the mate
 SOLUTION_PLIES = 7  # the engine line is cut to this many plies (the solver's moves come first and last)
 
 # Lichess tags that say how a puzzle looks or what the position is, not what the tactic is.
@@ -59,7 +60,7 @@ def _puzzle(board: chess.Board, line: list[str], cp: int) -> Optional[cook.Puzzl
             break
         node = node.add_variation(move)
         b.push(move)
-        if b.is_checkmate() or i + 1 >= SOLUTION_PLIES:
+        if b.is_checkmate() or (i + 1 >= SOLUTION_PLIES and abs(cp) < MATE_CP):
             break
     end = game.end()
     if len(list(game.mainline())) % 2 == 1 and end.parent is not None:  # ends on the opponent's move: drop it
@@ -86,5 +87,6 @@ def detect(board: chess.Board, line: list[str], cp: int = 0, sacrifice: bool = F
     if sacrifice and "sacrifice" not in tags:
         tags.append("sacrifice")
     rank = {t: i for i, t in enumerate(PRIORITY)}
-    tags.sort(key=lambda t: (rank.get(t, len(rank)), t))
+    unlisted = rank["sacrifice"] - 0.5  # a tactic cook knows but PRIORITY doesn't: before the general tags
+    tags.sort(key=lambda t: (rank.get(t, unlisted), t))
     return [slug(t) for t in tags] or [OTHER]

@@ -310,14 +310,15 @@ def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[st
 
 
 def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
-               opponent: str = "", min_loss: Optional[float] = None) -> Optional[CardSpec]:
+               opponent: str = "", min_loss: Optional[float] = None, tag_motifs: bool = True) -> Optional[CardSpec]:
     """Deep-analyse the puzzle position and grade its candidate moves.
 
     None when the position isn't a fair puzzle: only one legal move, or the deep
     look says the played move wasn't a real mistake (it lost less than half of
     `min_loss`, default `cfg.min_loss`, or it counts as a correct answer). `opponent`
     is the name of the player who made the move when it wasn't the user (an
-    opponent-mistake card).
+    opponent-mistake card). `tag_motifs=False` skips the motif tagging (when only
+    asking whether the position makes a card).
     """
     if board.legal_moves.count() < 2:
         return None
@@ -344,10 +345,10 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         return None
     best_line = by_move[choices[0].move]
     sc = best_line.score
-    cp = 10000 * (1 if sc.mate > 0 else -1) if sc.mate is not None else (sc.cp or 0)
+    cp = motifs_mod.MATE_CP * (1 if sc.mate > 0 else -1) if sc.mate is not None else (sc.cp or 0)
     if board.turn == chess.BLACK:
         cp = -cp
-    found = motifs_mod.detect(board, best_line.moves, cp, choices[0].nag in (BRILLIANT, INTERESTING))
+    found = [] if not tag_motifs else motifs_mod.detect(board, best_line.moves, cp, choices[0].nag in (BRILLIANT, INTERESTING))
     best_san = board.san(chess.Move.from_uci(choices[0].move))
     played_san = board.san(chess.Move.from_uci(played))
     if opponent:
