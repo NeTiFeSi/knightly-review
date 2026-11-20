@@ -147,12 +147,12 @@ export class App {
     };
     if (card.side === 'front') {
       clearResult(this.key);
-      this.run = new PuzzleRun(puzzle.position, cfg.acceptNags, puzzle.gameMove.hint);
+      this.run = new PuzzleRun(puzzle.position, cfg.acceptNags, puzzle.gameMove.hint, undefined, cfg.strictMate);
       if (cfg.live && extras.engine) {
         const run = this.run;
         extras.engine.then(engine => {
           if (engine && run.status === 'playing' && !run.live)
-            run.enableLive({ engine, options: { goodMove: cfg.goodMove, maxMoves: cfg.liveMaxMoves } });
+            run.enableLive({ engine, options: { goodMove: cfg.goodMove, maxMoves: cfg.liveMaxMoves, strictMate: cfg.strictMate } });
         });
       }
     } else {
@@ -656,10 +656,10 @@ export class App {
       });
     } else if (run && run.failure && node === run.failure.at) {
       if (run.failure.best) push(this.moveArrow(parseUci(run.failure.best), 'green'));
-      else acceptedMoves(node, node === run.start, this.cfg.acceptNags).forEach(n => push(this.arrow(n, 'green', glyph(n))));
+      else acceptedMoves(node, node === run.start, this.cfg.acceptNags, this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.failMove) push(this.moveArrow(this.failMove, 'red'));
     } else if (!run && node === this.puzzle.position) {
-      const accepted = acceptedMoves(node, true, this.cfg.acceptNags);
+      const accepted = acceptedMoves(node, true, this.cfg.acceptNags, this.cfg.strictMate);
       accepted.forEach(n => push(this.arrow(n, 'green', glyph(n))));
       push(this.arrow(this.puzzle.gameMove, 'red', glyph(this.puzzle.gameMove)));
       const mine = this.userFirstMove();
@@ -667,7 +667,7 @@ export class App {
         push(this.moveArrow(mine.move, 'blue'));
     } else if (!run && this.result && this.result.failAt === node.id && this.result.failAt !== this.puzzle.position.id) {
       if (this.result.failBest) push(this.moveArrow(parseUci(this.result.failBest), 'green'));
-      else acceptedMoves(node, false, this.cfg.acceptNags).forEach(n => push(this.arrow(n, 'green', glyph(n))));
+      else acceptedMoves(node, false, this.cfg.acceptNags, this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.result.failUci) push(this.moveArrow(parseUci(this.result.failUci), 'red'));
     }
     if (!shapes.length && !shapesHidden(node, this.view))
@@ -819,7 +819,7 @@ export class App {
     at: KNode,
     first: boolean,
   ): void {
-    const acc = acceptedMoves(at, first, this.cfg.acceptNags);
+    const acc = acceptedMoves(at, first, this.cfg.acceptNags, this.cfg.strictMate);
     if (!acc.length) return;
     const parts: (string | Node)[] = ['Best: '];
     acc.forEach((n, i) => {

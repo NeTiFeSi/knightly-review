@@ -53,6 +53,10 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
   | `?` ($2) | loses 10–20 % |
   | `??` ($4) | loses more than 20 % |
 
+  In a **forced mate** (the best move mates by force), a good move is one that keeps a forced mate,
+  however long: a move that gives the mate up is `?!` at best, even when the engine still calls the
+  position won.
+
   A *sacrifice* ends 4 plies down the engine's line (carried on through captures and checks) at least
   2 points of material (1/3/3/5/9) below the alternative line that keeps the most material.
 - **Continuations:** the user plays every own move of the chosen line, and the opponent's replies are
@@ -65,7 +69,9 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
 - **Playing on (live engine):** the PGN holds only the candidate moves and the reply. Where its line
   ends, a live engine can take over (setting `live`, off by default: turn it on in ⚙ or in `KR_CONFIG`). You keep playing until mate, a draw,
   a quiet position (two or more good moves, no check, no capture just made) or `liveMaxMoves`. Each of
-  your moves must be within `goodMove` win-% of the engine's best (its WDL expected score); the
+  your moves must be within `goodMove` win-% of the engine's best (its WDL expected score); when the
+  best move mates by force, your move must keep a forced mate instead (as fast as the best with
+  `strictMate`), and the position is never "quiet" until the mate is played out. The
   opponent plays the engine's best reply. Live moves are shown in italics, and on the back too.
   - Desktop with the add-on: your Stockfish (and Lc0, if on), same rule as the analysis. Background
     analysis pauses while you review.
@@ -105,6 +111,7 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a �
 | `afterAnswer` | `'flip'` | `'flip'` shows the back after `flipDelay` ms. `'stay'` stays on the front. `'grade'` flips, then answers automatically after `gradeDelay` ms with `gradeSolved` (3 Good), `gradeHinted` (2 Hard) or `gradeFailed` (1 Again). Any tap or key cancels the automatic answer. |
 | `hints` | `true` | Show the Hint button. |
 | `acceptNags` | `[1, 3, 5, 8]` | NAGs counted as correct. |
+| `strictMate` | `false` | Forced mates: a move must keep a forced mate whatever its NAG (when a candidate's `[%eval #N]` shows one for the side to move); with `true`, only the fastest mate counts. Live play too. |
 | `autoReplyDelay` | `400` | ms before the opponent's reply. |
 | `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
 | `live` | `false` | Keep playing past the PGN with a live engine. |

@@ -85,14 +85,42 @@ export interface LiveSetup {
 }
 
 /**
+ * Forced mate for `color` after the move to `n`: in how many of `color`'s moves,
+ * counted from the position before `n` (so a mating move is 1). Undefined when
+ * `n` doesn't keep a forced mate for `color` (by its `[%eval #N]`, White's view).
+ */
+export function mateFor(n: KNode, color: Color): number | undefined {
+  if (n.check && n.turn !== color && positionOf(n).isCheckmate()) return 1;
+  if (!n.eval || !('mate' in n.eval) || !n.eval.mate) return undefined;
+  const m = n.eval.mate;
+  return (color === 'white' ? m > 0 : m < 0) ? Math.abs(m) : undefined;
+}
+
+/**
  * Moves accepted at `position`. The first move of the puzzle is graded only by
  * its NAG; at later user turns the line's own next move is also accepted
  * unless it carries a rejecting NAG.
+ *
+ * When a move here mates by force, only moves that keep a forced mate count,
+ * whatever their NAG (a won position without the mate isn't the answer). With
+ * `strictMate`, only the fastest mate does.
  */
-export function acceptedMoves(position: KNode, first: boolean, accept: readonly number[]): KNode[] {
-  return position.children.filter(
+export function acceptedMoves(position: KNode, first: boolean, accept: readonly number[], strictMate = false): KNode[] {
+  const byNag = position.children.filter(
     (c, i) => isAccepted(c.nags, accept) || (!first && i === 0 && !isRejected(c.nags, accept)),
   );
+  const me = position.turn;
+  let fastest: number | undefined;
+  position.children.forEach(c => {
+    const m = mateFor(c, me);
+    if (m !== undefined && (fastest === undefined || m < fastest)) fastest = m;
+  });
+  if (fastest === undefined) return byNag;
+  const mates = byNag.filter(c => {
+    const m = mateFor(c, me);
+    return m !== undefined && (!strictMate || m === fastest);
+  });
+  return mates.length ? mates : byNag; // never leave a puzzle without an answer
 }
 
 export type Hint = { kind: 'text'; text: string } | { kind: 'piece'; squares: Square[] };
@@ -127,6 +155,8 @@ export class PuzzleRun {
     readonly hintText?: string,
     /** Engine to continue past the PGN with; without it the puzzle ends where the PGN does. */
     public liveSetup?: LiveSetup,
+    /** In a forced mate, accept only the fastest mate (any forced mate otherwise). */
+    readonly strictMate = false,
   ) {
     this.cur = start;
     this.userColor = start.turn;
@@ -143,7 +173,7 @@ export class PuzzleRun {
 
   accepted(): KNode[] {
     if (this.live) return [];
-    return acceptedMoves(this.cur, this.isFirst, this.accept);
+    return acceptedMoves(this.cur, this.isFirst, this.accept, this.strictMate);
   }
 
   /** Hints available at the current position: text first (puzzle start only), then the piece. */

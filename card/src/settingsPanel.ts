@@ -62,6 +62,12 @@ const GROUPS: Group[] = [
     title: 'Answers',
     fields: [
       { key: 'acceptNags', label: 'Moves that count as correct', kind: 'nags' },
+      {
+        key: 'strictMate',
+        label: 'Forced mates: only the fastest mate counts',
+        kind: 'toggle',
+        help: 'When there is a forced mate, a move must keep a forced mate either way; with this on, it must also be as fast as the best one.',
+      },
       { key: 'hints', label: 'Show the Hint button', kind: 'toggle' },
       { key: 'autoReplyDelay', label: "Opponent's reply delay", kind: 'range', min: 0, max: 2000, step: 100 },
     ],

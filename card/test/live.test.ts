@@ -183,3 +183,30 @@ describe('built-in engine output', () => {
     expect(toWhite(m.line, true)).toBe(m.line);
   });
 });
+
+describe('LiveLine in a forced mate', () => {
+  // Scripted: from START, "e2e4" mates in 3, "d2d4" in 5, "g1f3" wins without a mate (all WDL 100 %).
+  const mate = (uci: string, m: number | undefined): ELine => ({ uci, pv: [uci], wdl: [1000, 0, 0], mate: m });
+  const script = (): Record<string, ELine[]> => ({
+    [k(START)]: [mate('e2e4', 3), mate('d2d4', 5)],
+    [k(START) + ' | g1f3']: [mate('g1f3', undefined)],
+    [k('rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1')]: [line('d7d5', [1000, 0, 0])],
+    [k('rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1')]: [line('e7e5', [1000, 0, 0])],
+    [k(AFTER_E4_E5)]: [mate('d1h5', 2)],
+    [k('rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2')]: [mate('c1f4', 4), mate('g1f3', 4)],
+  });
+
+  it('is never quiet, and needs a move that keeps the mate', async () => {
+    const live = new LiveLine(new ScriptedEngine(script()), START, 'white', OPTS, false);
+    expect(await live.endHere()).toBeUndefined(); // two mating moves, but no quiet stop
+    expect(await live.play('g1f3')).toMatchObject({ kind: 'failed', bestSan: 'e4' });
+  });
+
+  it('accepts a slower mate unless strict', async () => {
+    const loose = new LiveLine(new ScriptedEngine(script()), START, 'white', OPTS, false);
+    expect(await loose.play('d2d4')).toMatchObject({ kind: 'continue', reply: 'd7d5' });
+    const strict = new LiveLine(new ScriptedEngine(script()), START, 'white', { ...OPTS, strictMate: true }, false);
+    expect(await strict.play('d2d4')).toMatchObject({ kind: 'failed' });
+    expect((await new LiveLine(new ScriptedEngine(script()), START, 'white', { ...OPTS, strictMate: true }, false).play('e2e4')).kind).not.toBe('failed');
+  });
+});
