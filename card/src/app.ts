@@ -302,7 +302,7 @@ export class App {
     if (this.card.side === 'back') {
       root.addEventListener('mousedown', () => this.cancelGrade(), true);
       root.addEventListener('touchstart', () => this.cancelGrade(), { capture: true, passive: true });
-    }
+    }    this.drawClock(); // show the full time during the intro too
   }
 
   private buildHeader(): HTMLElement {
@@ -485,6 +485,11 @@ export class App {
     return this.elapsedNow();
   }
 
+  /** Thinking time worth carrying into a re-mounted attempt: none once this one is over. */
+  carriedElapsedMs(): number | undefined {
+    return this.run && this.run.status === 'playing' ? this.elapsedNow() : undefined;
+  }
+
   private skipIntro(): void {
     if (!this.replaying) return;
     this.clearTimers();
@@ -526,7 +531,7 @@ export class App {
     const { ease, slow } = pickEase(r, this.cfg);
     this.gradePending = {
       ease,
-      label: EASE_LABELS[ease] + (slow ? ': slower than ' + this.cfg.timeLimit + ' s' : ''),
+      label: EASE_LABELS[ease] + (slow ? ': slower than ' + (r.limitMs !== undefined ? r.limitMs / 1000 : this.cfg.timeLimit) + ' s' : ''),
     };
     this.renderStatus();
     this.later(() => {
@@ -722,6 +727,8 @@ export class App {
     const run = this.run;
     if (!run || run.status === 'playing') return;
     this.syncClock(); // stops the clock
+    this.stopClockTimers();
+    this.drawClock();
     const f = run.failure;
     const timed = this.timed && this.clockArmed;
     const elapsedMs = timed ? Math.round(this.elapsed) : undefined;
@@ -743,6 +750,7 @@ export class App {
       liveEnd: run.liveEnd,
       hints: run.hintsUsed,
       elapsedMs,
+      limitMs: timed ? this.cfg.timeLimit * 1000 : undefined,
       timedOut: timed ? (f && f.reason === 'timeout') || elapsedMs! > this.cfg.timeLimit * 1000 : undefined,
     });
   }
@@ -958,7 +966,7 @@ export class App {
       if (end && r.status === 'solved') line('kr-status-sub', end);
       if (r.hints) line('kr-status-sub', 'Used ' + hintCount(r.hints) + '.');
       if (r.elapsedMs !== undefined && r.reason !== 'timeout') {
-        const limit = this.cfg.timeLimit;
+        const limit = r.limitMs !== undefined ? r.limitMs / 1000 : this.cfg.timeLimit;
         const took = secs(r.elapsedMs);
         line(
           'kr-status-sub',

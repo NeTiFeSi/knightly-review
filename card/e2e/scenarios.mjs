@@ -294,6 +294,25 @@ export const scenarios = [
     },
   },
   {
+    name: 'timed-settings-after-timeout',
+    about: 'Timed: after the time ran out, changing a ⚙ setting starts the puzzle again with a fresh clock, not the spent one',
+    async run(t, ctx) {
+      const timed = { ...TIMED, timeLimit: 5, timeAffects: 'fail' };
+      const page = await fresh(t, ctx, timed);
+      await card.waitStatus(page, /Time ran out/, 15000);
+      await card.openSettings(page);
+      await card.setSetting(page, 'showEval', false); // any change re-mounts the card on close
+      await card.closeSettings(page);
+      await card.waitMounted(page, 'front');
+      await wait(800);
+      const s = await card.read(page);
+      expect(!/Time ran out/.test(s.status), 'the new attempt failed at once: ' + s.status);
+      const c = await clockState(page);
+      expect(c && !c.over && parseInt(c.text) >= 3, 'the new attempt did not get a fresh clock: ' + JSON.stringify(c));
+      await ctx.shot('fresh-attempt');
+    },
+  },
+  {
     name: 'timed-background',
     targets: ['android'],
     about: 'Timed: leaving the app (Home) pauses the clock; coming back does not time out the puzzle',

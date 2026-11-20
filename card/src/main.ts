@@ -70,7 +70,7 @@ export function mount(opts?: { resumed?: boolean }): void {
     panel = undefined;
     if (p.el.parentNode) p.el.parentNode.removeChild(p.el);
   }
-  const carried = opts && opts.resumed && current ? current.elapsedMs() : undefined;
+  const carried = opts && opts.resumed && current ? current.carriedElapsedMs() : undefined;
   if (current) {
     try {
       current.destroy();

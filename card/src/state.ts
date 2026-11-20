@@ -27,6 +27,8 @@ export interface StoredResult {
   hints?: number;
   /** Timed puzzles: your thinking time in ms, and whether it went over the limit. */
   elapsedMs?: number;
+  /** The time limit (ms) in force when the result was stored. */
+  limitMs?: number;
   timedOut?: boolean;
   /** Set once the card was graded automatically, so it is not graded twice. */
   graded?: boolean;
