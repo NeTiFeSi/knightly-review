@@ -107,6 +107,10 @@ There are two places for settings. **Tools → Knightly Review → Settings…**
 | Update when Anki starts / every | on / 6 h | Automatic updates while Anki is open. |
 | Good move: within | 2 % | A move this close to the best (in win rate) counts as a correct answer. |
 
+### Study decks
+
+After each update the add-on creates filtered decks under the main deck (`Knightly Review::Severity - Blunders`, `Phase - Endgame`, `Mate only`, `Piece - Knight`, `Random mix`, and one per motif, opening and time control). They start empty: open one and press **Rebuild** to study those cards, **Empty** to give them back. Turn this off with the *Study decks* checkbox in Settings, or `study_decks` in the config; **Tools → Knightly Review → Create study decks** makes them by hand.
+
 Not in the window, but in the add-on's config (**Tools → Add-ons → Knightly Review → Config**): `time_classes` (which time controls to fetch), `rated_only`, and `min_loss` (default 10 %: in the per-game modes, a move you played must lose at least this much to become a card). See [addon/knightly_review/config.md](addon/knightly_review/config.md) for every key.
 
 **Cards** (how they are grouped and ordered):
@@ -147,6 +151,7 @@ Every note is tagged so you can search the browser or build filtered decks, for 
 | `knightly::opening::<family>` | the opening, e.g. `sicilian-defense` |
 | `knightly::severity::blunder` / `mistake` / `inaccuracy` | the grade of the move you played: `??`, `?` or `?!` |
 | `knightly::motif::<motif>` | a tactical motif of the best move, e.g. `fork`, `pin`, `back-rank-mate`, `mate-in-2` |
+| `knightly::piece::<piece>` | the piece that plays the best move: `pawn`, `knight`, `bishop`, `rook`, `queen`, `king` |
 | `knightly::opponent` | the card comes from an opponent's mistake |
 
 Each note also has one **key tag** that lets the next update find it again: `knightly::game::<site>-<id>::<phase>`, `knightly::by-opening::<colour>-<opening>::ply-<n>` or `knightly::by-motif::<motif>::n-<number>`. Leave these alone, or the next update makes the note again. A note with several cards or games has every tag that any of them has.

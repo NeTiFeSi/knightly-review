@@ -27,5 +27,8 @@
   "include_opponent": false,
   "min_loss": 10.0,
   "good_move": 2.0,
+  "study_decks": true,
+  "study_decks_limit": 100,
+  "study_decks_min_cards": 5,
   "setup_done": false
 }

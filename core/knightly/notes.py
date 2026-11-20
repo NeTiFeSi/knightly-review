@@ -169,6 +169,18 @@ def card_phase(game: Game, card: CardSpec) -> str:
     return phases.phase_at(phases.divide(game.moves), card.ply)
 
 
+def _piece(c: CardSpec) -> Optional[str]:
+    """The piece that plays the best move, e.g. 'knight' (None if the card has no alternative or the FEN is odd)."""
+    if not c.alternatives:
+        return None
+    try:
+        board = chess.Board(c.fen_key)
+        piece = board.piece_at(chess.Move.from_uci(c.alternatives[0].move).from_square)
+    except ValueError:
+        return None
+    return chess.piece_name(piece.piece_type) if piece else None
+
+
 def _tags(entries: list[tuple[Game, CardSpec]]) -> list[str]:
     """Tags from the games and cards of a note: each group is the union over its cards."""
     t: set[str] = set()
@@ -186,6 +198,8 @@ def _tags(entries: list[tuple[Game, CardSpec]]) -> list[str]:
         if c.played.nag in SEVERITY:
             t.add(f"severity::{SEVERITY[c.played.nag]}")
         t |= {f"motif::{m}" for m in c.motifs}
+        if piece := _piece(c):
+            t.add(f"piece::{piece}")
         if not c.mine:
             t.add("opponent")  # cards from the opponent's mistakes
     return [f"{NOTE_TAG}::{x}" for x in sorted(t)]

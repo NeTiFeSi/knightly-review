@@ -15,6 +15,7 @@ import traceback
 from collections import deque
 from typing import Callable, Optional
 
+from anki.collection import OpChanges
 from aqt import gui_hooks, mw
 from aqt.operations import CollectionOp
 from aqt.qt import QTimer
@@ -22,6 +23,7 @@ from aqt.utils import showWarning, tooltip
 
 from . import collection as kc
 from . import settings
+from . import study_decks
 from .vendor.knightly.cache import SqliteCache
 from .vendor.knightly.jobs import UpdateResult, run_update
 
@@ -216,10 +218,21 @@ class Updater:
             self.keeping = False
             self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
 
-        if writer is None or (not writer.written and not order) or mw.col is None:
+        cfg = settings.load()
+        sync = bool(cfg.get("study_decks", True)) and mw.col is not None
+
+        def work(col):
+            changes = writer.finish(order) if writer is not None and (writer.written or order) else OpChanges()
+            if sync:
+                if study_decks.sync(col, deck, int(cfg.get("study_decks_limit") or 100),
+                                    int(cfg.get("study_decks_min_cards") or 5)):
+                    changes.deck = True  # the deck list needs a refresh
+            return changes
+
+        if mw.col is None or (not sync and (writer is None or (not writer.written and not order))):
             self._report(res, err, deck, manual, mode, round_)
             return
-        CollectionOp(parent=mw, op=lambda col: writer.finish(order)).success(
+        CollectionOp(parent=mw, op=work).success(
             lambda _changes: self._report(res, err, deck, manual, mode, round_)).failure(failed).run_in_background()
 
     def _report(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str, round_: str) -> None:

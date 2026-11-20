@@ -402,6 +402,11 @@ class SettingsDialog(QDialog):
         self.opponent = QCheckBox("Also make cards from my opponents' mistakes (played from their side)")
         self.opponent.setChecked(bool(self.cfg.get("include_opponent", False)))
         wf.addRow("", self.opponent)
+        self.study = QCheckBox("Study decks under the deck (by severity, phase, motif, opening…)")
+        self.study.setToolTip("Filtered decks named Knightly Review::…, created empty after each update. "
+                              "Open one and press Rebuild to study the cards in that order.")
+        self.study.setChecked(bool(self.cfg.get("study_decks", True)))
+        wf.addRow("", self.study)
         self.on_start = QCheckBox("Update when Anki starts")
         self.on_start.setChecked(bool(self.cfg.get("update_on_startup", True)))
         wf.addRow("", self.on_start)
@@ -551,6 +556,7 @@ class SettingsDialog(QDialog):
             include_opponent=self.opponent.isChecked(),
             note_grouping=self.grouping.currentData() or "game",
             opening_min_loss=round(self.opening_loss.value(), 2),
+            study_decks=self.study.isChecked(),
             update_on_startup=self.on_start.isChecked(),
             update_every_hours=self.every.value(),
             threads=self.threads.value(),
@@ -698,9 +704,22 @@ def open_settings(first_run: bool = False) -> None:
     SettingsDialog(mw, first_run=first_run).exec()
 
 
+def create_study_decks() -> None:
+    from aqt.operations import QueryOp
+    from . import study_decks
+
+    cfg = settings.load()
+    QueryOp(parent=mw, op=lambda col: study_decks.sync(col, cfg.get("deck") or "", int(cfg.get("study_decks_limit") or 100),
+                                                       int(cfg.get("study_decks_min_cards") or 5)),
+            success=lambda made: (mw.deckBrowser.refresh(),
+                                  tooltip(f"Created {len(made)} study deck{'s' if len(made) != 1 else ''}." if made
+                                          else "Study decks are up to date."))).run_in_background()
+
+
 def setup_menu() -> None:
     menu = mw.form.menuTools.addMenu("Knightly Review")
-    for label, fn in (("Update now", start_update), ("Show update progress", show_progress), ("Settings…", open_settings)):
+    for label, fn in (("Update now", start_update), ("Show update progress", show_progress),
+                      ("Create study decks", create_study_decks), ("Settings…", open_settings)):
         a = menu.addAction(label)
         a.triggered.connect(lambda _=False, f=fn: f())
     mw.addonManager.setConfigAction(settings.ADDON, open_settings)
