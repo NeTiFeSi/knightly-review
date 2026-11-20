@@ -5,7 +5,7 @@ export interface StoredResult {
   status: 'solved' | 'failed';
   /** Node ids of the user's accepted moves. */
   played: string[];
-  reason?: 'rejected' | 'unknown' | 'gaveup' | 'live';
+  reason?: 'rejected' | 'unknown' | 'gaveup' | 'live' | 'timeout';
   /** Position id where the attempt failed. */
   failAt?: string;
   failSan?: string;
@@ -25,6 +25,11 @@ export interface StoredResult {
   failMate?: number;
   /** Hints revealed during the attempt. */
   hints?: number;
+  /** Timed puzzles: your thinking time in ms, and whether it went over the limit. */
+  elapsedMs?: number;
+  /** The time limit (ms) in force when the result was stored. */
+  limitMs?: number;
+  timedOut?: boolean;
   /** Set once the card was graded automatically, so it is not graded twice. */
   graded?: boolean;
 }

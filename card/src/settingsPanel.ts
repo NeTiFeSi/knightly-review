@@ -86,6 +86,26 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: 'Timed puzzles',
+    fields: [
+      { key: 'timed', label: 'Time limit on the puzzle', kind: 'toggle', help: 'The clock runs while you think, not during the opponent’s reply. The back shows the time taken.' },
+      { key: 'timeLimit', label: 'Time to solve', kind: 'range', min: 5, max: 600, step: 5, format: v => v + ' s', when: c => c.timed },
+      {
+        key: 'timeAffects',
+        label: 'When time is up',
+        kind: 'select',
+        options: [
+          ['nothing', 'Just show the time'],
+          ['fail', 'Fail the puzzle'],
+          ['grade', 'Grade a slow solve lower'],
+        ],
+        when: c => c.timed,
+      },
+      { key: 'gradeSlow', label: 'Grade when solved too slowly', kind: 'select', options: EASES, when: c => c.timed && c.timeAffects === 'grade' && c.afterAnswer === 'grade', help: 'Needs “grade automatically” above; otherwise the back only says it was slow.' },
+      { key: 'showClock', label: 'Show the clock', kind: 'toggle', help: 'Off: the time shows only on the back.', when: c => c.timed },
+    ],
+  },
+  {
     title: 'Evaluation',
     fields: [
       { key: 'showEval', label: 'Show the engine evaluation', kind: 'toggle' },

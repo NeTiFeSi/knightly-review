@@ -61,6 +61,27 @@ function clampEase(n: number): Ease {
   return Math.max(1, Math.min(4, Math.round(n))) as Ease;
 }
 
+/**
+ * The ease for an automatic grade. A solve over the time limit (timeAffects 'grade')
+ * never grades better than gradeSlow, nor than the hint/solved ease. `slow`: the time
+ * lowered the grade.
+ */
+export function pickEase(r: Pick<StoredResult, 'status' | 'hints' | 'timedOut'>, cfg: Config): { ease: Ease; slow: boolean } {
+  if (r.status === 'failed') return { ease: clampEase(cfg.gradeFailed), slow: false };
+  const base = clampEase(r.hints ? cfg.gradeHinted : cfg.gradeSolved);
+  if (cfg.timed && cfg.timeAffects === 'grade' && r.timedOut) {
+    const slow = clampEase(cfg.gradeSlow);
+    if (slow < base) return { ease: slow, slow: true };
+  }
+  return { ease: base, slow: false };
+}
+
+/** 18400 → "18 s"; under 10 s one decimal. */
+function secs(ms: number): string {
+  const s = ms / 1000;
+  return (s < 10 ? s.toFixed(1).replace(/\.0$/, '') : String(Math.round(s))) + ' s';
+}
+
 export function renderError(root: HTMLElement, msg: string): void {
   root.innerHTML = '';
   root.appendChild(h('div', 'kr-error', 'Knightly Review: ' + msg));
@@ -73,6 +94,8 @@ export interface AppExtras {
   engine?: Promise<LiveEngine | undefined>;
   /** Re-mounted after the settings dialog closed: don't start an automatic grade again. */
   resumed: boolean;
+  /** Thinking time (ms) already spent before a re-mount, so the settings dialog can't reset the clock. */
+  elapsed?: number;
   openSettings: () => void;
 }
 
@@ -98,6 +121,16 @@ export class App {
   /** Back: show every candidate move at the puzzle position, not only the accepted ones. */
   private showAllCandidates = false;
   private timers: number[] = [];
+  /** Timed puzzles (front): thinking time so far, and when the clock last started (undefined while stopped). */
+  private elapsed = 0;
+  private runningSince?: number;
+  /** The intro is over, so the clock may run. */
+  private clockArmed = false;
+  /** The settings dialog is open. */
+  private paused = false;
+  private clockTick?: number;
+  private timeoutTimer?: number;
+  private readonly onVisibility = () => this.syncClock();
   private board!: Board;
   private els!: {
     evalFill: HTMLElement;
@@ -110,6 +143,9 @@ export class App {
     hintBtn?: HTMLButtonElement;
     prevBtn: HTMLButtonElement;
     nextBtn: HTMLButtonElement;
+    clock?: HTMLElement;
+    clockText?: HTMLElement;
+    clockBar?: HTMLElement;
   };
 
   static create(root: HTMLElement, card: CardRef, cfg: Config, extras: AppExtras): App | undefined {
@@ -135,6 +171,7 @@ export class App {
     puzzle: PuzzleRef,
   ) {
     this.games = games;
+    this.elapsed = extras.elapsed || 0;
     this.puzzle = puzzle;
     this.key = cardKey(card.pgn, card.n);
     this.view = {
@@ -166,6 +203,8 @@ export class App {
 
   destroy(): void {
     this.clearTimers();
+    this.stopClockTimers();
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.board.destroy();
   }
 
@@ -205,6 +244,20 @@ export class App {
     wrap.appendChild(boardEl);
     row.appendChild(evalBar);
     row.appendChild(wrap);
+    let clock: HTMLElement | undefined;
+    let clockText: HTMLElement | undefined;
+    let clockBar: HTMLElement | undefined;
+    if (this.run && this.cfg.timed && this.cfg.showClock) {
+      clock = h('div', 'kr-clock');
+      clock.setAttribute('aria-hidden', 'true');
+      clockText = h('div', 'kr-clock-text');
+      clockBar = h('div', 'kr-clock-bar');
+      const track = h('div', 'kr-clock-track');
+      track.appendChild(clockBar);
+      clock.appendChild(clockText);
+      clock.appendChild(track);
+      col.appendChild(clock);
+    }
     col.appendChild(row);
 
     const controls = h('div', 'kr-controls');
@@ -240,7 +293,7 @@ export class App {
     main.appendChild(moves);
     root.appendChild(main);
 
-    this.els = { evalFill, evalText, evalBar, moves, status, backBtn, giveUpBtn, hintBtn, prevBtn, nextBtn };
+    this.els = { evalFill, evalText, evalBar, moves, status, backBtn, giveUpBtn, hintBtn, prevBtn, nextBtn, clock, clockText, clockBar };
     this.board = new Board(boardEl, this.puzzle.position.turn, this.introStart().fen, m => this.onUserMove(m));
     // Tapping the board (or any control) during the replay skips it.
     boardEl.addEventListener('mousedown', () => this.skipIntro(), true);
@@ -249,7 +302,7 @@ export class App {
     if (this.card.side === 'back') {
       root.addEventListener('mousedown', () => this.cancelGrade(), true);
       root.addEventListener('touchstart', () => this.cancelGrade(), { capture: true, passive: true });
-    }
+    }    this.drawClock(); // show the full time during the intro too
   }
 
   private buildHeader(): HTMLElement {
@@ -321,7 +374,10 @@ export class App {
       path.slice(1).forEach((n, i) =>
         this.later(() => {
           this.cursor = n;
-          if (n === this.puzzle.position) this.replaying = false;
+          if (n === this.puzzle.position) {
+            this.replaying = false;
+            this.armClock();
+          }
           this.render();
         }, (i + 1) * this.cfg.introMoveDelay),
       );
@@ -331,13 +387,107 @@ export class App {
     this.cursor = this.introStart();
     this.render();
     this.cursor = this.puzzle.position;
-    this.later(() => this.render(), 250);
+    this.later(() => {
+      this.render();
+      this.armClock();
+    }, 250);
+  }
+
+  // -------------------------------------------------------------------------
+  // Clock (timed puzzles). Timestamps, not a counter, so a phone in the background
+  // can't drift; only the user's own thinking time counts.
+
+  private get timed(): boolean {
+    return !!this.run && this.cfg.timed;
+  }
+
+  private elapsedNow(): number {
+    return this.elapsed + (this.runningSince === undefined ? 0 : Date.now() - this.runningSince);
+  }
+
+  /** The intro is over: the clock may start. */
+  private armClock(): void {
+    if (!this.timed || this.clockArmed) return;
+    this.clockArmed = true;
+    document.addEventListener('visibilitychange', this.onVisibility);
+    if (this.els.clock) this.clockTick = window.setInterval(() => this.drawClock(), 250);
+    this.syncClock();
+  }
+
+  /** Run the clock exactly while the user is to move, and arm or clear the timeout. */
+  private syncClock(): void {
+    if (!this.timed || !this.clockArmed) return;
+    const run = this.run!;
+    const should = run.status === 'playing' && !this.busy && !this.replaying && !this.paused && !document.hidden;
+    if (should && this.runningSince === undefined) {
+      this.runningSince = Date.now();
+    } else if (!should && this.runningSince !== undefined) {
+      this.elapsed += Date.now() - this.runningSince;
+      this.runningSince = undefined;
+    }
+    if (this.timeoutTimer !== undefined) {
+      clearTimeout(this.timeoutTimer);
+      this.timeoutTimer = undefined;
+    }
+    if (should && this.cfg.timeAffects === 'fail')
+      this.timeoutTimer = window.setTimeout(() => this.onTimeout(), Math.max(0, this.cfg.timeLimit * 1000 - this.elapsedNow()));
+    this.drawClock();
+  }
+
+  private stopClockTimers(): void {
+    if (this.clockTick !== undefined) clearInterval(this.clockTick);
+    if (this.timeoutTimer !== undefined) clearTimeout(this.timeoutTimer);
+    this.clockTick = this.timeoutTimer = undefined;
+  }
+
+  private drawClock(): void {
+    const { clock, clockText, clockBar } = this.els;
+    if (!clock || !clockText || !clockBar) return;
+    const limit = this.cfg.timeLimit * 1000;
+    const left = limit - this.elapsedNow();
+    clockText.textContent = left >= 0 ? Math.ceil(left / 1000) + ' s' : '+' + Math.ceil(-left / 1000) + ' s over';
+    clockBar.style.width = Math.max(0, Math.min(100, (left / limit) * 100)).toFixed(1) + '%';
+    clock.classList.toggle('kr-clock-low', left >= 0 && left <= limit * 0.2);
+    clock.classList.toggle('kr-clock-over', left < 0);
+    clock.classList.toggle('kr-clock-paused', this.runningSince === undefined && this.run!.status === 'playing');
+  }
+
+  private onTimeout(): void {
+    this.timeoutTimer = undefined;
+    const run = this.run;
+    if (!run || run.status !== 'playing' || this.busy) return;
+    this.elapsed = this.cfg.timeLimit * 1000;
+    this.runningSince = undefined;
+    const out = run.timeout();
+    if (out.kind === 'failed') this.cursor = out.at;
+    this.failMove = undefined;
+    this.persist();
+    this.render();
+    this.finish();
   }
 
   /** Stop anything time-based the user might miss (settings dialog opening). */
   pause(): void {
+    this.paused = true;
     this.skipIntro();
     this.cancelGrade();
+    this.syncClock();
+  }
+
+  /** The settings dialog closed without a re-mount: carry on. */
+  resume(): void {
+    this.paused = false;
+    this.syncClock();
+  }
+
+  /** Thinking time spent so far (ms). */
+  elapsedMs(): number {
+    return this.elapsedNow();
+  }
+
+  /** Thinking time worth carrying into a re-mounted attempt: none once this one is over. */
+  carriedElapsedMs(): number | undefined {
+    return this.run && this.run.status === 'playing' ? this.elapsedNow() : undefined;
   }
 
   private skipIntro(): void {
@@ -345,6 +495,7 @@ export class App {
     this.clearTimers();
     this.replaying = false;
     this.cursor = this.puzzle.position;
+    this.armClock();
     this.render();
   }
 
@@ -377,10 +528,11 @@ export class App {
   private scheduleGrade(): void {
     const r = this.result;
     if (this.cfg.afterAnswer !== 'grade' || !r || r.graded) return;
-    const ease = clampEase(
-      r.status === 'failed' ? this.cfg.gradeFailed : r.hints ? this.cfg.gradeHinted : this.cfg.gradeSolved,
-    );
-    this.gradePending = { ease, label: EASE_LABELS[ease] };
+    const { ease, slow } = pickEase(r, this.cfg);
+    this.gradePending = {
+      ease,
+      label: EASE_LABELS[ease] + (slow ? ': slower than ' + (r.limitMs !== undefined ? r.limitMs / 1000 : this.cfg.timeLimit) + ' s' : ''),
+    };
     this.renderStatus();
     this.later(() => {
       if (!this.gradePending) return;
@@ -574,7 +726,12 @@ export class App {
   private persist(): void {
     const run = this.run;
     if (!run || run.status === 'playing') return;
+    this.syncClock(); // stops the clock
+    this.stopClockTimers();
+    this.drawClock();
     const f = run.failure;
+    const timed = this.timed && this.clockArmed;
+    const elapsedMs = timed ? Math.round(this.elapsed) : undefined;
     saveResult({
       key: this.key,
       status: run.status,
@@ -592,6 +749,9 @@ export class App {
       live: run.liveMoves.length ? run.liveMoves.slice() : undefined,
       liveEnd: run.liveEnd,
       hints: run.hintsUsed,
+      elapsedMs,
+      limitMs: timed ? this.cfg.timeLimit * 1000 : undefined,
+      timedOut: timed ? (f && f.reason === 'timeout') || elapsedMs! > this.cfg.timeLimit * 1000 : undefined,
     });
   }
 
@@ -611,6 +771,7 @@ export class App {
     this.els.backBtn.style.visibility = node === home ? 'hidden' : 'visible';
     this.els.prevBtn.disabled = !node.parent;
     this.els.nextBtn.disabled = !visibleChildren(node, this.view).length;
+    this.syncClock();
     if (this.els.giveUpBtn) this.els.giveUpBtn.style.display = run && run.status === 'playing' ? '' : 'none';
     if (this.els.hintBtn) {
       this.els.hintBtn.style.display = run && run.status === 'playing' ? '' : 'none';
@@ -756,6 +917,7 @@ export class App {
       const f = run.failure!;
       el.classList.add('kr-bad');
       if (f.reason === 'gaveup') line('kr-status-main', '✗ Answer shown' + again);
+      else if (f.reason === 'timeout') line('kr-status-main', '✗ Time ran out at ' + this.cfg.timeLimit + ' s' + again);
       else if (f.reason === 'unknown') line('kr-status-main', '✗ ' + f.san + ' is not in the analysis' + again);
       else if (f.reason === 'live') {
         const miss = liveMateMiss(f.bestMate, f.mate);
@@ -782,6 +944,8 @@ export class App {
       el.classList.add(r.status === 'solved' ? 'kr-good' : 'kr-bad');
       const mark = r.status === 'solved' ? '✓ Solved — you played ' : '✗ You played ';
       if (r.status === 'failed' && r.reason === 'gaveup' && !r.played.length) line('kr-status-main', '✗ Answer shown.');
+      else if (r.status === 'failed' && r.reason === 'timeout' && !r.played.length)
+        line('kr-status-main', '✗ Time ran out at ' + this.cfg.timeLimit + ' s.');
       else if (mine && mine.node) {
         const miss = r.status === 'failed' && r.reason === 'rejected' && !r.played.length ? mateMiss(this.puzzle.position, mine.node, this.cfg.strictMate) : undefined;
         if (miss) line('kr-status-main', mark + mine.node.san + ', which ' + this.mateMissText(miss) + '.');
@@ -790,7 +954,8 @@ export class App {
       else if (r.failSan && r.failAt === this.puzzle.position.id) line('kr-status-main', mark + r.failSan + ' (not analysed)');
       if (r.status === 'failed' && r.played.length) {
         const at = r.failAt ? findNode(this.games, r.failAt) : undefined;
-        if (r.reason === 'live') {
+        if (r.reason === 'timeout') line('kr-status-sub', 'Then time ran out at ' + this.cfg.timeLimit + ' s.');
+        else if (r.reason === 'live') {
           const miss = liveMateMiss(r.failBestMate, r.failMate);
           const what = miss ? (miss.kind === 'drops' ? ' missed the forced mate' : ' mated, but slower') : ' let it slip';
           line('kr-status-sub', 'Then ' + (r.failSan || 'a move') + (at && at.san ? ' after ' + at.san : '') + what + (r.failBestSan ? '; ' + r.failBestSan + ' was best.' : '.'));
@@ -800,6 +965,18 @@ export class App {
       const end = this.liveEndText(r.liveEnd as never, r.played.length);
       if (end && r.status === 'solved') line('kr-status-sub', end);
       if (r.hints) line('kr-status-sub', 'Used ' + hintCount(r.hints) + '.');
+      if (r.elapsedMs !== undefined && r.reason !== 'timeout') {
+        const limit = r.limitMs !== undefined ? r.limitMs / 1000 : this.cfg.timeLimit;
+        const took = secs(r.elapsedMs);
+        line(
+          'kr-status-sub',
+          r.status === 'solved'
+            ? r.timedOut
+              ? 'Solved in ' + took + ', over the ' + limit + ' s limit.'
+              : 'Solved in ' + took + ' of ' + limit + ' s.'
+            : 'Time: ' + took + ' of ' + limit + ' s.',
+        );
+      }
     } else line('kr-status-main', toMove + '.');
     this.acceptedLine(line, this.puzzle.position, true);
     line('kr-status-sub', 'Game: ', this.moveBadge(this.puzzle.gameMove));

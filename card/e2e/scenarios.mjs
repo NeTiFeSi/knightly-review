@@ -26,6 +26,43 @@ async function waitBack(t, timeout = 10000) {
   }, 'the back of the card', timeout);
 }
 
+/** The front clock: text, whether it is paused, low or over, and the bar width in %. */
+function clockState(page) {
+  return page.evaluate(() => {
+    const c = document.querySelector('.kr-clock');
+    if (!c) return null;
+    const bar = c.querySelector('.kr-clock-bar');
+    return {
+      text: c.querySelector('.kr-clock-text').textContent,
+      paused: c.classList.contains('kr-clock-paused'),
+      low: c.classList.contains('kr-clock-low'),
+      over: c.classList.contains('kr-clock-over'),
+      width: parseFloat(bar.style.width),
+    };
+  });
+}
+
+/** Switch the mounted front to a card whose answer has more than one of your moves; its solution, or null. */
+async function multiMoveCard(page, ctx) {
+  for (let n = 1; n <= 6; n++) {
+    const ok = await page.evaluate(n => {
+      const el = document.querySelector('#kr-cloze .cloze');
+      if (!el) return false;
+      el.setAttribute('data-ordinal', String(n));
+      el.textContent = '[' + n + ']';
+      window.KnightlyReview.mount();
+      return !document.querySelector('.kr-error');
+    }, n);
+    if (!ok) continue;
+    await wait(500);
+    const sol = await ctx.solution(page).catch(() => null);
+    if (sol && sol.line.length > 1) return sol;
+  }
+  return null;
+}
+
+const TIMED = { ...BASE, timed: true, timeLimit: 60, timeAffects: 'nothing', showClock: true };
+
 export const scenarios = [
   {
     name: 'loads',
@@ -122,6 +159,182 @@ export const scenarios = [
         await wait(BASE.autoReplyDelay + (i < sol.line.length - 1 ? 500 : 300));
       }
       await card.waitStatus(page, /Solved with 1 hint/);
+    },
+  },
+  {
+    name: 'timed-timeout',
+    about: 'Timed with timeAffects "fail": when time runs out the card fails and the back says so',
+    async run(t, ctx) {
+      const timed = { ...BASE, afterAnswer: 'flip', flipDelay: 300, timed: true, timeLimit: 5, timeAffects: 'fail' };
+      const page = await fresh(t, ctx, timed);
+      expect(await page.$('.kr-clock'), 'no clock on the front');
+      await card.waitStatus(page, /Time ran out/, 15000);
+      const back = await waitBack(t);
+      ctx.attach(back);
+      const s = await card.read(back);
+      expect(/Time ran out at 5 s/.test(s.status), 'back should say time ran out: ' + s.status);
+      await ctx.shot('back-timeout');
+    },
+  },
+  {
+    name: 'timed-solved',
+    about: 'Timed: solving within the limit shows "Solved in N s of M s" on the back',
+    async run(t, ctx) {
+      const timed = { ...BASE, afterAnswer: 'flip', flipDelay: 300, timed: true, timeLimit: 120, timeAffects: 'fail' };
+      const page = await fresh(t, ctx, timed);
+      const sol = await ctx.solution(page);
+      for (const [i, m] of sol.line.entries()) {
+        await card.play(page, m.uci, t.pointer);
+        await wait(BASE.autoReplyDelay + (i < sol.line.length - 1 ? 500 : 300));
+      }
+      const back = await waitBack(t);
+      ctx.attach(back);
+      const s = await card.read(back);
+      expect(/Solved in [\d.]+ s of 120 s/.test(s.status), 'back should show the time taken: ' + s.status);
+      await ctx.shot('back-timed');
+    },
+  },
+  {
+    name: 'timed-clock-front',
+    about: 'Timed: the clock counts down on the front, turns amber near the end and red when over; showClock off hides it',
+    async run(t, ctx) {
+      const page = await fresh(t, ctx, { ...TIMED, timeLimit: 10 });
+      await until(async () => (await clockState(page)) && !(await clockState(page)).paused, 'the clock to run');
+      const a = await clockState(page);
+      await wait(2200);
+      const b = await clockState(page);
+      expect(b.width < a.width, `bar did not shrink: ${a.width} → ${b.width}`);
+      expect(parseInt(b.text) < parseInt(a.text), `clock did not count down: ${a.text} → ${b.text}`);
+      await until(async () => (await clockState(page)).low, 'the clock to turn amber (last 20%)', 9000);
+      await ctx.shot('clock-low');
+      await until(async () => (await clockState(page)).over, 'the clock to go over', 9000);
+      const o = await clockState(page);
+      expect(/over/.test(o.text), 'overtime text expected, got: ' + o.text);
+      // timeAffects "nothing": the puzzle is still playable after time is up.
+      const s = await card.read(page);
+      expect(/to move/.test(s.status), 'puzzle should stay open after time is up: ' + s.status);
+      await ctx.shot('clock-over');
+      await card.setOverrides(page, { ...TIMED, showClock: false });
+      await card.waitMounted(page, 'front');
+      expect(!(await page.$('.kr-clock')), 'clock should be hidden with showClock off');
+    },
+  },
+  {
+    name: 'timed-over-graded-slow',
+    about: 'Timed with timeAffects "nothing": solving after the limit still solves and the back says it was over the limit',
+    async run(t, ctx) {
+      const page = await fresh(t, ctx, { ...TIMED, afterAnswer: 'flip', flipDelay: 300, timeLimit: 5 });
+      const sol = await ctx.solution(page);
+      await until(async () => (await clockState(page)).over, 'the time to run out', 12000);
+      for (const [i, m] of sol.line.entries()) {
+        await card.play(page, m.uci, t.pointer);
+        await wait(BASE.autoReplyDelay + (i < sol.line.length - 1 ? 500 : 300));
+      }
+      const back = await waitBack(t);
+      ctx.attach(back);
+      const s = await card.read(back);
+      expect(/Solved in [\d.]+ s, over the 5 s limit/.test(s.status), 'back should say it was over the limit: ' + s.status);
+    },
+  },
+  {
+    name: 'timed-pauses-on-reply',
+    about: "Timed: the clock stands still during the opponent's reply delay (uses a card with a multi-move answer)",
+    async run(t, ctx) {
+      const page = await fresh(t, ctx, { ...TIMED, autoReplyDelay: 3000 });
+      const sol = await multiMoveCard(page, ctx);
+      if (!sol) return 'skipped: no card in the sample deck has a multi-move answer';
+      await wait(1500);
+      await card.play(page, sol.line[0].uci, t.pointer);
+      await until(async () => (await clockState(page)).paused, 'the clock to pause during the reply');
+      const a = await clockState(page);
+      await wait(1500);
+      const b = await clockState(page);
+      expect(a.text === b.text, `clock moved during the reply: ${a.text} → ${b.text}`);
+      await until(async () => !(await clockState(page)).paused, 'the clock to resume after the reply', 6000);
+    },
+  },
+  {
+    name: 'timed-pauses-for-engine',
+    about: 'Timed + live play: the clock stands still whenever the card says the engine is thinking',
+    async run(t, ctx) {
+      const page = await fresh(t, ctx, { ...TIMED, live: true, autoReplyDelay: 100 });
+      const sol = await ctx.solution(page);
+      // Record the clock's state at every status change that says the engine is working.
+      await page.evaluate(() => {
+        window.__krSeen = [];
+        new MutationObserver(() => {
+          const st = document.querySelector('.kr-status').innerText;
+          const c = document.querySelector('.kr-clock');
+          if (/thinking|Checking your move/.test(st)) window.__krSeen.push(c.classList.contains('kr-clock-paused'));
+        }).observe(document.querySelector('.kr-status'), { childList: true, subtree: true });
+      });
+      for (const m of sol.line) {
+        await card.play(page, m.uci, t.pointer);
+        await wait(BASE.autoReplyDelay + 400);
+      }
+      await until(async () => (await page.evaluate(() => window.__krSeen.length)) > 0, 'the engine wait to show', 30000);
+      const seen = await page.evaluate(() => window.__krSeen);
+      expect(seen.every(Boolean), 'clock kept running while the engine thought: ' + JSON.stringify(seen));
+    },
+  },
+  {
+    name: 'timed-pauses-in-settings',
+    about: 'Timed: opening ⚙ freezes the clock',
+    async run(t, ctx) {
+      const page = await fresh(t, ctx, TIMED);
+      await wait(1500);
+      await card.openSettings(page);
+      await wait(300);
+      const a = await clockState(page);
+      expect(a && a.paused, 'clock should be paused while ⚙ is open');
+      await wait(2000);
+      const b = await clockState(page);
+      expect(a.text === b.text, `clock moved while ⚙ was open: ${a.text} → ${b.text}`);
+      await card.closeSettings(page);
+    },
+  },
+  {
+    name: 'timed-settings-after-timeout',
+    about: 'Timed: after the time ran out, changing a ⚙ setting starts the puzzle again with a fresh clock, not the spent one',
+    async run(t, ctx) {
+      const timed = { ...TIMED, timeLimit: 5, timeAffects: 'fail' };
+      const page = await fresh(t, ctx, timed);
+      await card.waitStatus(page, /Time ran out/, 15000);
+      await card.openSettings(page);
+      await card.setSetting(page, 'showEval', false); // any change re-mounts the card on close
+      await card.closeSettings(page);
+      await card.waitMounted(page, 'front');
+      await wait(800);
+      const s = await card.read(page);
+      expect(!/Time ran out/.test(s.status), 'the new attempt failed at once: ' + s.status);
+      const c = await clockState(page);
+      expect(c && !c.over && parseInt(c.text) >= 3, 'the new attempt did not get a fresh clock: ' + JSON.stringify(c));
+      await ctx.shot('fresh-attempt');
+    },
+  },
+  {
+    name: 'timed-background',
+    targets: ['android'],
+    about: 'Timed: leaving the app (Home) pauses the clock; coming back does not time out the puzzle',
+    async run(t, ctx) {
+      let page = await fresh(t, ctx, { ...TIMED, timeLimit: 10, timeAffects: 'fail' });
+      await wait(3000);
+      const a = await clockState(page);
+      t.disconnect();
+      t.shell('input keyevent KEYCODE_HOME');
+      await wait(13000); // longer than the whole limit
+      t.shell('monkey -p com.ichi2.anki.a -c android.intent.category.LAUNCHER 1');
+      await wait(3000);
+      expect(/Reviewer/.test(t.topActivity()), 'the study screen did not come back: ' + t.topActivity());
+      page = await t.page();
+      ctx.attach(page);
+      const s = await card.read(page);
+      expect(s.mounted && s.side === 'front', 'card should still be on the front, got side ' + s.side);
+      expect(!/Time ran out/.test(s.status), 'time ran out while the app was in the background: ' + s.status);
+      const b = await clockState(page);
+      // The 13 s away must not count: the clock only ran the few seconds the card was on screen.
+      expect(b && !b.over && parseInt(b.text) > 0, `the background time was counted: ${a.text} → ${b && b.text}`);
+      await ctx.shot('after-background');
     },
   },
   {

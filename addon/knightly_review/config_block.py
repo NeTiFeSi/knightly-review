@@ -27,6 +27,11 @@ SCHEMA: dict[str, tuple] = {
     "live": ("bool",),
     "goodMove": ("num", 0.1, 20, False),
     "liveMaxMoves": ("num", 1, 30, True),
+    "timed": ("bool",),
+    "timeLimit": ("num", 5, 600, True),
+    "timeAffects": ("choice", ("nothing", "fail", "grade")),
+    "gradeSlow": ("num", 1, 4, True),
+    "showClock": ("bool",),
 }
 
 BLOCK_RE = re.compile(r"window\.KR_CONFIG\s*=\s*\{[^{}]*\}\s*;?")

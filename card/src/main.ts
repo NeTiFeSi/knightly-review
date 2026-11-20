@@ -70,6 +70,7 @@ export function mount(opts?: { resumed?: boolean }): void {
     panel = undefined;
     if (p.el.parentNode) p.el.parentNode.removeChild(p.el);
   }
+  const carried = opts && opts.resumed && current ? current.carriedElapsedMs() : undefined;
   if (current) {
     try {
       current.destroy();
@@ -90,6 +91,7 @@ export function mount(opts?: { resumed?: boolean }): void {
       warnings: cfg.warnings,
       engine: card.side === 'front' && cfg.config.live ? liveEngine(addonHello, wasmEngine) : undefined,
       resumed: !!(opts && opts.resumed),
+      elapsed: carried,
       openSettings: () => openSettings(root, cfg),
     });
   } catch (err) {
@@ -111,6 +113,7 @@ function openSettings(root: HTMLElement, cfg: ReturnType<typeof loadConfig>): vo
       if (panel !== p) return;
       panel = undefined;
       if (changed) mount({ resumed: true });
+      else if (current) current.resume();
     },
   });
   panel = p;

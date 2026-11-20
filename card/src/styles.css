@@ -104,6 +104,18 @@
 .kr-evalbar-none .kr-evalbar-fill { background: var(--kr-panel); }
 .kr-evalbar-none .kr-evalbar-text { color: var(--kr-muted); }
 
+/* Clock (timed puzzles) */
+.kr-clock { display: flex; align-items: center; gap: 8px; margin: 0 0 6px 22px; font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 600; }
+.kr-clock-text { min-width: 64px; }
+.kr-clock-track { flex: 1; height: 6px; border-radius: 3px; background: var(--kr-border); overflow: hidden; }
+.kr-clock-bar { height: 100%; background: var(--kr-good); }
+.kr-clock-low { color: #b26a00; }
+.kr-clock-low .kr-clock-bar { background: #e69500; }
+.kr-clock-over { color: var(--kr-bad); }
+.kr-clock-over .kr-clock-bar { background: var(--kr-bad); }
+.kr-clock-paused { opacity: 0.6; }
+@media (max-width: 640px) { .kr-clock { margin-left: 0; } }
+
 /* Controls */
 .kr-controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 22px; }
 .kr-btn {
