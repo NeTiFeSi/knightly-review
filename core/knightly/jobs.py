@@ -19,7 +19,7 @@ from .config import Config
 from .engine.analyse import Analyser
 from .model import CardSpec, Game, NoteSpec, Score
 from .openings import Group
-from .select import (build_card, find_candidates, opening_candidates, parse_opening_note_key,
+from .select import (build_card, find_candidates, opening_candidates, parse_game_note_key, parse_opening_note_key,
                      ranked_candidates)
 from .sources import chesscom, lichess
 
@@ -48,8 +48,12 @@ def _opponent(g: Game) -> str:
 
 def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, int], by_key: dict[str, Game],
                scored: dict[str, list[Optional[Score]]], an, cfg: Config, result: UpdateResult) -> Optional[NoteSpec]:
-    """A game's note: its old cards rebuilt (deep evals come from the cache) plus the new ones."""
-    g = by_key[key]
+    """A game's note for one phase: its old cards rebuilt (deep evals come from the cache) plus the new ones."""
+    parsed = parse_game_note_key(key)
+    if parsed is None or parsed[0] not in by_key:
+        result.warnings.append(f"{key}: no such game in the look-back; note left unchanged")
+        return None
+    g = by_key[parsed[0]]
     cards = [c for _, c in new]
     if old_ids:
         board = chess.Board()

@@ -136,6 +136,12 @@ def apply_notes(col: Collection, specs: list[NoteSpec], deck: str, order: list[s
         note["PGN"] = kn.pgn_to_field(spec.pgn)
         note["Cards"] = spec.cards
         note["Notes"] = spec.notes
+        if not spec.key.startswith("opening:"):
+            # A game note is rebuilt whole, so its generated tags are replaced (the user's own
+            # are kept). An opening note only gets the tags of its new games, so they're added.
+            stale = [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]
+            for t in stale:
+                note.remove_tag(t)
         for t in spec.tags:
             if not note.has_tag(t):
                 note.add_tag(t)
