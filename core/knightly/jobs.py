@@ -22,8 +22,8 @@ from .config import Config
 from .engine.analyse import Analyser
 from .model import CardSpec, Game, NoteSpec, Score
 from .openings import Group
-from .select import (build_card, find_candidates, opening_candidates, parse_game_note_key, parse_opening_note_key,
-                     ranked_candidates)
+from .select import (MOTIF_NOTE_CARDS, build_card, find_candidates, motif_note_key, opening_candidates,
+                     parse_game_note_key, parse_motif_note_key, parse_opening_note_key, ranked_candidates)
 from .sources import chesscom, lichess
 
 # progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
@@ -107,12 +107,23 @@ def _opening_note(key: str, new: list[tuple[Game, CardSpec]], groups: list[Group
     return notes.build_opening(key, label, ply, entries, existing_pgn)
 
 
+def _motif_note(motif: str, existing: dict[str, str], carded: dict[str, dict[str, int]],
+                per_note: dict[str, list[tuple[Game, CardSpec]]]) -> str:
+    """Key of the note a card of `motif` goes in: the first one with room, or a new one."""
+    numbers = sorted(p[1] for k in set(existing) | set(per_note) if (p := parse_motif_note_key(k)) and p[0] == motif)
+    for n in numbers:
+        key = motif_note_key(motif, n)
+        if len(carded.get(key, {})) + len(per_note.get(key, [])) < MOTIF_NOTE_CARDS:
+            return key
+    return motif_note_key(motif, (numbers[-1] if numbers else 0) + 1)
+
+
 def _card_rank(cfg: Config, by_key: dict[str, Game], groups: list[Group]) -> deepen.Rank:
     """The order candidates are confirmed in, close to the order the note grouping makes cards in."""
     if cfg.note_grouping == "opening":
         group_of = {g.key: i for i, gr in enumerate(groups) for g in gr.games}
         return lambda e, loss, count: (group_of.get(e.game_key, len(groups)), e.ply)
-    if cfg.note_grouping == "ranked":  # select.ranked_candidates' score
+    if cfg.note_grouping in ("ranked", "motif"):  # select.ranked_candidates' score
         def ranked(e: deepen.Edge, loss: float, count: int) -> tuple:
             weight = (1.0 if by_key[e.game_key].user_result() < 1 else 0.6) if e.mine else 0.8
             return (-loss * weight * (1 + 0.5 * (count - 1)),)
@@ -202,6 +213,7 @@ def run_update(
         carded: dict[str, dict[str, int]] = {k: notes.card_ids(p) for k, p in existing.items()}
         exclude = {fk for ids in carded.values() for fk in ids}
         by_opening = cfg.note_grouping == "opening"
+        by_motif = cfg.note_grouping == "motif"
         threshold = cfg.opening_min_loss if by_opening else cfg.min_loss
         min_loss: Optional[float] = cfg.opening_min_loss if by_opening else None
 
@@ -242,7 +254,7 @@ def run_update(
             if by_opening:
                 cands = opening_candidates(groups, scored, cfg, exclude)
             else:
-                pick = ranked_candidates if cfg.note_grouping == "ranked" else find_candidates
+                pick = ranked_candidates if cfg.note_grouping in ("ranked", "motif") else find_candidates
                 cands = pick([(g, scored[g.key]) for g in games], cfg, exclude)
             cands = [c for c in cands if (c.fen_key, c.played) in dp.confirmed]
 
@@ -263,11 +275,14 @@ def run_update(
                 if not card:
                     continue
                 made += 1
-                key = c.note
+                key = _motif_note(card.motifs[0], existing, carded, per_note) if by_motif else c.note
                 if key in failed:
                     continue
                 per_note.setdefault(key, []).append((g, card))
-                if by_opening:
+                if by_motif:
+                    spec = notes.build_motif(key, [(g, scored.get(g.key, []), c) for g, c in per_note[key]],
+                                             existing.get(key, ""))
+                elif by_opening:
                     spec = _opening_note(key, per_note[key], groups, scored, existing.get(key, ""))
                 else:
                     spec = _game_note(key, per_note[key], carded.get(key, {}), by_key, scored, an, cfg, result)
@@ -281,7 +296,9 @@ def run_update(
                 if on_note:
                     on_note(spec)
 
-            if by_opening:
+            if by_motif:
+                result.order = list(specs)  # costliest mistakes first
+            elif by_opening:
                 result.order = opening_order(groups, set(existing) | set(per_note))
             result.stats = dict(an.stats)
             # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and

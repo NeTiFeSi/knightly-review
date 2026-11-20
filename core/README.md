@@ -23,6 +23,7 @@ python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards
 | `engine/analyse.py` | Stockfish (fixed depth), then optional Lc0 for as long as Stockfish took, always with WDL; Lc0's answer is used except in mate positions; cached per engine |
 | `deepen.py` | Analysis by increasing depth: every position at depth 1 (most-seen first), then possible mistakes deeper one depth at a time, then the full setup that makes the card; the rest is deepened when no candidates are left. Stops at enough cards or the time budget |
 | `select.py` | Win-rate loss (engine WDL); which moves become cards, in which order (game by game, or by opening and ply); good-move and sacrifice tests, NAGs |
+| `motifs.py` | Tactical motifs of a puzzle (fork, pin, skewer, back-rank mate, mate in N, …) from the best move and the engine's line; the card's main motif picks its note in `note_grouping="motif"` |
 | `phases.py` | Opening, middlegame or endgame: a port of Lichess's game divider (scalachess `Divider`) |
 | `openings.py` | Names a game's opening (family) and ranks openings by points lost (4 per loss, 2 per draw, 1 per win), per colour |
 | `notes.py` | PGN with `[%kr N]` tags and stable card numbers; one note per game and phase, or per opening and ply; the notes' tags (one game per card) |

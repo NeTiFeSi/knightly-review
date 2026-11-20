@@ -45,6 +45,8 @@ class Config:
     # "opening": one note per opening family + your colour + ply. Openings that cost the most
     #   points (4 per loss, 2 per draw, 1 per win) first, then ply by ply from the first move,
     #   every move losing more than `opening_min_loss`.
+    # "motif": one note per tactical motif (fork, pin, back-rank mate, …) of the best move, any game,
+    #   biggest mistakes first, up to 10 cards a note.
     note_grouping: str = "game"
     opening_min_loss: float = 2.0  # opening mode: any move that isn't a "good move" (?!, ?, ??)
     # Judging moves. All percentages are points of the engine's expected score (WDL: wins + draws / 2).

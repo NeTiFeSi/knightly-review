@@ -37,7 +37,7 @@ from typing import Iterable, Iterator, Optional
 
 import chess
 
-from . import phases
+from . import motifs as motifs_mod, phases
 from .cache import fen_key
 from .config import Config
 from .model import Candidate, CardSpec, Choice, Game, Line, Score
@@ -226,6 +226,22 @@ def parse_game_note_key(key: str) -> Optional[tuple[str, str]]:
     return game_key, phase
 
 
+MOTIF_NOTE_CARDS = 10  # a motif note holds this many cards; the next one starts a new note
+
+
+def motif_note_key(motif: str, n: int) -> str:
+    """'fork', 3 → 'motif:fork:3'."""
+    return f"motif:{motif}:{n}"
+
+
+def parse_motif_note_key(key: str) -> Optional[tuple[str, int]]:
+    """(motif, number) of a motif note key, or None for another key."""
+    parts = key.split(":")
+    if len(parts) != 3 or parts[0] != "motif" or not parts[2].isdigit():
+        return None
+    return parts[1], int(parts[2])
+
+
 def opening_note_key(group: Group, ply: int) -> str:
     return f"opening:{group.color}:{group.slug}:{ply + 1}"
 
@@ -326,6 +342,9 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
     assert played_choice is not None
     if not any(c.nag in ACCEPTED for c in choices):
         return None
+    best_graded = next(g for g in graded if g.move == choices[0].move)
+    best_line = by_move[choices[0].move]
+    found = motifs_mod.detect(board, best_line.moves, best_graded.mate, choices[0].nag in (BRILLIANT, INTERESTING))
     best_san = board.san(chess.Move.from_uci(choices[0].move))
     played_san = board.san(chess.Move.from_uci(played))
     if opponent:
@@ -340,4 +359,5 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         loss=g_played.loss,
         comment=comment,
         mine=not opponent,
+        motifs=found,
     )
