@@ -43,10 +43,20 @@ class UpdateResult:
     # Opening mode: every opening note (new and existing) in the order its new cards should
     # be studied. The add-on repositions the new cards to match. Empty in game mode.
     order: list[str] = field(default_factory=list)
+    finished: bool = False  # the analysis left nothing to continue (every position at full depth, or enough cards)
     skipped: bool = False  # same inputs as the last finished run: nothing was collected or analysed
 
 
 STATE_KEY = "last_run"
+PRECALC_KEY = "confirmed"
+# Settings that don't change which moves are worth a card, so they don't invalidate saved candidates.
+_PRECALC_IGNORED = ("lichess_token", "max_new_cards", "analysis_minutes", "keep_running", "keep_running_hours",
+                    "lichess_user", "chesscom_user", "history_days", "time_classes", "rated_only")
+
+
+def precalc_signature(cfg: Config) -> str:
+    d = {k: v for k, v in cfg.to_dict().items() if k not in _PRECALC_IGNORED}
+    return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
 
 
 def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
@@ -161,9 +171,12 @@ def run_update(
     fetch: bool = True,
     analyser_factory: Optional[Callable[..., Analyser]] = None,
     gate: Optional[threading.Event] = None,
+    precalculate: bool = False,
 ) -> UpdateResult:
-    """`gate`: analysis waits while it is cleared (live play during review takes priority)."""
-    """`existing` maps note key → PGN of notes already in the collection."""
+    """`gate`: analysis waits while it is cleared (live play during review takes priority).
+    `precalculate`: no card cap and no cards made: keep deepening and confirming candidates, and save them
+    (as every run does) so the next update adds cards right away. `analysis_minutes` still bounds it.
+    `existing` maps note key → PGN of notes already in the collection."""
     progress = progress or (lambda *a: None)
     cancel = cancel or threading.Event()
     existing = existing or {}
@@ -189,11 +202,15 @@ def run_update(
 
         fp = fingerprint(cfg, by_key, exclude)
         last = cache.get(STATE_KEY) or {}
-        if not force and last.get("finished") and last.get("fingerprint") == fp:
+        if not force and not precalculate and last.get("finished") and last.get("fingerprint") == fp:
             result.skipped = True
             progress("analyse", 0, 0, "Nothing changed since the last update.")
             return result
-        cache.set(STATE_KEY, {"fingerprint": fp, "finished": False, "ts": time.time()})
+        if not precalculate:
+            cache.set(STATE_KEY, {"fingerprint": fp, "finished": False, "ts": time.time()})
+        sig = precalc_signature(cfg)
+        saved = cache.get(PRECALC_KEY) or {}
+        known = [tuple(c) for c in saved.get("confirmed", [])] if saved.get("signature") == sig else []
 
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
         positions = deepen.collect(games, cfg, exclude)
@@ -202,10 +219,16 @@ def run_update(
             an.gate = gate
             # Step-by-step analysis, most-seen positions first; see deepen.py.
             dp = deepen.Deepener(positions, an, cfg, threshold=threshold, card_min_loss=min_loss,
-                                 opponents={g.key: _opponent(g) for g in games}, want=cfg.max_new_cards,
-                                 rank=_card_rank(cfg, by_key, groups), progress=progress)
+                                 opponents={g.key: _opponent(g) for g in games},
+                                 want=deepen.UNBOUNDED if precalculate else cfg.max_new_cards,
+                                 rank=_card_rank(cfg, by_key, groups), progress=progress, confirmed=known)
             dp.run()
             result.analysed_positions = dp.analysed
+            cache.set(PRECALC_KEY, {"signature": sig, "confirmed": sorted(dp.confirmed | set(known))})
+            if precalculate:
+                result.stats = dict(an.stats)
+                result.finished = dp.finished
+                return result
 
             # The mode decides the order among the confirmed moves.
             scored = {g.key: dp.scores_of(g.key) for g in games}
@@ -245,6 +268,7 @@ def run_update(
             result.stats = dict(an.stats)
             # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and
             # if they never reach the collection (cancelled, write failed) the next run must try again.
+            result.finished = dp.finished
             if dp.finished and not result.new_cards:
                 cache.set(STATE_KEY, {"fingerprint": fp, "finished": True, "ts": time.time()})
     except http.Cancelled:

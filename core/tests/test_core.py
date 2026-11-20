@@ -657,6 +657,24 @@ class JobsTest(unittest.TestCase):
         c.put_games([scholar_game(end_ts=int(_t.time()) - 60, id="other")], "knightlyme")
         self.assertFalse(run(existing=existing).skipped)
 
+    def test_precalculate_saves_candidates_for_the_next_update(self):
+        import time as _t
+        c = tmpcache(self)
+        g = scholar_game(end_ts=int(_t.time()) - 3600)
+        c.put_games([g], "knightlyme")
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
+        pre = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser, precalculate=True)
+        self.assertEqual((pre.new_cards, pre.notes, pre.skipped), (0, [], False))  # candidates only, no cards
+        self.assertTrue(c.get("confirmed")["confirmed"])
+        saved = {tuple(x) for x in c.get("confirmed")["confirmed"]}
+        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
+        self.assertEqual(res.new_cards, 1)  # made from the saved candidates
+        self.assertTrue(saved <= {tuple(x) for x in c.get("confirmed")["confirmed"]})
+        # A change that affects which moves are mistakes drops the saved candidates.
+        from knightly.jobs import precalc_signature
+        self.assertNotEqual(precalc_signature(cfg), precalc_signature(Config(lichess_user="KnightlyMe", stockfish_path="unused", min_loss=20)))
+        self.assertEqual(precalc_signature(cfg), precalc_signature(Config(lichess_user="x", stockfish_path="unused", max_new_cards=99)))
+
     def test_unfinished_run_is_not_skipped(self):
         import time as _t
         c = tmpcache(self)
