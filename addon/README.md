@@ -2,14 +2,14 @@
 
 The add-on does three jobs:
 
-1. **Makes cards from your games** (Tools → Knightly Review). It runs the core (`../core/knightly`) in a background thread, then writes the notes into the collection as one undoable step.
+1. **Makes cards from your games** (Tools → Knightly Review). It runs the core (`../core/knightly`) in a background thread, and writes each note into the collection as soon as its card is built. The whole run is one undoable step ("Knightly Review: new cards").
 2. **Plays on with your engines during review.** A card asks `pycmd('kr:engine:{id, fen, multipv, moves}')`; the answer arrives later through `window.__krEngine.resolve(id, …)`. `kr:hello` reports which engine is available.
 3. **Saves card settings for all devices.** The card's ⚙ dialog can write its settings into the note type's templates, so they sync to AnkiDroid, AnkiMobile and AnkiWeb. The card talks to it with `pycmd('kr:hello')` → `{kr: 1}` and `pycmd('kr:config:{…}')`. A config message is validated, then replaces the `window.KR_CONFIG = {…};` block in every template of the current card's note type. It only answers in the reviewer and the previewer.
 
 | File | Does |
 |---|---|
 | `__init__.py` | The `pycmd` handler; sets up the menu and hooks |
-| `runner.py` | Background updates: thread, cancel on profile close, startup and periodic scheduling |
+| `runner.py` | Background updates (notes written as they are built): thread, cancel on profile close, startup and periodic scheduling |
 | `live.py` | Live engine for cards (`pycmd('kr:engine:{…}')`): own engine processes, answers via `web.eval`; pauses background analysis for 30 s after each request |
 | `ui.py` | Settings (also the first-run welcome), engine finder/installer, progress window |
 | `collection.py` | Note type, `_knightly.js` media, adding/updating notes (pylib only, no Qt) |

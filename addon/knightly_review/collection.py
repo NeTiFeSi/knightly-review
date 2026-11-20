@@ -119,36 +119,91 @@ def existing_notes(col: Collection) -> dict[str, str]:
     return out
 
 
+def _write_note(col: Collection, nt: Any, did: int, spec: NoteSpec) -> None:
+    """Add the note of `spec`, or update the one with its key."""
+    nids = col.find_notes(f'"note:{MODEL}" "tag:{kn.note_key_tag(spec.key)}"')
+    note = col.get_note(nids[0]) if nids else col.new_note(nt)
+    note["PGN"] = kn.pgn_to_field(spec.pgn)
+    note["Cards"] = spec.cards
+    note["Notes"] = spec.notes
+    if not spec.key.startswith("opening:"):
+        # A game note is rebuilt whole, so its generated tags are replaced (the user's own
+        # are kept). An opening note only gets the tags of its new games, so they're added.
+        stale = [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]
+        for t in stale:
+            note.remove_tag(t)
+    for t in spec.tags:
+        if not note.has_tag(t):
+            note.add_tag(t)
+    if nids:
+        col.update_note(note)
+    else:
+        col.add_note(note, did)
+
+
+def _note_type(col: Collection) -> Any:
+    nt = col.models.by_name(MODEL)
+    if nt is None:
+        raise RuntimeError(f'note type "{MODEL}" is missing')
+    return nt
+
+
+UNDO_NAME = "Knightly Review: new cards"
+
+
+class RunWriter:
+    """Writes the notes of one update run as they are built, and ends up as one undo step.
+
+    `add` and `finish` run on the main thread. Anki's merge takes in every undo entry since the first
+    write, so if the user did something undoable meanwhile (answered a card, edited a note) the entries
+    stay separate rather than swallow that.
+    """
+
+    def __init__(self, col: Collection, deck: str) -> None:
+        self.col = col
+        self.nt = _note_type(col)
+        self.did = col.decks.id(deck or MODEL)
+        self.pos: int | None = None
+        self.last = 0
+        self.clean = True
+        self.written = 0
+
+    def _check(self) -> None:
+        if self.pos is not None and self.col.undo_status().last_step != self.last:
+            self.clean = False
+
+    def add(self, spec: NoteSpec) -> None:
+        if self.pos is None:
+            self.pos = self.col.add_custom_undo_entry(UNDO_NAME)
+        else:
+            self._check()
+        _write_note(self.col, self.nt, self.did, spec)
+        self.last = self.col.undo_status().last_step
+        self.written += 1
+
+    def finish(self, order: list[str] | None = None) -> OpChanges:
+        """Fix the study order (opening mode) and merge the run's undo entries into one step."""
+        self._check()
+        if self.pos is None and order:
+            self.pos = self.col.add_custom_undo_entry(UNDO_NAME)
+        if order:
+            reposition_new(self.col, order)
+        if self.pos is not None and self.clean:
+            return self.col.merge_undo_entries(self.pos)
+        return OpChanges()
+
+
 def apply_notes(col: Collection, specs: list[NoteSpec], deck: str, order: list[str] | None = None) -> OpChanges:
     """Add new notes and update changed ones, as one undoable step.
 
     `order` (opening mode): note keys in study order; their new cards are moved to the
     front of the new-card queue in that order (see `reposition_new`).
     """
-    nt = col.models.by_name(MODEL)
-    if nt is None:
-        raise RuntimeError(f'note type "{MODEL}" is missing')
+    nt = _note_type(col)
     did = col.decks.id(deck or MODEL)
-    pos = col.add_custom_undo_entry("Knightly Review: new cards")
+    pos = col.add_custom_undo_entry(UNDO_NAME)
     for spec in specs:
-        nids = col.find_notes(f'"note:{MODEL}" "tag:{kn.note_key_tag(spec.key)}"')
-        note = col.get_note(nids[0]) if nids else col.new_note(nt)
-        note["PGN"] = kn.pgn_to_field(spec.pgn)
-        note["Cards"] = spec.cards
-        note["Notes"] = spec.notes
-        if not spec.key.startswith("opening:"):
-            # A game note is rebuilt whole, so its generated tags are replaced (the user's own
-            # are kept). An opening note only gets the tags of its new games, so they're added.
-            stale = [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]
-            for t in stale:
-                note.remove_tag(t)
-        for t in spec.tags:
-            if not note.has_tag(t):
-                note.add_tag(t)
-        if nids:
-            col.update_note(note)
-        else:
-            col.add_note(note, did)
+        _write_note(col, nt, did, spec)
     if order:
         reposition_new(col, order)
     return col.merge_undo_entries(pos)
