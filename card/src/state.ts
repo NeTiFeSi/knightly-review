@@ -20,6 +20,9 @@ export interface StoredResult {
   /** Live failure: the engine's best move (UCI) and its SAN. */
   failBest?: string;
   failBestSan?: string;
+  /** Live failure in a forced mate: the best mate, and the failed move's (absent when it dropped the mate). */
+  failBestMate?: number;
+  failMate?: number;
   /** Hints revealed during the attempt. */
   hints?: number;
   /** Set once the card was graded automatically, so it is not graded twice. */

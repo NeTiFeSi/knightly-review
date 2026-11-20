@@ -20,7 +20,18 @@ export type Outcome =
   | { kind: 'solved'; played: KNode; reply?: KNode }
   /** The PGN line ended; the live engine takes over (call startLive()). */
   | { kind: 'live'; played: KNode; reply?: KNode }
-  | { kind: 'failed'; reason: FailReason; at: KNode; san?: string; node?: KNode; best?: string; bestSan?: string };
+  | {
+      kind: 'failed';
+      reason: FailReason;
+      at: KNode;
+      san?: string;
+      node?: KNode;
+      best?: string;
+      bestSan?: string;
+      /** Live play in a forced mate: the best mate, and the move's own (undefined when it drops the mate). */
+      bestMate?: number;
+      mate?: number;
+    };
 
 /** Engine UCI (castling as e1g1) for a chessops move (castling as king-takes-rook). */
 export function engineUci(at: KNode, move: Move): string {
@@ -96,6 +107,28 @@ export function mateFor(n: KNode, color: Color): number | undefined {
   return (color === 'white' ? m > 0 : m < 0) ? Math.abs(m) : undefined;
 }
 
+/** The fastest forced mate among the moves at `position`, for the side to move. */
+export function fastestMate(position: KNode): number | undefined {
+  let fastest: number | undefined;
+  position.children.forEach(c => {
+    const m = mateFor(c, position.turn);
+    if (m !== undefined && (fastest === undefined || m < fastest)) fastest = m;
+  });
+  return fastest;
+}
+
+/** Why `node` falls short of a forced mate at `position`: it drops the mate, or (strict) mates slower. */
+export type MateMiss = { kind: 'drops'; best: number } | { kind: 'slower'; mate: number; best: number };
+
+export function mateMiss(position: KNode, node: KNode, strictMate: boolean): MateMiss | undefined {
+  const best = fastestMate(position);
+  if (best === undefined) return undefined;
+  const m = mateFor(node, position.turn);
+  if (m === undefined) return { kind: 'drops', best };
+  if (strictMate && m > best) return { kind: 'slower', mate: m, best };
+  return undefined;
+}
+
 /**
  * Moves accepted at `position`. The first move of the puzzle is graded only by
  * its NAG; at later user turns the line's own next move is also accepted
@@ -110,11 +143,7 @@ export function acceptedMoves(position: KNode, first: boolean, accept: readonly 
     (c, i) => isAccepted(c.nags, accept) || (!first && i === 0 && !isRejected(c.nags, accept)),
   );
   const me = position.turn;
-  let fastest: number | undefined;
-  position.children.forEach(c => {
-    const m = mateFor(c, me);
-    if (m !== undefined && (fastest === undefined || m < fastest)) fastest = m;
-  });
+  const fastest = fastestMate(position);
   if (fastest === undefined) return byNag;
   const mates = byNag.filter(c => {
     const m = mateFor(c, me);
@@ -285,7 +314,17 @@ export class PuzzleRun {
     if (step.kind === 'failed') {
       const node = graft(at, uci, step.line);
       this.liveMoves.push(uci);
-      return this.fail({ kind: 'failed', reason: 'live', at, san: step.san, node, best: step.best, bestSan: step.bestSan });
+      return this.fail({
+        kind: 'failed',
+        reason: 'live',
+        at,
+        san: step.san,
+        node,
+        best: step.best,
+        bestSan: step.bestSan,
+        bestMate: step.bestMate,
+        mate: step.mate,
+      });
     }
     const node = graft(at, uci);
     this.liveMoves.push(uci);

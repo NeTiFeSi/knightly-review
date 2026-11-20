@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findPuzzle, parseGames } from '../src/pgn';
-import { acceptedMoves, PuzzleRun } from '../src/puzzle';
+import { acceptedMoves, mateMiss, PuzzleRun } from '../src/puzzle';
 import { DEFAULT_ACCEPT } from '../src/nag';
 import { games, mv } from './helpers';
 
@@ -140,6 +140,15 @@ describe('forced mates', () => {
     expect(mateRun(true).accepted().map(n => n.san)).toEqual(['Ra8#']);
     const pos = findPuzzle(parseGames(PGN), 1)!.position;
     expect(acceptedMoves(pos, true, DEFAULT_ACCEPT, true).map(n => n.san)).toEqual(['Ra8#']);
+  });
+
+  it('says why a move fell short of the mate', () => {
+    const pos = findPuzzle(parseGames(PGN), 1)!.position;
+    const child = (san: string) => pos.children.find(c => c.san === san)!;
+    expect(mateMiss(pos, child('Kf1'), false)).toEqual({ kind: 'drops', best: 1 });
+    expect(mateMiss(pos, child('Ra7'), false)).toBeUndefined();
+    expect(mateMiss(pos, child('Ra7'), true)).toEqual({ kind: 'slower', mate: 3, best: 1 });
+    expect(mateMiss(pos, child('Ra8#'), true)).toBeUndefined();
   });
 
   it("ignores the opponent's mates (Black to move, White's evals)", () => {

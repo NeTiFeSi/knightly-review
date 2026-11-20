@@ -36,7 +36,18 @@ export type EndReason = 'mate' | 'draw' | 'quiet' | 'limit';
 export type LiveStep =
   | { kind: 'continue'; move: string; reply: string; replyLine: ELine }
   | { kind: 'solved'; move: string; reason: EndReason; reply?: string; replyLine?: ELine }
-  | { kind: 'failed'; move: string; san: string; best: string; bestSan: string; loss: number; line: ELine };
+  | {
+      kind: 'failed';
+      move: string;
+      san: string;
+      best: string;
+      bestSan: string;
+      loss: number;
+      line: ELine;
+      /** In a forced mate: the best mate, and this move's (undefined when it drops the mate). */
+      bestMate?: number;
+      mate?: number;
+    };
 
 function position(fen: string): Chess {
   return Chess.fromSetup(parseFen(fen).unwrap()).unwrap();
@@ -137,6 +148,8 @@ export class LiveLine {
         bestSan: san(this.fen, best.uci),
         loss,
         line: mine,
+        bestMate: mateIn(best, white),
+        mate: mateIn(mine, white),
       };
 
     this.movesPlayed++;

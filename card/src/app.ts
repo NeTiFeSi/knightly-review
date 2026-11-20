@@ -24,7 +24,7 @@ import {
   visibleChildren,
 } from './pgn';
 import type { LiveEngine } from './engine';
-import { acceptedMoves, graft, Outcome, PuzzleRun } from './puzzle';
+import { acceptedMoves, graft, MateMiss, mateMiss, Outcome, PuzzleRun } from './puzzle';
 import { isAccepted } from './nag';
 import { cardKey, clearResult, loadResult, saveResult, StoredResult } from './state';
 
@@ -586,6 +586,8 @@ export class App {
       failUci: this.failMove && makeUci(this.failMove),
       failBest: f && f.best,
       failBestSan: f && f.bestSan,
+      failBestMate: f && f.bestMate,
+      failMate: f && f.mate,
       liveFrom: run.liveFrom && run.liveFrom.id,
       live: run.liveMoves.length ? run.liveMoves.slice() : undefined,
       liveEnd: run.liveEnd,
@@ -756,12 +758,16 @@ export class App {
       if (f.reason === 'gaveup') line('kr-status-main', '✗ Answer shown' + again);
       else if (f.reason === 'unknown') line('kr-status-main', '✗ ' + f.san + ' is not in the analysis' + again);
       else if (f.reason === 'live') {
-        line('kr-status-main', '✗ ' + f.san + ' lets the advantage slip' + again);
+        const miss = liveMateMiss(f.bestMate, f.mate);
+        line('kr-status-main', '✗ ' + f.san + ' ' + (miss ? this.mateMissText(miss) : 'lets the advantage slip') + again);
         if (f.bestSan) line('kr-status-sub', 'Best: ' + f.bestSan);
         note();
         return;
       } else {
-        line('kr-status-main', '✗ ', this.moveBadge(f.node!), again);
+        const miss = mateMiss(f.at, f.node!, this.cfg.strictMate);
+        // Its NAG may say "! Good": the mate rule is what rejected it, so say that instead.
+        if (miss) line('kr-status-main', '✗ ' + f.node!.san + ' ' + this.mateMissText(miss) + again);
+        else line('kr-status-main', '✗ ', this.moveBadge(f.node!), again);
         if (f.node!.comment) line('kr-status-comment', f.node!.comment);
       }
       this.acceptedLine(line, f.at, f.at === run.start);
@@ -776,12 +782,19 @@ export class App {
       el.classList.add(r.status === 'solved' ? 'kr-good' : 'kr-bad');
       const mark = r.status === 'solved' ? '✓ Solved — you played ' : '✗ You played ';
       if (r.status === 'failed' && r.reason === 'gaveup' && !r.played.length) line('kr-status-main', '✗ Answer shown.');
-      else if (mine && mine.node) line('kr-status-main', mark, this.moveBadge(mine.node));
+      else if (mine && mine.node) {
+        const miss = r.status === 'failed' && r.reason === 'rejected' && !r.played.length ? mateMiss(this.puzzle.position, mine.node, this.cfg.strictMate) : undefined;
+        if (miss) line('kr-status-main', mark + mine.node.san + ', which ' + this.mateMissText(miss) + '.');
+        else line('kr-status-main', mark, this.moveBadge(mine.node));
+      }
       else if (r.failSan && r.failAt === this.puzzle.position.id) line('kr-status-main', mark + r.failSan + ' (not analysed)');
       if (r.status === 'failed' && r.played.length) {
         const at = r.failAt ? findNode(this.games, r.failAt) : undefined;
-        if (r.reason === 'live')
-          line('kr-status-sub', 'Then ' + (r.failSan || 'a move') + (at && at.san ? ' after ' + at.san : '') + ' let it slip' + (r.failBestSan ? '; ' + r.failBestSan + ' was best.' : '.'));
+        if (r.reason === 'live') {
+          const miss = liveMateMiss(r.failBestMate, r.failMate);
+          const what = miss ? (miss.kind === 'drops' ? ' missed the forced mate' : ' mated, but slower') : ' let it slip';
+          line('kr-status-sub', 'Then ' + (r.failSan || 'a move') + (at && at.san ? ' after ' + at.san : '') + what + (r.failBestSan ? '; ' + r.failBestSan + ' was best.' : '.'));
+        }
         else line('kr-status-sub', 'Then missed ' + (r.failSan || 'the continuation') + (at && at.san ? ' after ' + at.san : '') + '.');
       }
       const end = this.liveEndText(r.liveEnd as never, r.played.length);
@@ -827,6 +840,13 @@ export class App {
       parts.push(this.moveBadge(n));
     });
     line('kr-status-sub', ...parts);
+  }
+
+  /** "misses the forced mate (mate in 1)" / "mates, but slower (mate in 3; mate in 1 was there)". */
+  private mateMissText(miss: MateMiss): string {
+    const ev = this.cfg.showEval;
+    if (miss.kind === 'drops') return 'misses the forced mate' + (ev ? ' (mate in ' + miss.best + ')' : '');
+    return 'mates, but slower' + (ev ? ' (mate in ' + miss.mate + '; mate in ' + miss.best + ' was there)' : '');
   }
 
   /** "Nd5 ! Good +2.1" */
@@ -947,4 +967,11 @@ export class App {
     wrap.appendChild(m);
     return wrap;
   }
+}
+
+/** A live failure in a forced mate, from the engine's mate counts. */
+function liveMateMiss(best: number | undefined, mate: number | undefined): MateMiss | undefined {
+  if (best === undefined || best === null) return undefined;
+  if (mate === undefined || mate === null) return { kind: 'drops', best };
+  return mate > best ? { kind: 'slower', mate, best } : undefined;
 }

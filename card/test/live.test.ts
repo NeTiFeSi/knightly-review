@@ -199,14 +199,14 @@ describe('LiveLine in a forced mate', () => {
   it('is never quiet, and needs a move that keeps the mate', async () => {
     const live = new LiveLine(new ScriptedEngine(script()), START, 'white', OPTS, false);
     expect(await live.endHere()).toBeUndefined(); // two mating moves, but no quiet stop
-    expect(await live.play('g1f3')).toMatchObject({ kind: 'failed', bestSan: 'e4' });
+    expect(await live.play('g1f3')).toMatchObject({ kind: 'failed', bestSan: 'e4', bestMate: 3, mate: undefined });
   });
 
   it('accepts a slower mate unless strict', async () => {
     const loose = new LiveLine(new ScriptedEngine(script()), START, 'white', OPTS, false);
     expect(await loose.play('d2d4')).toMatchObject({ kind: 'continue', reply: 'd7d5' });
     const strict = new LiveLine(new ScriptedEngine(script()), START, 'white', { ...OPTS, strictMate: true }, false);
-    expect(await strict.play('d2d4')).toMatchObject({ kind: 'failed' });
+    expect(await strict.play('d2d4')).toMatchObject({ kind: 'failed', bestMate: 3, mate: 5 });
     expect((await new LiveLine(new ScriptedEngine(script()), START, 'white', { ...OPTS, strictMate: true }, false).play('e2e4')).kind).not.toBe('failed');
   });
 });
