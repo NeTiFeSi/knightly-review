@@ -174,6 +174,8 @@ class Updater:
 
 
 def _summary(res: UpdateResult) -> str:
+    if res.skipped:
+        return "No new games since the last update."
     parts = [
         f"{res.new_games} new game{'s' if res.new_games != 1 else ''}",
         f"{res.analysed_positions} position{'s' if res.analysed_positions != 1 else ''} analysed",

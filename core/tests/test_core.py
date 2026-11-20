@@ -631,6 +631,38 @@ class JobsTest(unittest.TestCase):
         again = run_update(cfg, c, fetch=False, existing={g.key: res.notes[0].pgn}, analyser_factory=FakeAnalyser)
         self.assertEqual((again.new_cards, again.notes), (0, []))
 
+    def test_skips_when_nothing_changed(self):
+        import time as _t
+        c = tmpcache(self)
+        g = scholar_game(end_ts=int(_t.time()) - 3600)
+        c.put_games([g], "knightlyme")
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
+        calls = []
+        def factory(*a):
+            calls.append(1)
+            return FakeAnalyser(*a)
+        run = lambda cfg=cfg, **kw: run_update(cfg, c, fetch=False, analyser_factory=factory, **kw)  # noqa: E731
+        first = run()
+        existing = {g.key: first.notes[0].pgn}
+        run(existing=existing)  # settles: the new card is on the collection now
+        n = len(calls)
+        again = run(existing=existing)
+        self.assertTrue(again.skipped)
+        self.assertEqual((len(calls), again.notes, again.analysed_positions), (n, [], 0))
+        # A deleted card frees its position, a setting change or a new game changes the inputs.
+        self.assertFalse(run().skipped)
+        self.assertFalse(run(Config(lichess_user="KnightlyMe", stockfish_path="unused", min_loss=20), existing=existing).skipped)
+        c.put_games([scholar_game(end_ts=int(_t.time()) - 60, id="other")], "knightlyme")
+        self.assertFalse(run(existing=existing).skipped)
+
+    def test_unfinished_run_is_not_skipped(self):
+        import time as _t
+        c = tmpcache(self)
+        c.put_games([scholar_game(end_ts=int(_t.time()) - 3600)], "knightlyme")
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused", analysis_minutes=1e-9)
+        run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)  # budget ran out at once
+        self.assertFalse(run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser).skipped)
+
     def test_progress_events(self):
         c = tmpcache(self)
         c.put_games([scholar_game(end_ts=int(__import__("time").time()))], "knightlyme")
