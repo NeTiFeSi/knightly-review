@@ -325,7 +325,7 @@ export const scenarios = [
       await wait(13000); // longer than the whole limit
       t.launch();
       await wait(3000);
-      expect(/Reviewer/.test(t.topActivity()), 'the study screen did not come back: ' + t.topActivity());
+      expect(t.studyScreen(), 'the study screen did not come back: ' + t.topActivity());
       page = await t.page();
       ctx.attach(page);
       const s = await card.read(page);
@@ -352,7 +352,7 @@ export const scenarios = [
   },
   {
     name: 'auto-grade',
-    about: 'With afterAnswer "grade", the card answers itself (Again) and the next card shows',
+    about: 'With afterAnswer "grade", the card answers itself (Again) and the next card shows (AnkiDroid new study screen: it says to use the answer buttons, which then grade)',
     async run(t, ctx) {
       // Again keeps the sample card in learning, so the deck never runs dry.
       const grade = { afterAnswer: 'grade', flipDelay: 300, gradeDelay: 800, gradeSolved: 1, gradeHinted: 1, gradeFailed: 1 };
@@ -360,7 +360,13 @@ export const scenarios = [
       const before = await t.currentCard(page);
       await card.click(page, '.kr-giveup');
       const back = await waitBack(t);
-      await card.waitStatus(back, /Marking as Again/);
+      if (t.studyScreen && t.studyScreen() === 'new') {
+        // No API grades there: the card must say so (and must not poke the screen's "not supported" dialog), and the native buttons grade.
+        await card.waitStatus(back, /grade with the answer buttons/);
+        await ctx.shot('note');
+        expect(!t.dialogShown(), 'the card poked the study screen into its "features not supported" dialog');
+        await t.gradeNative(1);
+      } else await card.waitStatus(back, /Marking as Again/);
       await until(
         async () => {
           const p = await t.page();
@@ -398,6 +404,9 @@ export const scenarios = [
     about: 'A ⚙ setting survives a full restart of the app',
     async run(t, ctx) {
       let page = await fresh(t, ctx, { ...BASE, intro: 'fullGame' });
+      // Seen on AnkiDroid 2.25.3: its new study screen keeps neither the cookie nor localStorage over a restart
+      // (each screen is served from a new port, and even "localStorage in the study screen" did not change that).
+      if (t.studyScreen && t.studyScreen() === 'new') return 'skipped: the new study screen does not keep page storage across an app restart';
       page = await t.restartApp();
       ctx.attach(page);
       await card.waitMounted(page, 'front');

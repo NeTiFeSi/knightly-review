@@ -5,7 +5,7 @@ import type { Key } from 'chessground/types';
 import { chessgroundMove } from 'chessops/compat';
 import type { Move } from 'chessops/types';
 import { makeSquare, makeUci, parseUci } from 'chessops/util';
-import { answerCard, canControlReviewer, Ease, showAnswer } from './anki';
+import { answerCard, canAnswerCard, canControlReviewer, Ease, showAnswer } from './anki';
 import { Board } from './board';
 import type { CardRef, Config } from './cardRef';
 import { formatEval, whiteShare } from './eval';
@@ -530,6 +530,11 @@ export class App {
   private scheduleGrade(): void {
     const r = this.result;
     if (this.cfg.afterAnswer !== 'grade' || !r || r.graded) return;
+    if (!canAnswerCard()) {
+      this.manualNote = 'Automatic grading is not available here — grade with the answer buttons.';
+      this.renderStatus();
+      return;
+    }
     const { ease, slow } = pickEase(r, this.cfg);
     this.gradePending = {
       ease,
@@ -906,7 +911,7 @@ export class App {
         );
         return;
       }
-      const again = this.cfg.afterAnswer === 'grade' ? '.' : ' — press Again.';
+      const again = this.cfg.afterAnswer === 'grade' && canAnswerCard() ? '.' : ' — press Again.';
       if (run.status === 'solved') {
         el.classList.add('kr-good');
         const how = run.hintsUsed ? '✓ Solved with ' + hintCount(run.hintsUsed) + ' — ' : '✓ Solved — ';

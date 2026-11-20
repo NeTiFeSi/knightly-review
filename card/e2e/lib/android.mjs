@@ -1,6 +1,8 @@
 // Target: a separate AnkiDroid test app on a phone, over adb (Wi-Fi) + WebView DevTools.
 import { MEDIA } from './deploy.mjs';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { tmpdir } from 'node:os';
 import { CARD_DIR, loadState, puppeteer, SAMPLE_DECK, saveState, sh, until, wait } from './common.mjs';
 
 const env = process.env;
@@ -21,7 +23,6 @@ export const ANDROID = {
   devtools: Number(env.KR_DROID_DEVTOOLS_PORT || 9223),
   serial: env.KR_ADB_SERIAL || '',
 };
-const API = { version: '0.0.3', developer: 'https://github.com/NeTiFeSi/knightly-review' };
 
 export class AndroidTarget {
   name = 'android';
@@ -102,7 +103,7 @@ export class AndroidTarget {
   }
 
   topActivity() {
-    const m = this.shell('dumpsys activity activities').match(/topResumedActivity=\S+ \S+ (\S+)/);
+    const m = this.shell('dumpsys activity activities').match(/(?:topResumedActivity=|ResumedActivity: )\S+ \S+ (\S+)/);
     return m ? m[1] : '';
   }
 
@@ -137,28 +138,65 @@ export class AndroidTarget {
     }, 'a Knightly card in the study screen');
   }
 
-  /** Call an AnkiDroid JS API function in the card and unwrap {success, value}. */
-  async api(page, name) {
-    const r = await page.evaluate(
-      async (cfg, fn) => {
-        const res = await new AnkiDroidJS(cfg)[fn]();
-        return typeof res === 'string' ? JSON.parse(res) : res;
-      },
-      API,
-      name,
-    );
-    if (r && typeof r === 'object' && 'success' in r) {
-      if (!r.success) throw new Error(name + ' failed');
-      return r.value;
-    }
-    return r;
+  /**
+   * Which AnkiDroid study screen is on top: 'new' (2.25+ `previewer.CardViewerActivity`), 'old' (`Reviewer`) or ''.
+   * The new one has no JS API and does not let the card grade, so scenarios branch on this.
+   */
+  studyScreen() {
+    const top = this.topActivity();
+    return /CardViewerActivity/.test(top) ? 'new' : /\.Reviewer/.test(top) ? 'old' : '';
   }
 
+  /**
+   * A token that is the same while this card stays on screen and different for the next card (the old reviewer
+   * reloads the page, the new study screen swaps the card's DOM in place). No AnkiDroid API needed.
+   */
   async currentCard(page) {
     page = page || (await this.page());
-    const deck = await this.api(page, 'ankiGetDeckName');
-    if (deck !== SAMPLE_DECK) throw new Error(`the study screen shows deck "${deck}", not ${SAMPLE_DECK}; refusing`);
-    return { id: await this.api(page, 'ankiGetCardId'), deck, did: await this.api(page, 'ankiGetCardDid') };
+    const id = await page.evaluate(() => {
+      const root = document.getElementById('kr-root');
+      return root ? root.__krId || (root.__krId = Math.random().toString(36).slice(2)) : '';
+    });
+    if (!id) throw new Error('no Knightly card on the study screen');
+    return { id };
+  }
+
+  /**
+   * Answer with the study screen's own button (language-independent ids). Only the new study screen needs it:
+   * there the card cannot grade, so a scenario that wants the next card does what a person does.
+   */
+  async gradeNative(ease) {
+    const name = { 1: 'again', 2: 'hard', 3: 'good', 4: 'easy' }[ease];
+    await this.tapId(`com.ichi2.anki:id/${name}_button`, 8000);
+  }
+
+  /** The test deck's id: the saved one, else read from the test app's collection (copied over adb; no AnkiDroid API). */
+  async deckId() {
+    const saved = loadState().androidDeckId;
+    if (saved) return saved;
+    this.shell('am force-stop ' + this.userFlag() + ANDROID.pkg); // flush the WAL into place
+    const dir = mkdtempSync(tmpdir() + '/kr-col-');
+    try {
+      const folder = ANDROID.media.replace(/\/collection\.media\/?$/, '');
+      for (const f of ['collection.anki2', 'collection.anki2-wal']) {
+        try {
+          this.adb('pull', folder + '/' + f, dir + '/' + f);
+        } catch (e) {
+          if (f === 'collection.anki2') throw e;
+        }
+      }
+      const db = new DatabaseSync(dir + '/collection.anki2');
+      try {
+        const rows = db.prepare('select id from decks where name = ?').all(SAMPLE_DECK);
+        if (rows.length !== 1) throw new Error(`found ${rows.length} decks named "${SAMPLE_DECK}" in ${ANDROID.pkg}'s collection (run the import command first)`);
+        saveState({ androidDeckId: String(rows[0].id) });
+        return String(rows[0].id);
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   /** Tap the on-screen element whose text is `text` (via a UI dump; for native screens). */
@@ -172,6 +210,12 @@ export class AndroidTarget {
     }, '"' + text + '" on screen', timeout, 700);
     const [x1, y1, x2, y2] = bounds;
     this.shell(`input tap ${Math.round((x1 + x2) / 2)} ${Math.round((y1 + y2) / 2)}`);
+  }
+
+  /** Is an AlertDialog on screen? (e.g. the new study screen's "features not yet supported" one.) */
+  dialogShown() {
+    this.shell('uiautomator dump /sdcard/kr-ui.xml >/dev/null 2>&1');
+    return /resource-id="android:id\/button1"/.test(this.shell('cat /sdcard/kr-ui.xml'));
   }
 
   /** Tap the on-screen element with this resource id (language-independent; e.g. a dialog's "android:id/button1"). */
@@ -250,27 +294,17 @@ export class AndroidTarget {
   /** Open the sample deck's study screen and return the card page (front). */
   async openDeck() {
     await this.assertSafe();
-    const did = loadState().androidDeckId;
-    if (did) {
-      this.startReview(did);
-    } else {
-      // First run: find the sample deck. Launching resumes the app where it was; if that is
-      // already the study screen, currentCard() below checks it is the sample deck.
-      this.launch();
-      await wait(2000);
-      if (!/Reviewer/.test(this.topActivity())) await this.tapText(SAMPLE_DECK, 20000);
-    }
+    const did = await this.deckId();
+    this.startReview(did);
     await wait(1500);
     let page = await this.page();
-    const card = await this.currentCard(page); // throws on any other deck
-    if (!did || String(card.did) !== String(did)) saveState({ androidDeckId: card.did });
+    await this.currentCard(page);
     // A previous test may have left the study screen on an answer: start it again for a question.
     for (let i = 0; i < 2 && (await this.side(page)) === 'back'; i++) {
       this.disconnect();
-      this.startReview(card.did);
+      this.startReview(did);
       await wait(1500);
       page = await this.page();
-      await this.currentCard(page);
     }
     return page;
   }
@@ -286,16 +320,19 @@ export class AndroidTarget {
   }
 
   /**
-   * Bring the test app back like a launcher tap: resume where it was. A clone has no `monkey --user`,
-   * and its launcher activity restarts at the deck list, so bring the study screen's task forward.
+   * Bring the test app back like a launcher tap: resume where it was. A clone has no `monkey --user`, and its
+   * launcher activity (IntentHandler) opens the deck list on top of the study screen. The new study screen is not
+   * an exported activity either, so `am start` cannot reorder it. What works is moving its whole task to the front
+   * (`am task lock` does that; stopping the lock right away leaves nothing pinned).
    */
   launch() {
     if (!ANDROID.user) return this.shell(`monkey -p ${ANDROID.pkg} -c android.intent.category.LAUNCHER 1`);
-    const top = this.shell('dumpsys activity activities');
     const pkg = ANDROID.pkg.replace(/\./g, '\\.');
-    const reviewer = new RegExp(`u${ANDROID.user} ${pkg}/((?:com\\.ichi2\\.anki)?\\.(?:Reviewer|previewer\\.CardViewerActivity))`).exec(top);
-    if (reviewer) this.shell(`am start ${this.userFlag()}-f 0x20000 -n ${ANDROID.pkg}/${reviewer[1]}`); // REORDER_TO_FRONT
-    else this.shell(`am start ${this.userFlag()}-f 0x10200000 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler`);
+    const task = new RegExp(`Task\\{\\w+ #(\\d+) type=standard A=\\d+:${pkg} U=${ANDROID.user} `).exec(this.shell('dumpsys activity activities'));
+    if (task) {
+      this.shell(`am task lock ${task[1]}`);
+      this.shell('am task lock stop');
+    } else this.shell(`am start ${this.userFlag()}-f 0x10200000 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler`);
   }
 
   side(page) {

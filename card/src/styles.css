@@ -49,6 +49,10 @@
 
 .kr-hidden { display: none !important; }
 
+/* The host's own CSS styles bare form controls (AnkiDroid's reviewer.css gives every <button> a margin, which
+   pushed the gear off its corner and indented the controls). Start from no margin; our classes below add theirs. */
+.kr-root :where(button, input, select, textarea) { margin: 0; }
+
 /* Header */
 .kr-head { margin: 0 0 8px; }
 .kr-players { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600; }

@@ -123,8 +123,11 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a â
 | `gradeSlow` | `2` | Ease for a slow solve (1 Again â€¦ 4 Easy). It never grades better than the hint/solved ease. |
 | `showClock` | `true` | Show the clock on the front; off shows the time only on the back. |
 
-Flipping and grading use `pycmd` on desktop and the JS API on AnkiDroid. AnkiMobile and AnkiWeb
-have no such hook, so the card stays on the front there and asks you to show the answer.
+The card never flips or grades by itself, it asks the host: `pycmd` on desktop, AnkiDroid's own global
+`showAnswer()` / `buttonAnswerEaseN()` on AnkiDroid (no AnkiDroid JS API needed). AnkiDroid's new study
+screen (2.25+) flips the same way but has nothing to grade with, so there `afterAnswer: 'grade'` only
+shows a note and you grade with its own buttons. AnkiMobile and AnkiWeb have no hook at all, so the card
+stays on the front there and asks you to show the answer.
 
 ## Anki notes
 
