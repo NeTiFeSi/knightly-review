@@ -85,10 +85,18 @@ describe('findPuzzle', () => {
 });
 
 describe('visibility', () => {
-  it('front shows only the mainline', () => {
+  it('front shows the mainline only up to the puzzle position', () => {
     const o = view('front', 1);
-    expect(visible(o).every(n => n.mainline)).toBe(true);
-    expect(visible(o).length).toBe(14);
+    const vis = visible(o);
+    expect(vis.every(n => n.mainline)).toBe(true);
+    expect(vis[vis.length - 1]).toBe(o.puzzle.position);
+    expect(vis).not.toContain(o.puzzle.gameMove);
+  });
+  it('front does not leak the game after a played game move', () => {
+    const o = view('front', 1);
+    o.revealed.add(o.puzzle.gameMove.id);
+    const vis = visible(o);
+    expect(vis[vis.length - 1]).toBe(o.puzzle.gameMove);
   });
   it('front reveals nodes the user played', () => {
     const o = view('front', 1);
