@@ -280,7 +280,8 @@ export class AndroidTarget {
   launch() {
     if (!ANDROID.user) return this.shell(`monkey -p ${ANDROID.pkg} -c android.intent.category.LAUNCHER 1`);
     const top = this.shell('dumpsys activity activities');
-    const reviewer = /u${ANDROID.user} ${ANDROID.pkg}\/(\.Reviewer|\.previewer\.CardViewerActivity)/.exec(top);
+    const pkg = ANDROID.pkg.replace(/\./g, '\\.');
+    const reviewer = new RegExp(`u${ANDROID.user} ${pkg}/((?:com\\.ichi2\\.anki)?\\.(?:Reviewer|previewer\\.CardViewerActivity))`).exec(top);
     if (reviewer) this.shell(`am start ${this.userFlag()}-f 0x20000 -n ${ANDROID.pkg}/${reviewer[1]}`); // REORDER_TO_FRONT
     else this.shell(`am start ${this.userFlag()}-f 0x10200000 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${ANDROID.pkg}/com.ichi2.anki.IntentHandler`);
   }
@@ -318,7 +319,7 @@ export class AndroidTarget {
     for (const f of MEDIA) readFileSync(CARD_DIR + 'dist/' + f); // fails early if not built
     for (const f of MEDIA) this.adb('push', CARD_DIR + 'dist/' + f, ANDROID.media + '/' + f);
     this.shell('am force-stop ' + this.userFlag() + ANDROID.pkg); // drop the WebView's copy
-    return 'pushed ' + MEDIA.join(', ') + ' to ' + ANDROID.media + ' (templates are not updated: re-import the .apkg for template changes)';
+    return 'pushed ' + MEDIA.join(', ') + ' to ' + ANDROID.media + ' (templates are not updated: run `run.mjs import --target android` for template changes)';
   }
 
   async screenshot(page, file) {
