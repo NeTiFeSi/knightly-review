@@ -54,6 +54,17 @@ PUZZLE_EVAL = Eval(depth=20, lines=[
 ])
 
 
+def positions_scored(moves: list[str], scores: list[Score]) -> dict[str, Score]:
+    """fen key → score, along a game."""
+    out = {}
+    b = chess.Board()
+    for ply in range(len(moves) + 1):
+        out[fen_key(b.fen())] = scores[ply]
+        if ply < len(moves):
+            b.push_uci(moves[ply])
+    return out
+
+
 class FakeAnalyser:
     """Scripted evals instead of an engine; other positions are a dead draw with no line."""
 
@@ -61,6 +72,9 @@ class FakeAnalyser:
         self.table = {PUZZLE_FEN: PUZZLE_EVAL} if table is None else table
         self.stats = {"fake": 0}
         self.calls = 0
+        # Step-by-step scores (any depth): the scholar's mate game as scripted.
+        self.scores = positions_scored(SCHOLAR_MOVES, SCHOLAR_SCORES)
+        self.searched: list[tuple[str, int]] = []  # (fen key, depth) of each score() call
 
     def __enter__(self):
         return self
@@ -78,8 +92,14 @@ class FakeAnalyser:
             return Eval(99, [Line(Score(cp=-10000 if board.turn else 10000, wdl=lost), [])], "fake")
         return Eval(10, [Line(S(0, 0, 1000, 0), [])], "fake")
 
-    def analyse_game(self, game: Game, progress=None):
-        return list(SCHOLAR_SCORES)
+    def known(self, keys):
+        return {}
+
+    def score(self, board, depth):
+        k = fen_key(board.fen())
+        self.searched.append((k, depth))
+        s = self.scores.get(k)
+        return (s if s is not None else self.evaluate(board).lines[0].score), depth
 
 
 class FakeResponse:
@@ -171,6 +191,7 @@ class ScriptedAnalyser(FakeAnalyser):
         super().__init__(table={})
         self.games = {g.id: g for g in games}
         self.script = script
+        self.scores = {}
         for g in games:
             e = 50.0
             for ply, u in enumerate(g.moves):
@@ -181,6 +202,4 @@ class ScriptedAnalyser(FakeAnalyser):
                     alt = next(m.uci() for m in b.legal_moves if m.uci() != u)
                     self.table[fen_key(b.fen())] = Eval(20, [Line(score_for(e), [alt]), Line(score_for(after), [u])])
                 e = after
-
-    def analyse_game(self, game: Game, progress=None):
-        return scores_with(self.script.get(game.id, {}), len(game.moves))
+            self.scores.update(positions_scored(g.moves, scores_with(script.get(g.id, {}), len(g.moves))))

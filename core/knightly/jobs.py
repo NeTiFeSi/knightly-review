@@ -1,4 +1,4 @@
-"""One update run: fetch → quick analysis → select → deep analysis → notes.
+"""One update run: fetch → analysis by increasing depth (deepen.py) → select → notes.
 
 `run_update` is the single entry point for the add-on (in a background thread),
 the CLI, and later the companion process and a server. It never touches an
@@ -8,13 +8,12 @@ Anki collection: it takes the existing notes' PGN in and gives NoteSpecs out.
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import chess
 
-from . import http, notes, openings, sources
+from . import deepen, http, notes, openings, sources
 from .cache import Cache, fen_key
 from .config import Config
 from .engine.analyse import Analyser
@@ -24,7 +23,8 @@ from .select import (build_card, find_candidates, opening_candidates, parse_open
                      ranked_candidates)
 from .sources import chesscom, lichess
 
-# progress(stage, done, total, message)
+# progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
+# of max_new_cards), positions (the current step, emitted often), cards.
 Progress = Callable[[str, int, int, str], None]
 
 
@@ -32,7 +32,7 @@ Progress = Callable[[str, int, int, str], None]
 class UpdateResult:
     notes: list[NoteSpec] = field(default_factory=list)
     new_games: int = 0
-    analysed_games: int = 0
+    analysed_positions: int = 0  # engine searches in this run (any depth)
     new_cards: int = 0
     cancelled: bool = False
     warnings: list[str] = field(default_factory=list)
@@ -44,10 +44,6 @@ class UpdateResult:
 
 def _opponent(g: Game) -> str:
     return (g.black if g.user_is_white else g.white) or "Your opponent"
-
-
-def _scores(raw: list) -> list[Optional[Score]]:
-    return [Score.from_json(s) if s else None for s in raw]
 
 
 def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, int], by_key: dict[str, Game],
@@ -82,6 +78,19 @@ def _opening_note(key: str, new: list[tuple[Game, CardSpec]], groups: list[Group
     return notes.build_opening(key, label, ply, entries, existing_pgn)
 
 
+def _card_rank(cfg: Config, by_key: dict[str, Game], groups: list[Group]) -> deepen.Rank:
+    """The order candidates are confirmed in, close to the order the note grouping makes cards in."""
+    if cfg.note_grouping == "opening":
+        group_of = {g.key: i for i, gr in enumerate(groups) for g in gr.games}
+        return lambda e, loss, count: (group_of.get(e.game_key, len(groups)), e.ply)
+    if cfg.note_grouping == "ranked":  # select.ranked_candidates' score
+        def ranked(e: deepen.Edge, loss: float, count: int) -> tuple:
+            weight = (1.0 if by_key[e.game_key].user_result() < 1 else 0.6) if e.mine else 0.8
+            return (-loss * weight * (1 + 0.5 * (count - 1)),)
+        return ranked
+    return lambda e, loss, count: (-by_key[e.game_key].end_ts, e.ply)  # newest game first
+
+
 def opening_order(groups: list[Group], keys: set[str]) -> list[str]:
     """Opening note keys by (opening importance, ply). Openings no longer ranked go last."""
     rank = {(gr.color, gr.slug): i for i, gr in enumerate(groups)}
@@ -100,7 +109,9 @@ def fetch_all(cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event
     for source, user in jobs:
         # A manual update may always ask Lichess (incremental); Chess.com's cache makes
         # frequent asks pointless, so its cooldown always applies.
-        if not sources.due(cache, source, user) and not (force and source == "lichess"):
+        mod = lichess if source == "lichess" else chesscom
+        backfill = mod.needs_backfill(cache, user, cfg.history_days)  # the look-back grew
+        if not sources.due(cache, source, user) and not (force and source == "lichess") and not backfill:
             continue
         msg = lambda m: progress("fetch", 0, 0, m)  # noqa: E731
         msg(f"Fetching games from {'Lichess' if source == 'lichess' else 'Chess.com'}…")
@@ -142,7 +153,7 @@ def run_update(
         if fetch:
             fetch_all(cfg, cache, force=force, cancel=cancel, progress=progress, result=result)
 
-        since = int(time.time() - cfg.history_days * 86400)
+        since = sources.since_ts(cfg.history_days)
         games: list[Game] = []
         for source, user in (("lichess", cfg.lichess_user), ("chesscom", cfg.chesscom_user)):
             if user:
@@ -150,29 +161,33 @@ def run_update(
         games.sort(key=lambda g: g.end_ts, reverse=True)  # newest first across both sites
         by_key = {g.key: g for g in games}
 
-        # Quick pass over games not analysed yet, newest first, a bounded number per run.
-        todo = [g for g in games if cache.get_analysis(g) is None][: cfg.max_games_per_run]
+        # Positions already on cards (in any note) are never picked again.
+        carded: dict[str, dict[str, int]] = {k: notes.card_ids(p) for k, p in existing.items()}
+        exclude = {fk for ids in carded.values() for fk in ids}
+        by_opening = cfg.note_grouping == "opening"
+        threshold = cfg.opening_min_loss if by_opening else cfg.min_loss
+        min_loss: Optional[float] = cfg.opening_min_loss if by_opening else None
+
+        progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
+        positions = deepen.collect(games, cfg, exclude)
+        groups = openings.rank(games) if by_opening else []
         with (analyser_factory or Analyser)(cfg, cache, cancel) as an:
             an.gate = gate
-            for i, g in enumerate(todo):
-                progress("analyse", i, len(todo), f"Analysing game {i + 1} of {len(todo)} ({g.white} – {g.black})")
-                scores = an.analyse_game(g)
-                cache.put_analysis(g, [s.to_json() if s else None for s in scores])
-                result.analysed_games += 1
+            # Step-by-step analysis, most-seen positions first; see deepen.py.
+            dp = deepen.Deepener(positions, an, cfg, threshold=threshold, card_min_loss=min_loss,
+                                 opponents={g.key: _opponent(g) for g in games}, want=cfg.max_new_cards,
+                                 rank=_card_rank(cfg, by_key, groups), progress=progress)
+            dp.run()
+            result.analysed_positions = dp.analysed
 
-            # Positions already on cards (in any note) are never picked again.
-            carded: dict[str, dict[str, int]] = {k: notes.card_ids(p) for k, p in existing.items()}
-            exclude = {fk for ids in carded.values() for fk in ids}
-            scored = {g.key: _scores(raw) for g in games if (raw := cache.get_analysis(g)) is not None}
-            by_opening = cfg.note_grouping == "opening"
+            # The mode decides the order among the confirmed moves.
+            scored = {g.key: dp.scores_of(g.key) for g in games}
             if by_opening:
-                groups = openings.rank(games)
                 cands = opening_candidates(groups, scored, cfg, exclude)
-                min_loss: Optional[float] = cfg.opening_min_loss
             else:
                 pick = ranked_candidates if cfg.note_grouping == "ranked" else find_candidates
-                cands = pick([(g, scored[g.key]) for g in games if g.key in scored], cfg, exclude)
-                min_loss = None
+                cands = pick([(g, scored[g.key]) for g in games], cfg, exclude)
+            cands = [c for c in cands if (c.fen_key, c.played) in dp.confirmed]
 
             # Deep pass, in the order above, until we have enough cards.
             per_note: dict[str, list[tuple[Game, CardSpec]]] = {}
@@ -180,7 +195,7 @@ def run_update(
             for c in cands:
                 if made >= cfg.max_new_cards:
                     break
-                progress("cards", made, cfg.max_new_cards, f"Checking a candidate puzzle ({made} of {cfg.max_new_cards} found)")
+                progress("cards", made, cfg.max_new_cards, f"Building the cards ({made} of {cfg.max_new_cards})")
                 g = by_key[c.game_key]
                 board = chess.Board()
                 for u in g.moves[: c.ply]:

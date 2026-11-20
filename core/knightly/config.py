@@ -28,10 +28,10 @@ class Config:
     lc0_weights: str = ""  # network file; empty = Lc0 finds one itself
     deep_multipv: int = 0  # lines analysed at a puzzle position; 0 = every legal move
     # What to fetch and how much work one run does.
-    history_days: int = 90
+    history_days: int = 90  # 0 or negative = all time
     time_classes: list[str] = field(default_factory=lambda: ["blitz", "rapid", "classical", "correspondence"])
     rated_only: bool = False
-    max_games_per_run: int = 40
+    analysis_minutes: float = 10  # engine time per update; 0 = until enough cards are found
     max_new_cards: int = 10
     # How cards are grouped into notes and which come first:
     # "game": one note per game, games newest first, every move losing `min_loss` or more.

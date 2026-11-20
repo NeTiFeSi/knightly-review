@@ -10,6 +10,13 @@ import time
 MIN_INTERVAL = {"lichess": 30 * 60, "chesscom": 3 * 3600}
 
 
+def since_ts(history_days: int, now: float | None = None) -> int:
+    """Oldest game end time to keep. `history_days` 0 or negative means all time."""
+    if history_days <= 0:
+        return 0
+    return int((now or time.time()) - history_days * 86400)
+
+
 def cooldown_key(source: str, user: str) -> str:
     return f"next_fetch:{source}:{user.lower()}"
 

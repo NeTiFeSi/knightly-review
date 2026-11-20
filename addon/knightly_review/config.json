@@ -19,7 +19,7 @@
     "correspondence"
   ],
   "rated_only": false,
-  "max_games_per_run": 40,
+  "analysis_minutes": 10,
   "max_new_cards": 10,
   "note_grouping": "game",
   "opening_min_loss": 2.0,

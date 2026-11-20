@@ -10,7 +10,7 @@ python -m unittest discover -s tests  # no network or engine needed
 python -m knightly engines            # Stockfish / Lc0 found on this computer
 python -m knightly install-options    # how this OS's package manager installs Stockfish
 python -m knightly download-stockfish DIR
-python -m knightly update --lichess USER --chesscom USER --max-games 5 --max-cards 3 --out notes.json
+python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards 3 --out notes.json
 #   --depth 20 (Stockfish depth), --stockfish PATH, --lc0 PATH (also run Lc0, in parallel)
 ```
 
@@ -21,6 +21,7 @@ python -m knightly update --lichess USER --chesscom USER --max-games 5 --max-car
 | `cache.py` | SQLite (WAL) cache: games, evals, HTTP validators, cursors. Safe across threads and processes |
 | `engine/discover.py`, `engine/install.py` | Find Stockfish and Lc0 (no other engines are supported); package-manager commands; official Stockfish download |
 | `engine/analyse.py` | Stockfish (fixed depth) and optional Lc0 (fixed time) in parallel, always with WDL; Lc0's answer is used except in mate positions; cached per engine |
+| `deepen.py` | Analysis by increasing depth: every position at depth 1 (most-seen first), then possible mistakes deeper one depth at a time, then the full setup that makes the card; the rest is deepened when no candidates are left. Stops at enough cards or the time budget |
 | `select.py` | Win-rate loss (engine WDL) and phase; which moves become cards, in which order (game by game, or by opening and ply); good-move and sacrifice tests, NAGs |
 | `openings.py` | Names a game's opening (family) and ranks openings by points lost (4 per loss, 2 per draw, 1 per win), per colour |
 | `notes.py` | PGN with `[%kr N]` tags and stable card numbers; one note per game, or per opening and ply (one game per card) |

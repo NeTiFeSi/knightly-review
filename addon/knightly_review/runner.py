@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import time
 import traceback
+from collections import deque
 from typing import Callable, Optional
 
 from aqt import gui_hooks, mw
@@ -32,8 +33,17 @@ class Updater:
         self.cancel = threading.Event()
         self.listeners: list[Listener] = []
         self.last: tuple[str, int, int, str] = ("idle", 0, 0, "No update has run yet.")
+        # The current analysis step (positions done, total, what the step is).
+        self.positions: tuple[int, int, str] = (0, 0, "")
+        # Everything the run reported, for the window's log (also what happened before it was opened).
+        # Entries are (sequence number, line) so a reader can pick up only the new ones.
+        self.history: deque[tuple[int, str]] = deque(maxlen=1000)
+        self._seq = 0
+        self._logged = ""
+        self._lock = threading.Lock()
         self.timer: Optional[QTimer] = None
         self._last_emit = 0.0
+        self._pending = False
         # Cleared while a card is being played on with the live engine: analysis then waits.
         self.gate = threading.Event()
         self.gate.set()
@@ -42,14 +52,38 @@ class Updater:
     def running(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
 
-    # progress → listeners, always on the main thread
+    def log(self, line: str) -> None:
+        with self._lock:
+            self._seq += 1
+            self.history.append((self._seq, time.strftime("%H:%M:%S  ") + line))
+
+    def history_since(self, seq: int) -> list[tuple[int, str]]:
+        with self._lock:
+            return [h for h in self.history if h[0] > seq]
+
+    # progress → listeners, always on the main thread, at most every 0.2 s; the last report of a
+    # burst is still delivered.
     def _emit(self, stage: str, done: int, total: int, msg: str, force: bool = False) -> None:
-        self.last = (stage, done, total, msg)
         now = time.monotonic()
-        if not force and now - self._last_emit < 0.2:
-            return
-        self._last_emit = now
-        mw.taskman.run_on_main(lambda: [f(*self.last) for f in list(self.listeners)])
+        if stage == "positions":
+            self.positions = (done, total, msg)
+        else:
+            self.last = (stage, done, total, msg)
+            if msg and msg != self._logged:
+                self._logged = msg
+                self.log(msg)
+        if force or (now - self._last_emit >= 0.2 and not self._pending):
+            self._last_emit = now
+            mw.taskman.run_on_main(self._deliver)
+        elif not self._pending:
+            self._pending = True
+            mw.taskman.run_on_main(lambda: QTimer.singleShot(200, self._deliver))
+
+    def _deliver(self) -> None:
+        self._pending = False
+        self._last_emit = time.monotonic()
+        for f in list(self.listeners):
+            f(*self.last)
 
     def start(self, manual: bool) -> bool:
         """Start an update. Returns False if one is running or setup is incomplete."""
@@ -73,6 +107,8 @@ class Updater:
         deck = cfg.get("deck") or kc.MODEL
         self.cancel = threading.Event()
         cancel = self.cancel
+        self.positions, self._logged = (0, 0, ""), ""
+        self.log(f"── {'Update' if manual else 'Automatic update'} started ──")
         self._emit("start", 0, 0, "Starting…" + (f" ({'; '.join(changes)})" if changes else ""), force=True)
 
         def work() -> None:
@@ -139,7 +175,7 @@ class Updater:
 def _summary(res: UpdateResult) -> str:
     parts = [
         f"{res.new_games} new game{'s' if res.new_games != 1 else ''}",
-        f"{res.analysed_games} analysed",
+        f"{res.analysed_positions} position{'s' if res.analysed_positions != 1 else ''} analysed",
         f"{res.new_cards} new card{'s' if res.new_cards != 1 else ''}",
     ]
     text = ", ".join(parts) + "."

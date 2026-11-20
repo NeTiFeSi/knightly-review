@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional
+from typing import Iterable, Optional
 
 import chess
 import chess.engine
@@ -21,7 +21,7 @@ import chess.engine
 from ..cache import Cache, fen_key
 from ..config import Config
 from ..http import Cancelled
-from ..model import Eval, Game, Line, NoWdl, Score
+from ..model import Eval, Line, NoWdl, Score
 from .discover import LC0, STOCKFISH, kind_of, popen_kwargs
 
 WDL_OPTION = "UCI_ShowWDL"
@@ -95,22 +95,27 @@ class Engine:
             self._proc, self.name = eng, name
         return self._proc
 
-    def evaluate(self, board: chess.Board, multipv: int, moves: Optional[list[str]] = None) -> Eval:
-        """With `moves`, only those root moves are searched (not cached)."""
+    def evaluate(self, board: chess.Board, multipv: int, moves: Optional[list[str]] = None,
+                 depth: Optional[int] = None) -> Eval:
+        """With `moves`, only those root moves are searched (not cached). `depth` (Stockfish
+        only) searches to that depth instead of the configured one."""
         key = fen_key(board.fen())
+        shallow = depth is not None and self.kind == STOCKFISH
+        effort = depth if shallow else self.effort
         if not moves:
-            ev = self.cache.get_eval(key, self.kind, multipv=multipv, min_effort=self.effort)
+            ev = self.cache.get_eval(key, self.kind, multipv=multipv, min_effort=effort)
             if ev:
                 return ev
         root = [chess.Move.from_uci(m) for m in moves] if moves else None
-        infos = self.proc().analyse(board, self.limit(), multipv=multipv, root_moves=root)
+        limit = chess.engine.Limit(depth=depth) if shallow else self.limit()
+        infos = self.proc().analyse(board, limit, multipv=multipv, root_moves=root)
         if isinstance(infos, dict):
             infos = [infos]
         lines = [Line(_score(i), [m.uci() for m in i.get("pv", [])]) for i in infos if "score" in i]
         ev = Eval(depth=int(min(i.get("depth", 0) for i in infos)), lines=lines, source=self.kind)
         self.calls += 1
         if not moves:
-            self.cache.put_eval(key, self.kind, self.effort, ev)
+            self.cache.put_eval(key, self.kind, effort, ev)
         return ev
 
     def close(self) -> None:
@@ -186,16 +191,19 @@ class Analyser:
         self.picked[LC0] += 1
         return lc
 
-    def analyse_game(self, game: Game, progress: Optional[Callable[[int, int], None]] = None) -> list[Optional[Score]]:
-        """Score (White's view, with WDL) of every position in the game, index 0 = start position."""
-        board = chess.Board()
-        positions = [board.copy(stack=False)]
-        for u in game.moves:
-            board.push_uci(u)
-            positions.append(board.copy(stack=False))
-        scores: list[Optional[Score]] = []
-        for i, b in enumerate(positions):
-            scores.append(self.evaluate(b, ply=i).score)
-            if progress:
-                progress(i + 1, len(positions))
-        return scores
+    def score(self, board: chess.Board, depth: int) -> tuple[Score, int]:
+        """Stockfish alone, one line, at `depth` (or a deeper cached result): the score
+        (White's view, with WDL) and the depth it was searched to. Not for finished games."""
+        self._check()
+        ev = self.sf.evaluate(board, 1, depth=depth)
+        if not ev.lines:
+            return terminal(board), depth
+        return ev.lines[0].score, max(depth, ev.depth)
+
+    def known(self, keys: Iterable[str]) -> dict[str, tuple[int, Score]]:
+        """Deepest cached Stockfish score of each position: fen key → (depth, score)."""
+        out = {}
+        for k, (effort, ev) in self.sf.cache.best_evals(list(keys), STOCKFISH).items():
+            if ev.lines:
+                out[k] = (effort, ev.lines[0].score)
+        return out

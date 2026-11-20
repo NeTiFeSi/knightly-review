@@ -82,14 +82,13 @@ def fetch(
     if r.status_code == 404:
         raise ValueError(f"Chess.com user {user!r} not found")
     r.raise_for_status()
-    t = time.gmtime((now or time.time()) - history_days * 86400)
-    first = (t.tm_year, t.tm_mon)
+    first = _first_month(history_days, now)
     done_key = f"chesscom_done:{u}"
-    done = set(cache.get(done_key, []))
+    # Before the look-back was recorded, the oldest month was stored only in part: redo all once.
+    done = set(cache.get(done_key, [])) if cache.get(_first_key(u)) is not None else set()
     cur = time.gmtime(now or time.time())
     current = (cur.tm_year, cur.tm_mon)
     archives = [a for a in r.json().get("archives", []) if _month(a) >= first and a not in done]
-    since_ts = int((now or time.time()) - history_days * 86400)
     new = 0
     for url in archives:
         if cancel is not None and cancel.is_set():
@@ -108,8 +107,10 @@ def fetch(
         resp.raise_for_status()
         games = []
         for d in resp.json().get("games", []):
+            # Every game of the month is kept, whatever the look-back: the month is then
+            # really done, even if the look-back is extended later (the update filters by date).
             g = parse_game(d, user)
-            if not g or g.end_ts < since_ts:
+            if not g:
                 continue
             if time_classes and g.time_class not in time_classes:
                 continue
@@ -120,5 +121,23 @@ def fetch(
         cache.put_http(url, resp.headers.get("ETag"), resp.headers.get("Last-Modified"))
         if _month(url) < current:
             done.add(url)  # a finished month never changes
-    cache.set(done_key, sorted(done))
+        cache.set(done_key, sorted(done))  # after each month, so a cancelled backfill resumes
+    cache.set(_first_key(u), list(first))
     return new
+
+
+def _first_month(history_days: int, now: Optional[float] = None) -> tuple[int, int]:
+    if history_days <= 0:
+        return (0, 0)  # all time
+    t = time.gmtime((now or time.time()) - history_days * 86400)
+    return (t.tm_year, t.tm_mon)
+
+
+def _first_key(user: str) -> str:
+    return f"chesscom_first:{user.lower()}"
+
+
+def needs_backfill(cache, user: str, history_days: int, now: Optional[float] = None) -> bool:
+    """True when the look-back now reaches further back than any fetch so far."""
+    got = cache.get(_first_key(user))
+    return got is None or _first_month(history_days, now) < tuple(got)
