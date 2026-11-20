@@ -358,6 +358,21 @@ class SettingsDialog(QDialog):
         self.minutes.setValue(int(self.cfg.get("analysis_minutes", 10)))
         self.minutes.setToolTip("Engine time one update may spend. Analysis carries on in the next update.")
         wf.addRow("Analysis per update:", self.minutes)
+        self.keep = QComboBox()
+        self.keep.addItem("Stop when the update is done", "off")
+        self.keep.addItem("Keep analysing, to have cards ready for later updates", "precalculate")
+        self.keep.addItem("Keep adding cards, with no limit per update", "unlimited")
+        self.keep.setCurrentIndex(max(0, self.keep.findData(self.cfg.get("keep_running", "off"))))
+        self.keep.setToolTip("After an update has made its cards. Pauses while you review with the live engine. "
+                             "Stop it with Cancel in the progress window or by closing the profile.")
+        wf.addRow("After the update:", self.keep)
+        self.keep_hours = QDoubleSpinBox()
+        self.keep_hours.setRange(0, 72)
+        self.keep_hours.setDecimals(1)
+        self.keep_hours.setSuffix(" h")
+        self.keep_hours.setSpecialValueText("until stopped or everything is analysed")
+        self.keep_hours.setValue(float(self.cfg.get("keep_running_hours", 0)))
+        wf.addRow("For at most:", self.keep_hours)
         self.grouping = QComboBox()
         self.grouping.addItem("One note per game, newest games first", "game")
         self.grouping.addItem("One note per game, biggest mistakes first (all games)", "ranked")
@@ -507,6 +522,14 @@ class SettingsDialog(QDialog):
         if not self.engine_path:
             showWarning("Choose Stockfish first (press “Change…” in the Stockfish box).", parent=self)
             return
+        keep = self.keep.currentData() or "off"
+        if keep != "off" and self.cfg.get("keep_running", "off") == "off" and not askUser(
+                "Keeping the analysis running uses the CPU (and the GPU with Lc0) at full load, for as long as "
+                "you chose.\n\n• Laptops: the battery drains fast.\n• Heat, fan noise, and possible thermal "
+                "throttling.\n• Other programs get slower; lower “Threads” to leave room.\n\n"
+                "It pauses while you play against the engine on a card, and stops with Cancel in the progress "
+                "window or when you close the profile.\n\nTurn it on?", parent=self):
+            return
         self.cfg.pop("engine_path", None)  # replaced by stockfish_path
         self.cfg.update(
             lichess_user=self.lichess.text().strip(),
@@ -520,6 +543,8 @@ class SettingsDialog(QDialog):
             deck=self.deck.text().strip() or "Knightly Review",
             max_new_cards=self.max_cards.value(),
             analysis_minutes=self.minutes.value(),
+            keep_running=keep,
+            keep_running_hours=round(self.keep_hours.value(), 1),
             include_opponent=self.opponent.isChecked(),
             note_grouping=self.grouping.currentData() or "game",
             opening_min_loss=round(self.opening_loss.value(), 2),
@@ -618,7 +643,7 @@ class ProgressWindow(QDialog):
             self.bar.setFormat({"done": "Done", "error": "Failed"}.get(stage, ""))
         else:
             self.bar.setRange(0, 0)  # busy
-        self.cancel_btn.setEnabled(updater.running and stage not in ("done", "error"))
+        self.cancel_btn.setEnabled(updater.keeping or (updater.running and stage not in ("done", "error")))
         self._update_positions(stage)
         self._update_log()
 

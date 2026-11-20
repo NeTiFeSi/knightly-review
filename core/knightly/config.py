@@ -32,6 +32,12 @@ class Config:
     rated_only: bool = False
     analysis_minutes: float = 10  # engine time per update; 0 = until enough cards are found
     max_new_cards: int = 10
+    # Keep analysing after an update has made its cards: "off"; "precalculate" (keep deepening and
+    # confirming candidates and save them for the next update); "unlimited" (keep adding cards, in
+    # batches of max_new_cards, with no per-update cap). `keep_running_hours`: 0 = until stopped or
+    # everything is at full depth. Used by the add-on's runner, not by one run_update.
+    keep_running: str = "off"
+    keep_running_hours: float = 0
     # How cards are grouped into notes and which come first:
     # "game": one note per game, games newest first, every move losing `min_loss` or more.
     # "ranked": one note per game; mistakes from all games ranked together by

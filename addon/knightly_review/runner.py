@@ -8,6 +8,7 @@ undoable CollectionOp.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import traceback
@@ -47,6 +48,11 @@ class Updater:
         # Cleared while a card is being played on with the live engine: analysis then waits.
         self.gate = threading.Event()
         self.gate.set()
+        # "Keep analysing" (settings.keep_running): after an update made its cards, more rounds follow
+        # until this time, `stopped`, or nothing is left. Stopping also ends the rounds.
+        self.keep_until = math.inf
+        self.stopped = False
+        self.keeping = False  # a keep-running session is under way (also between two rounds)
 
     @property
     def running(self) -> bool:
@@ -85,8 +91,10 @@ class Updater:
         for f in list(self.listeners):
             f(*self.last)
 
-    def start(self, manual: bool) -> bool:
-        """Start an update. Returns False if one is running or setup is incomplete."""
+    def start(self, manual: bool, _round: str = "") -> bool:
+        """Start an update. Returns False if one is running or setup is incomplete.
+        `_round`: "", or what a keep-running session continues with: "more" (another batch of cards) or
+        "precalc" (analyse and save candidates, no cards)."""
         if self.running or mw.col is None:
             return False
         cfg = settings.load()
@@ -105,35 +113,83 @@ class Updater:
             return False
         core = settings.core_config(cfg)
         deck = cfg.get("deck") or kc.MODEL
+        if not _round:
+            self.stopped = False
+            hours = core.keep_running_hours if core.keep_running in ("precalculate", "unlimited") else 0
+            self.keep_until = time.monotonic() + hours * 3600 if hours > 0 else math.inf
+            self.keeping = core.keep_running in ("precalculate", "unlimited")
+        left_min = (self.keep_until - time.monotonic()) / 60
+        if _round == "precalc":  # runs for the rest of the time, or until everything is at full depth
+            core.analysis_minutes = max(0.05, left_min) if left_min != math.inf else 0
+        elif _round and left_min != math.inf:
+            core.analysis_minutes = min(core.analysis_minutes or left_min, max(0.05, left_min))
         self.cancel = threading.Event()
         cancel = self.cancel
         self.positions, self._logged = (0, 0, ""), ""
-        self.log(f"── {'Update' if manual else 'Automatic update'} started ──")
+        self.log("── " + {"more": "Next batch of cards", "precalc": "Pre-calculating for later updates"}.get(
+            _round, "Update" if manual else "Automatic update") + " ──")
         self._emit("start", 0, 0, "Starting…" + (f" ({'; '.join(changes)})" if changes else ""), force=True)
 
         def work() -> None:
             cache = SqliteCache(settings.CACHE_PATH)
             try:
-                res = run_update(core, cache, existing=existing, progress=self._emit, cancel=cancel, force=manual,
-                                 gate=self.gate)
+                res = run_update(core, cache, existing=existing, progress=self._emit, cancel=cancel,
+                                 force=manual and not _round, gate=self.gate, precalculate=_round == "precalc",
+                                 fetch=_round == "")
                 err = None
             except Exception as e:  # reported on the main thread
                 res, err = None, (e, traceback.format_exc())
             finally:
                 cache.close()
-            mw.taskman.run_on_main(lambda: self._finish(res, err, deck, manual))
+            mw.taskman.run_on_main(lambda: self._finish(res, err, deck, manual, core.keep_running, _round))
 
         self.thread = threading.Thread(target=work, name="knightly-update", daemon=True)
         self.thread.start()
         return True
 
     def stop(self, wait: float = 0) -> None:
+        self.stopped = True
+        if not self.running:  # between two rounds: nothing to cancel, just end the session
+            self._end_keeping()
         self.cancel.set()
         if wait and self.thread is not None:
             self.thread.join(wait)
 
-    def _finish(self, res: Optional[UpdateResult], err, deck: str, manual: bool) -> None:
+    def _next_round(self, res: UpdateResult, mode: str, round_: str) -> None:
+        """After a round's cards are in the collection: carry on, or end the keep-running session."""
+        again = ""
+        if mode in ("precalculate", "unlimited") and self.keeping and not self.stopped and not res.cancelled \
+                and time.monotonic() < self.keep_until:
+            if round_ == "precalc":
+                again = ""  # one pass up to the time limit or full depth
+            elif mode == "precalculate":
+                again = "precalc"
+            elif not res.skipped and (res.new_cards or not res.finished):
+                again = "more"
+        if again and mw.col is not None:
+            QTimer.singleShot(500, lambda: self._start_round(again))
+        else:
+            self._end_keeping(res)
+
+    def _start_round(self, round_: str) -> None:
+        """The timer's side of `_next_round`: stop, closing the profile or another update may have happened since."""
+        if self.stopped or not self.keeping or mw.col is None:
+            self._end_keeping()
+        elif self.running:  # an update started by hand or the schedule took over; it resets the session
+            self.keeping = False
+        elif not self.start(manual=False, _round=round_):
+            self._end_keeping()
+
+    def _end_keeping(self, res: Optional[UpdateResult] = None) -> None:
+        if self.keeping:
+            self.keeping = False
+            self._emit("done", 1, 1, "Finished analysing in the background." if res is not None and not res.cancelled
+                       else "Stopped analysing in the background.", force=True)
+
+    def _finish(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str = "off",
+                round_: str = "") -> None:
         if err is not None:
+            self.keeping = False
             e, tb = err
             print(tb)
             self._emit("error", 0, 0, f"Update failed: {e}", force=True)
@@ -143,22 +199,26 @@ class Updater:
         assert res is not None
         summary = _summary(res)
         if res.cancelled:
+            self.keeping = False
             self._emit("done", 0, 0, "Cancelled. " + summary, force=True)
             return
         if (not res.notes and not res.order) or mw.col is None:
             self._emit("done", 1, 1, summary, force=True)
-            if manual or res.warnings:
+            if (manual or res.warnings) and not round_:
                 tooltip("Knightly Review: " + summary, period=5000)
+            self._next_round(res, mode, round_)
             return
 
         def done(_changes) -> None:
             hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
             self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
-            if res.notes or manual:
+            if (res.notes or manual) and not round_:
                 tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
+            self._next_round(res, mode, round_)
 
         CollectionOp(parent=mw, op=lambda col: kc.apply_notes(col, res.notes, deck, res.order)).success(done).failure(
-            lambda e: self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
+            lambda e: (setattr(self, "keeping", False),
+                       self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True))
         ).run_in_background()
 
     # scheduling

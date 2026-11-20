@@ -36,6 +36,7 @@ from .model import Game, Score
 from .select import build_card
 
 DONE = 10_000  # depth given to finished positions (mate, stalemate…): nothing to search
+UNBOUNDED = 10**6  # `want` at or above this: no cap, keep confirming (pre-calculating)
 BACKGROUND_CHUNK = 200  # positions deepened between two looks at the candidates
 
 
@@ -103,7 +104,7 @@ class Deepener:
     def __init__(self, positions: Positions, analyser, cfg: Config, *, threshold: float,
                  card_min_loss: Optional[float], opponents: dict[str, str], want: int,
                  rank: Optional[Rank] = None, progress: Optional[Progress] = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, confirmed: Iterable[tuple[str, str]] = ()):
         self.p, self.an, self.cfg = positions, analyser, cfg
         self.threshold = threshold
         self.card_min_loss = card_min_loss
@@ -123,6 +124,11 @@ class Deepener:
         self.pending: set[Edge] = set()  # candidates not yet tried at full depth
         self.tried: set[Edge] = set()
         self.confirmed: set[tuple[str, str]] = set()  # (fen key, move) that made a card
+        known = set(confirmed)  # confirmed by an earlier run (saved by the pre-calculating option)
+        for e in positions.edges:
+            if (e.before, e.played) in known:
+                self.confirmed.add((e.before, e.played))
+                self.tried.add(e)
         self.analysed = 0  # positions searched by the engine in this run
         self.finished = False  # run() left nothing to continue: enough cards, or every position at full depth
         self._bg_level, self._bg_list, self._bg_i = 1, [], 0
@@ -168,7 +174,10 @@ class Deepener:
             left = self.deadline - self.clock()
             budget = "" if left == math.inf else f" · {max(0, math.ceil(left / 60))} min left"
             found = len(self.confirmed)
-            self.progress("analyse", found, self.want, f"{step} ({found} of {self.want} puzzles found{budget})")
+            if self.want >= UNBOUNDED:
+                self.progress("analyse", found, 0, f"{step} ({found} puzzles found{budget})")
+            else:
+                self.progress("analyse", found, self.want, f"{step} ({found} of {self.want} puzzles found{budget})")
         self.progress("positions", done, total, step)
 
     # --- work
