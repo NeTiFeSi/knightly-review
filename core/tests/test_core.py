@@ -644,11 +644,13 @@ class JobsTest(unittest.TestCase):
         run = lambda cfg=cfg, **kw: run_update(cfg, c, fetch=False, analyser_factory=factory, **kw)  # noqa: E731
         first = run()
         existing = {g.key: first.notes[0].pgn}
+        self.assertFalse(run().skipped)  # cards were made last time and may never have been written
         run(existing=existing)  # settles: the new card is on the collection now
         n = len(calls)
         again = run(existing=existing)
         self.assertTrue(again.skipped)
         self.assertEqual((len(calls), again.notes, again.analysed_positions), (n, [], 0))
+        self.assertFalse(run(existing=existing, force=True).skipped)
         # A deleted card frees its position, a setting change or a new game changes the inputs.
         self.assertFalse(run().skipped)
         self.assertFalse(run(Config(lichess_user="KnightlyMe", stockfish_path="unused", min_loss=20), existing=existing).skipped)

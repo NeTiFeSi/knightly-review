@@ -189,9 +189,9 @@ def run_update(
 
         fp = fingerprint(cfg, by_key, exclude)
         last = cache.get(STATE_KEY) or {}
-        if last.get("finished") and last.get("fingerprint") == fp:
+        if not force and last.get("finished") and last.get("fingerprint") == fp:
             result.skipped = True
-            progress("analyse", 0, 0, "No new games since the last update.")
+            progress("analyse", 0, 0, "Nothing changed since the last update.")
             return result
         cache.set(STATE_KEY, {"fingerprint": fp, "finished": False, "ts": time.time()})
 
@@ -206,7 +206,6 @@ def run_update(
                                  rank=_card_rank(cfg, by_key, groups), progress=progress)
             dp.run()
             result.analysed_positions = dp.analysed
-            cache.set(STATE_KEY, {"fingerprint": fp, "finished": dp.finished, "ts": time.time()})
 
             # The mode decides the order among the confirmed moves.
             scored = {g.key: dp.scores_of(g.key) for g in games}
@@ -244,6 +243,10 @@ def run_update(
             if by_opening:
                 result.order = opening_order(groups, set(existing) | set(per_note))
             result.stats = dict(an.stats)
+            # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and
+            # if they never reach the collection (cancelled, write failed) the next run must try again.
+            if dp.finished and not result.new_cards:
+                cache.set(STATE_KEY, {"fingerprint": fp, "finished": True, "ts": time.time()})
     except http.Cancelled:
         result.cancelled = True
     return result
