@@ -37,7 +37,7 @@ from typing import Iterable, Iterator, Optional
 
 import chess
 
-from . import phases
+from . import motifs as motifs_mod, phases
 from .cache import fen_key
 from .config import Config
 from .model import Candidate, CardSpec, Choice, Game, Line, Score
@@ -226,6 +226,22 @@ def parse_game_note_key(key: str) -> Optional[tuple[str, str]]:
     return game_key, phase
 
 
+MOTIF_NOTE_CARDS = 10  # a motif note holds this many cards; the next one starts a new note
+
+
+def motif_note_key(motif: str, n: int) -> str:
+    """'fork', 3 → 'motif:fork:3'."""
+    return f"motif:{motif}:{n}"
+
+
+def parse_motif_note_key(key: str) -> Optional[tuple[str, int]]:
+    """(motif, number) of a motif note key, or None for another key."""
+    parts = key.split(":")
+    if len(parts) != 3 or parts[0] != "motif" or not parts[2].isdigit():
+        return None
+    return parts[1], int(parts[2])
+
+
 def opening_note_key(group: Group, ply: int) -> str:
     return f"opening:{group.color}:{group.slug}:{ply + 1}"
 
@@ -294,14 +310,15 @@ def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[st
 
 
 def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
-               opponent: str = "", min_loss: Optional[float] = None) -> Optional[CardSpec]:
+               opponent: str = "", min_loss: Optional[float] = None, tag_motifs: bool = True) -> Optional[CardSpec]:
     """Deep-analyse the puzzle position and grade its candidate moves.
 
     None when the position isn't a fair puzzle: only one legal move, or the deep
     look says the played move wasn't a real mistake (it lost less than half of
     `min_loss`, default `cfg.min_loss`, or it counts as a correct answer). `opponent`
     is the name of the player who made the move when it wasn't the user (an
-    opponent-mistake card).
+    opponent-mistake card). `tag_motifs=False` skips the motif tagging (when only
+    asking whether the position makes a card).
     """
     if board.legal_moves.count() < 2:
         return None
@@ -326,6 +343,12 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
     assert played_choice is not None
     if not any(c.nag in ACCEPTED for c in choices):
         return None
+    best_line = by_move[choices[0].move]
+    sc = best_line.score
+    cp = motifs_mod.MATE_CP * (1 if sc.mate > 0 else -1) if sc.mate is not None else (sc.cp or 0)
+    if board.turn == chess.BLACK:
+        cp = -cp
+    found = [] if not tag_motifs else motifs_mod.detect(board, best_line.moves, cp, choices[0].nag in (BRILLIANT, INTERESTING))
     best_san = board.san(chess.Move.from_uci(choices[0].move))
     played_san = board.san(chess.Move.from_uci(played))
     if opponent:
@@ -340,4 +363,5 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         loss=g_played.loss,
         comment=comment,
         mine=not opponent,
+        motifs=found,
     )

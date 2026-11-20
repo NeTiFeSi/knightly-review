@@ -377,13 +377,16 @@ class SettingsDialog(QDialog):
         self.grouping.addItem("One note per game, newest games first", "game")
         self.grouping.addItem("One note per game, biggest mistakes first (all games)", "ranked")
         self.grouping.addItem("By opening and move, costliest openings first", "opening")
+        self.grouping.addItem("By tactical motif (fork, pin, …), biggest mistakes first", "motif")
         self.grouping.setCurrentIndex(max(0, self.grouping.findData(self.cfg.get("note_grouping", "game"))))
         self.grouping.setToolTip(
             "Biggest mistakes first: mistakes from all games ranked by win rate lost, more for games you\n"
             "didn't win and for positions you keep reaching.\n"
             "By opening: one note per opening (and your colour) and move number. Openings where you lost\n"
             "the most points (4 per loss, 2 per draw, 1 per win) come first, from the first move on, and\n"
-            "new cards are studied in that order.")
+            "new cards are studied in that order.\n"
+            "By motif: one note per tactic of the best move (fork, pin, skewer, back-rank mate, mate in N,\n"
+            "promotion, …), up to 10 cards each, from any game. Biggest mistakes first.")
         wf.addRow("Cards:", self.grouping)
         self.opening_loss = QDoubleSpinBox()
         self.opening_loss.setRange(0.1, 50)

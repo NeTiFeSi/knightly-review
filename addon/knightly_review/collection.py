@@ -22,6 +22,7 @@ MEDIA = (BUNDLE, "_kr_stockfish.js", "_kr_stockfish.wasm")  # card bundle + buil
 CARD_DIR = Path(__file__).resolve().parent / "card"
 GAME_TAG_PREFIX = kn.GAME_TAG
 OPENING_TAG_PREFIX = kn.OPENING_TAG
+MOTIF_TAG_PREFIX = kn.MOTIF_TAG
 
 
 def _assets(card_dir: Path = CARD_DIR) -> dict[str, Any]:
@@ -108,9 +109,9 @@ def key_from_tags(tags: list[str]) -> str | None:
 
 
 def existing_notes(col: Collection) -> dict[str, str]:
-    """Generated notes in the collection: note key (a game's, or an opening+ply's) → PGN."""
+    """Generated notes in the collection: note key (a game's, an opening+ply's or a motif's) → PGN."""
     out: dict[str, str] = {}
-    query = f'"note:{MODEL}" ("tag:{GAME_TAG_PREFIX}*" OR "tag:{OPENING_TAG_PREFIX}*")'
+    query = f'"note:{MODEL}" ("tag:{GAME_TAG_PREFIX}*" OR "tag:{OPENING_TAG_PREFIX}*" OR "tag:{MOTIF_TAG_PREFIX}*")'
     for nid in col.find_notes(query):
         note = col.get_note(nid)
         key = key_from_tags(note.tags)
@@ -126,9 +127,9 @@ def _write_note(col: Collection, nt: Any, did: int, spec: NoteSpec) -> None:
     note["PGN"] = kn.pgn_to_field(spec.pgn)
     note["Cards"] = spec.cards
     note["Notes"] = spec.notes
-    if not spec.key.startswith("opening:"):
+    if not spec.key.startswith(("opening:", "motif:")):
         # A game note is rebuilt whole, so its generated tags are replaced (the user's own
-        # are kept). An opening note only gets the tags of its new games, so they're added.
+        # are kept). An opening or motif note only gets the tags of its new games, so they're added.
         stale = [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]
         for t in stale:
             note.remove_tag(t)
@@ -196,7 +197,7 @@ class RunWriter:
 def apply_notes(col: Collection, specs: list[NoteSpec], deck: str, order: list[str] | None = None) -> OpChanges:
     """Add new notes and update changed ones, as one undoable step.
 
-    `order` (opening mode): note keys in study order; their new cards are moved to the
+    `order` (opening and motif modes): note keys in study order; their new cards are moved to the
     front of the new-card queue in that order (see `reposition_new`).
     """
     nt = _note_type(col)

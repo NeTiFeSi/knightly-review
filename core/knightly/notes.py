@@ -15,7 +15,7 @@ from . import openings, phases
 from .cache import fen_key
 from .engine.analyse import MATED
 from .model import CardSpec, Game, NoteSpec, Score
-from .select import BLUNDER, DUBIOUS, MISTAKE, game_note_key, parse_game_note_key
+from .select import BLUNDER, DUBIOUS, MISTAKE, game_note_key, parse_game_note_key, parse_motif_note_key
 
 KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
@@ -23,8 +23,10 @@ NOTE_TAG = "knightly"
 
 GAME_TAG = f"{NOTE_TAG}::game::"
 OPENING_TAG = f"{NOTE_TAG}::by-opening::"
+MOTIF_TAG = f"{NOTE_TAG}::by-motif::"
 _GAME_TAG_RE = re.compile(re.escape(GAME_TAG) + r"([a-z]+)-(.+)::(" + "|".join(phases.PHASES) + ")$", re.I)
 _OPENING_TAG_RE = re.compile(re.escape(OPENING_TAG) + r"(white|black)-([a-z0-9-]+)::ply-(\d+)$", re.I)
+_MOTIF_TAG_RE = re.compile(re.escape(MOTIF_TAG) + r"([a-z0-9-]+)::n-(\d+)$", re.I)
 SEVERITY = {BLUNDER: "blunder", MISTAKE: "mistake", DUBIOUS: "inaccuracy"}
 RESULT = {1.0: "win", 0.5: "draw", 0.0: "loss"}
 
@@ -34,10 +36,16 @@ def note_key_tag(key: str) -> str:
 
     A game's note for one phase (key lichess:abcd1234:endgame): knightly::game::lichess-abcd1234::endgame.
     An opening note (key opening:black:sicilian-defense:10): knightly::by-opening::black-sicilian-defense::ply-010.
+    A motif note (key motif:fork:2): knightly::by-motif::fork::n-002.
     """
     if key.startswith("opening:"):
         _, color, slug, ply = key.split(":")
         return f"{OPENING_TAG}{color}-{slug}::ply-{int(ply):03d}"
+    if key.startswith("motif:"):
+        parsed_motif = parse_motif_note_key(key)
+        if parsed_motif is None:
+            raise ValueError(f"not a note key: {key}")
+        return f"{MOTIF_TAG}{parsed_motif[0]}::n-{parsed_motif[1]:03d}"
     parsed = parse_game_note_key(key)
     if parsed is None:
         raise ValueError(f"not a note key: {key}")
@@ -54,6 +62,9 @@ def key_from_tags(tags: list[str]) -> Optional[str]:
         m = _OPENING_TAG_RE.match(t)
         if m:
             return f"opening:{m[1].lower()}:{m[2].lower()}:{int(m[3])}"
+        m = _MOTIF_TAG_RE.match(t)
+        if m:
+            return f"motif:{m[1].lower()}:{int(m[2])}"
     return None
 
 
@@ -174,6 +185,7 @@ def _tags(entries: list[tuple[Game, CardSpec]]) -> list[str]:
             t.add(f"time::{g.time_class}")
         if c.played.nag in SEVERITY:
             t.add(f"severity::{SEVERITY[c.played.nag]}")
+        t |= {f"motif::{m}" for m in c.motifs}
         if not c.mine:
             t.add("opponent")  # cards from the opponent's mistakes
     return [f"{NOTE_TAG}::{x}" for x in sorted(t)]
@@ -241,6 +253,35 @@ def build_opening(
     The games already in the note (`existing_pgn`) are kept as they are, with their
     numbers; the new games follow.
     """
+    head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
+    return _build_grouped(key, head, entries, existing_pgn)
+
+
+def motif_label(motif: str) -> str:
+    """'back-rank-mate' → 'Back rank mate'; 'mate-in-2' → 'Mate in 2'."""
+    return motif.replace("-", " ").capitalize()
+
+
+def build_motif(
+    key: str,
+    entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
+    existing_pgn: str = "",
+) -> NoteSpec:
+    """The note for one motif (see select.motif_note_key): one game per card, games added over time."""
+    parsed = parse_motif_note_key(key)
+    if parsed is None:
+        raise ValueError(f"not a motif note key: {key}")
+    head = f"{motif_label(parsed[0])} (set {parsed[1]})"
+    return _build_grouped(key, head, entries, existing_pgn)
+
+
+def _build_grouped(
+    key: str,
+    head: str,
+    entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
+    existing_pgn: str,
+) -> NoteSpec:
+    """A note of one game per card (opening and motif notes). `head` is the first line of its notes."""
     old_ids = card_ids(existing_pgn) if existing_pgn else {}
     cards = [c for _, _, c in entries]
     ids, new_cards = _assign_ids(cards, old_ids)
@@ -248,7 +289,6 @@ def build_opening(
     parts = [existing_pgn.strip()] if existing_pgn.strip() else []
     parts += [_game_pgn(g, s, [c], ids).strip() for g, s, c in entries]
     pgn = "\n\n".join(parts)
-    head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
     numbers = sorted(set(ids.values()))
     return NoteSpec(
         key=key,

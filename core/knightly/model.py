@@ -157,6 +157,7 @@ class CardSpec:
     loss: float
     comment: str = ""
     mine: bool = True
+    motifs: list[str] = field(default_factory=list)  # tactical motifs of the best move, main one first
 
 
 @dataclass

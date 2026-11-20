@@ -202,7 +202,7 @@ class Deepener:
         self.pending.discard(e)
         board = chess.Board(self.p.fen[e.before])
         opponent = "" if e.mine else self.opponents.get(e.game_key, "Your opponent")
-        if build_card(board, e.ply, e.played, self.an, self.cfg, opponent, self.card_min_loss):
+        if build_card(board, e.ply, e.played, self.an, self.cfg, opponent, self.card_min_loss, tag_motifs=False):
             self.confirmed.add((e.before, e.played))
         self._step = ""  # report the new count
 

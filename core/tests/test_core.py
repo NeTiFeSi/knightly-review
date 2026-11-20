@@ -433,7 +433,7 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(n.cards, "{{c1::1::1}}")
         self.assertEqual(n.key, "lichess:test0001:opening")
         self.assertTrue(n.notes.startswith("Opening · <a href"))
-        self.assertEqual(n.tags, ["knightly", "knightly::game::lichess-test0001::opening", "knightly::color::black",
+        self.assertEqual(n.tags, ["knightly", "knightly::game::lichess-test0001::opening", "knightly::color::black", "knightly::motif::other",
                                   "knightly::opening::king-s-pawn-game", "knightly::phase::opening", "knightly::rated",
                                   "knightly::result::loss", "knightly::severity::blunder", "knightly::site::lichess",
                                   "knightly::time::blitz"])
@@ -618,6 +618,27 @@ class JobsTest(unittest.TestCase):
         res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
         # Biggest scores first, whatever the game: 30 (a loss) beats 20 × 0.6 (a win) and 12.
         self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:s1:opening", 1), ("lichess:f1:opening", 1)])
+
+    def test_motif_mode(self):
+        import time as _t
+        c = tmpcache(self)
+        now = int(_t.time())
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
+        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
+        c.put_games([sic, fr], "knightlyme")
+        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2, note_grouping="motif")
+        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
+        # One note per motif, games from any opening in it, biggest mistakes first.
+        self.assertEqual(res.new_cards, 2)
+        self.assertTrue(all(n.key.startswith("motif:") for n in res.notes))
+        self.assertEqual(res.order, [n.key for n in res.notes])
+        for n in res.notes:
+            self.assertIn(notes.note_key_tag(n.key), n.tags)
+            self.assertTrue(any(t.startswith("knightly::motif::") for t in n.tags))
+        existing = {n.key: n.pgn for n in res.notes}
+        again = run_update(cfg, c, fetch=False, existing=existing, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
+        self.assertEqual(again.new_cards, 1)
 
     def test_run_update_without_fetch(self):
         c = tmpcache(self)
