@@ -50,3 +50,9 @@ Settings, through environment variables:
 - **AnkiDroid new study screen:** its activity is not exported, so `am start` can't bring it forward; `launch()` moves its task to the front with `am task lock` / `lock stop`. It keeps neither cookies nor localStorage over an app restart (the `settings-survive` scenario is skipped there).
 - **AnkiDroid's "Enable AnkiDroid API"** (the ContentProvider) can't be used from `adb shell` (`Permission not granted for: CardContentProvider.query`).
 - **AnkiDroid:** AnkiDroid's `reviewer.css` gives bare `<button>`s a margin; the card resets it (`.kr-root :where(button, …)`) so the gear and controls stay aligned.
+
+## README pictures
+
+`node e2e/screenshots.mjs [--anki]` (after `npm run build`) rewrites `docs/img/` with the sample games and some arrows drawn by hand.
+- **Without `--anki`:** the card pictures come from the dev harness in headless Chromium (`KR_CHROME` picks the binary). No Anki is needed. Only this mode makes the phone-sized picture, which is a browser window, not AnkiDroid.
+- **With `--anki`** (the test Anki running, `deploy` done): pictures and the short GIFs (8 fps, via ffmpeg) come from the real reviewer, live play included, and the add-on's Qt windows (settings, Stockfish, update progress) are saved through the test-only helper add-on `e2e/helper/kr_shots`. It serves `127.0.0.1:8767`, shows each window with sample data and saves `widget.grab()` of it. Install it once, in the test profile only: `ln -s "$PWD/e2e/helper/kr_shots" ~/.local/share/Anki2-knightly-test/addons21/kr_shots`, then restart the test Anki.
