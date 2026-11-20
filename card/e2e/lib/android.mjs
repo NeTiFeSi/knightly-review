@@ -178,7 +178,7 @@ export class AndroidTarget {
     const dir = mkdtempSync(tmpdir() + '/kr-col-');
     try {
       const folder = ANDROID.media.replace(/\/collection\.media\/?$/, '');
-      for (const f of ['collection.anki2', 'collection.anki2-wal']) {
+      for (const f of ['collection.anki2', 'collection.anki2-wal', 'collection.anki2-shm']) {
         try {
           this.adb('pull', folder + '/' + f, dir + '/' + f);
         } catch (e) {
@@ -187,7 +187,7 @@ export class AndroidTarget {
       }
       const db = new DatabaseSync(dir + '/collection.anki2');
       try {
-        const rows = db.prepare('select id from decks where name = ?').all(SAMPLE_DECK);
+        const rows = db.prepare('select id from decks where name = ? collate binary').all(SAMPLE_DECK);
         if (rows.length !== 1) throw new Error(`found ${rows.length} decks named "${SAMPLE_DECK}" in ${ANDROID.pkg}'s collection (run the import command first)`);
         saveState({ androidDeckId: String(rows[0].id) });
         return String(rows[0].id);
@@ -214,7 +214,7 @@ export class AndroidTarget {
 
   /** Is an AlertDialog on screen? (e.g. the new study screen's "features not yet supported" one.) */
   dialogShown() {
-    this.shell('uiautomator dump /sdcard/kr-ui.xml >/dev/null 2>&1');
+    this.shell('rm -f /sdcard/kr-ui.xml; uiautomator dump /sdcard/kr-ui.xml >/dev/null 2>&1');
     return /resource-id="android:id\/button1"/.test(this.shell('cat /sdcard/kr-ui.xml'));
   }
 

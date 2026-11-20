@@ -56,7 +56,7 @@ export function canControlReviewer(): boolean {
 
 /** Can the card grade by itself? (Not on AnkiDroid's new study screen: use its answer buttons.) */
 export function canAnswerCard(): boolean {
+  if (onNewStudyScreen()) return false;
   const win = w();
-  if (typeof win.pycmd === 'function') return true;
-  return !onNewStudyScreen() && typeof win.buttonAnswerEase1 === 'function';
+  return typeof win.pycmd === 'function' || typeof win.buttonAnswerEase1 === 'function';
 }
