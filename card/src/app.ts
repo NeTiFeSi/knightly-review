@@ -321,10 +321,6 @@ export class App {
       );
       controls.appendChild(giveUpBtn);
     }
-    const exportWrap = h('span', 'kr-export');
-    exportWrap.appendChild(button('kr-export-btn', '⤴ Export', 'Open this position elsewhere, or copy its FEN', () => this.toggleExport()));
-    controls.appendChild(exportWrap);
-    this.exportEl = exportWrap;
     col.appendChild(controls);
 
     const status = h('div', 'kr-status');
@@ -384,6 +380,10 @@ export class App {
     const hd = this.puzzle.game.headers;
     const head = h('div', 'kr-head');
     head.appendChild(button('kr-gear', '⚙', 'Card settings', () => this.extras.openSettings()));
+    const exportWrap = h('span', 'kr-export');
+    exportWrap.appendChild(button('kr-export-btn', '⤴', 'Export this position: chess.com, Lichess, copy FEN', () => this.toggleExport()));
+    head.appendChild(exportWrap);
+    this.exportEl = exportWrap;
     const player = (color: 'White' | 'Black') => {
       const name = hd.get(color) || '?';
       const elo = hd.get(color + 'Elo');

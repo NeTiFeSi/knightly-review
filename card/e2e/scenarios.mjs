@@ -135,6 +135,55 @@ export const scenarios = [
     },
   },
   {
+    name: 'nag-badge',
+    about: "A move's classification shows as a badge on the board (back: the game's move; hidden on the front)",
+    async run(t, ctx) {
+      let page = await fresh(t, ctx);
+      const count = () => page.evaluate(() => document.querySelectorAll('.cg-custom-svgs text').length);
+      expect((await count()) === 0, 'the front must not show a badge on the puzzle move');
+      await card.setOverrides(page, { ...BASE, afterAnswer: 'flip', flipDelay: 200 });
+      await card.waitMounted(page, 'front');
+      await card.click(page, '.kr-giveup');
+      const back = await waitBack(t);
+      page = back;
+      // Step to the game's move in the list.
+      await page.evaluate(() => {
+        const m = document.querySelector('.kr-move.kr-puzzle-move');
+        if (m) m.click();
+      });
+      await wait(400);
+      const glyph = await page.evaluate(() => {
+        const m = document.querySelector('.kr-move.kr-puzzle-move .kr-glyph');
+        const t = document.querySelector('.cg-custom-svgs text');
+        return { list: m && m.textContent, board: t && t.textContent };
+      });
+      expect(!!glyph.list, 'the puzzle move has no glyph in the list');
+      expect(glyph.board === glyph.list, 'board badge ' + glyph.board + ' should equal list glyph ' + glyph.list);
+      await ctx.shot('badge');
+    },
+  },
+  {
+    name: 'export-menu',
+    about: 'Export offers chess.com, Lichess and Copy FEN for the position on the board',
+    async run(t, ctx) {
+      const page = await fresh(t, ctx);
+      await card.click(page, '.kr-export-btn');
+      await wait(200);
+      const m = await page.evaluate(() => ({
+        fen: document.getElementById('kr-root').getAttribute('data-fen'),
+        items: [...document.querySelectorAll('.kr-export-item')].map(e => [e.textContent, e.getAttribute('href')]),
+      }));
+      expect(m.items.length === 3, 'expected 3 menu items, got ' + m.items.length);
+      const [chesscom, lichess] = m.items;
+      expect(chesscom[1].startsWith('https://www.chess.com/analysis') && chesscom[1].includes(encodeURIComponent(m.fen)), 'chess.com link: ' + chesscom[1]);
+      expect(lichess[1] === 'https://lichess.org/analysis/' + m.fen.replace(/ /g, '_'), 'lichess link: ' + lichess[1]);
+      await ctx.shot('menu');
+      await card.clickText(page, '.kr-export-item', 'Copy FEN');
+      await card.waitStatus(page, /./);
+      await until(() => page.evaluate(() => /Cop/.test(document.querySelector('.kr-export-item:last-child')?.textContent || '')), 'copy feedback', 3000);
+    },
+  },
+  {
     name: 'not-analysed',
     about: 'A legal move that is not in the PGN fails as "not in the analysis"',
     async run(t, ctx) {
