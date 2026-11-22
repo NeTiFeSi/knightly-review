@@ -626,6 +626,24 @@ class JobsTest(unittest.TestCase):
         res = remake_notes(cfg, c, {old.key: old.pgn}, analyser_factory=lambda *a: Known())
         self.assertIn("Qh5 $6", res.pgns[old.key])  # 2. Qh5 lost 6 points
 
+    def test_game_nags_grade_every_move(self):
+        from knightly.select import game_nags
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x")
+        g = scholar_game()
+        from helpers import PUZZLE_EVAL, WHITE_MATES
+        from knightly.cache import fen_key
+        after = fen_key(board_at(SCHOLAR_MOVES, 6).fen())  # Nf6 allows mate: the search after the move shows it
+        table = {PUZZLE_FEN: PUZZLE_EVAL, after: Eval(depth=20, lines=[Line(WHITE_MATES, ["h5f7"])])}
+        nags = game_nags(g, FakeAnalyser(table=table), cfg)
+        self.assertEqual(nags[5], 4)  # Nf6??; (the scripted one-line mate position also reads as an only move)
+        # Black's only good move at the puzzle position: marked as a singular move.
+        table = {PUZZLE_FEN: Eval(depth=20, lines=[
+            Line(S(-30, 50, 850, 100), ["g8f6", "h5f7"]),
+            Line(S(300, 490, 500, 10), ["g7g6", "h5f3"]),
+            Line(S(300, 490, 500, 10), ["d8e7", "b1c3"])])}
+        g2 = scholar_game(moves=SCHOLAR_MOVES[:5] + ["g8f6"])
+        self.assertEqual(game_nags(g2, FakeAnalyser(table=table), cfg), {5: 8})
+
     def test_game_mode_default(self):
         import time as _t
         c = tmpcache(self)
