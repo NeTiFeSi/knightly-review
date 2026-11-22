@@ -275,7 +275,10 @@ def run_update(
                 if g.key not in graded_games:
                     progress("cards", made, cfg.max_new_cards, f"Grading the moves of {g.white} – {g.black}")
                     carded_plies = {c.ply for cards in per_note.values() for gg, c in cards if gg.key == g.key}
-                    graded_games[g.key] = game_nags(g, an, cfg, carded_plies)  # puzzle plies are graded in full already
+                    label = f"Grading the moves of {g.white} – {g.black}"
+                    graded_games[g.key] = game_nags(g, an, cfg, carded_plies,  # puzzle plies are graded in full already
+                                                    lambda i, n: progress("positions", i, n, label))
+                    progress("positions", 0, 0, "")
                 return graded_games[g.key]
 
             for c in cands:
@@ -340,7 +343,7 @@ class RemakeResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def _quick_nags(pg: chess.pgn.Game, g: Game, an, cfg: Config) -> None:
+def _quick_nags(pg: chess.pgn.Game, g: Game, an, cfg: Config, progress: Progress) -> None:
     """NAGs on the moves that are not puzzle cards: graded (select.game_nags), else ?!, ?, ?? from cached scores."""
     board = chess.Board()
     keys = [fen_key(board.fen())]
@@ -348,7 +351,9 @@ def _quick_nags(pg: chess.pgn.Game, g: Game, an, cfg: Config) -> None:
         board.push_uci(u)
         keys.append(fen_key(board.fen()))
     known = an.known(keys)
-    graded = game_nags(g, an, cfg)
+    label = f"Grading the moves of {g.white} – {g.black}"
+    graded = game_nags(g, an, cfg, progress=lambda i, n: progress("positions", i, n, label))
+    progress("positions", 0, 0, "")
     for ply, node in enumerate(pg.mainline()):
         if notes.KR_TAG.search(node.comment or ""):
             continue
@@ -363,7 +368,7 @@ def _quick_nags(pg: chess.pgn.Game, g: Game, an, cfg: Config) -> None:
 
 
 def remake_pgn(pgn: str, games: dict[str, Game], an, cfg: Config, min_loss: Optional[float],
-               result: RemakeResult) -> tuple[str, list[int]]:
+               result: RemakeResult, progress: Optional[Progress] = None) -> tuple[str, list[int]]:
     """`pgn` with every tagged puzzle rebuilt by the current code, and the numbers of puzzles that no longer are one.
 
     A puzzle that is not one any more (or whose game is not in the cache) is left exactly as it was.
@@ -400,7 +405,7 @@ def remake_pgn(pgn: str, games: dict[str, Game], an, cfg: Config, min_loss: Opti
                 node.comment = old_eval.group(0) + " " + node.comment
             result.remade += 1
         if g is not None:
-            _quick_nags(pg, g, an, cfg)
+            _quick_nags(pg, g, an, cfg, progress or (lambda *a: None))
         out.append(pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True)))
     return "\n\n".join(out), dropped
 
@@ -429,7 +434,7 @@ def remake_notes(cfg: Config, cache: Cache, existing: dict[str, str], *, progres
                 if cancel.is_set():
                     raise http.Cancelled()
                 min_loss = cfg.opening_min_loss if key.startswith("opening:") else None
-                new, dropped = remake_pgn(pgn, games, an, cfg, min_loss, result)
+                new, dropped = remake_pgn(pgn, games, an, cfg, min_loss, result, progress)
                 if dropped:
                     result.deprecated[key] = dropped
                 if new.strip() != pgn.strip():

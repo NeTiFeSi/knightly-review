@@ -37,7 +37,7 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 import chess
 
@@ -187,17 +187,21 @@ def quick_nag(loss: float, inaccuracy: float) -> int:
 GAME_LINES = 3  # enough to tell an only good move (the second line is worse) and the good moves apart
 
 
-def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = ()) -> dict[int, int]:
+def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = (),
+              progress: Optional[Callable[[int, int], None]] = None) -> dict[int, int]:
     """NAG of the played move at each ply of `game` that has one, graded like a puzzle position's moves.
 
     Plies in `skip` (the puzzle cards, graded in full there) and positions with a single legal move are left
     out. A plain good move (!) is not marked: nearly every move would be. !!, □ and !? and the bad grades are.
     Uses `GAME_LINES` lines per position (cached by the analyser), so it is cheaper than a puzzle's full look.
+    `progress(done, total)` is called before each position.
     """
     skip = set(skip)
     out: dict[int, int] = {}
     board = chess.Board()
     for ply, u in enumerate(game.moves):
+        if progress:
+            progress(ply, len(game.moves))
         if ply not in skip and not board.is_game_over() and board.legal_moves.count() > 1:
             graded, _ = grade_position(board, analyser, cfg, u, ply, GAME_LINES)
             played = next((g for g in graded if g.move == u), None)
