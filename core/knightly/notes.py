@@ -22,7 +22,7 @@ KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
 # Bump when a change in how cards are made (grading, alternatives, comments, motifs) should reach the cards
 # already in the collection: the add-on then remakes them before it adds new ones.
-GENERATOR_VERSION = 2  # 2: NAGs (?!, ?, ??) on every move, not only puzzle moves
+GENERATOR_VERSION = 3  # 2: ?!, ?, ?? on every move; 3: also !!, □, !? (graded with 3 lines)
 DEPRECATED_TAG = f"{NOTE_TAG}::deprecated"  # on notes with a card that is no longer a puzzle (suspended)
 
 
@@ -135,8 +135,9 @@ def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardS
 
 
 def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], ids: dict[str, int],
-              inaccuracy: float = Config.inaccuracy) -> str:
-    """One game with `cards` tagged. Every other move gets a NAG when its loss shows (?!, ?, ??)."""
+              inaccuracy: float = Config.inaccuracy, nags: Optional[dict[int, int]] = None) -> str:
+    """One game with `cards` tagged. Every other move gets its NAG: `nags` (ply → NAG, see select.game_nags)
+    where given, else ?!, ?, ?? from the loss shown by `scores`."""
     by_ply = {c.ply: c for c in cards}
     pg = chess.pgn.Game()
     h = pg.headers
@@ -161,7 +162,9 @@ def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], 
         if card is None:
             node.comment = _eval(after)
             before = scores[ply] if ply < len(scores) else None
-            if before is not None and after is not None and before.wdl and after.wdl:
+            if ply in (nags or {}):
+                node.nags = {(nags or {})[ply]}
+            elif before is not None and after is not None and before.wdl and after.wdl:
                 white = ply % 2 == 0
                 node.nags = {quick_nag(before.win_pct(white) - after.win_pct(white), inaccuracy)} - {0}
             continue
@@ -218,6 +221,7 @@ def build(
     cards: list[CardSpec],
     existing_ids: Optional[dict[str, int]] = None,
     inaccuracy: float = Config.inaccuracy,
+    nags: Optional[dict[int, int]] = None,
 ) -> NoteSpec:
     """The note for one phase of `game`, with `cards` (all in that phase) tagged.
 
@@ -231,7 +235,7 @@ def build(
     key = game_note_key(game.key, phase)
     return NoteSpec(
         key=key,
-        pgn=_game_pgn(game, scores, cards, ids, inaccuracy),
+        pgn=_game_pgn(game, scores, cards, ids, inaccuracy, nags),
         cards=_clozes(ids, cards),
         notes=" · ".join(p for p in (phase.capitalize(), _game_link(game)) if p),
         tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, c) for c in cards]),
@@ -264,6 +268,7 @@ def build_opening(
     entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
     existing_pgn: str = "",
     inaccuracy: float = Config.inaccuracy,
+    nags: Optional[dict[str, dict[int, int]]] = None,
 ) -> NoteSpec:
     """The note for one opening and ply: one game per card, each with its card tagged.
 
@@ -272,7 +277,7 @@ def build_opening(
     numbers; the new games follow.
     """
     head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
-    return _build_grouped(key, head, entries, existing_pgn, inaccuracy)
+    return _build_grouped(key, head, entries, existing_pgn, inaccuracy, nags)
 
 
 def motif_label(motif: str) -> str:
@@ -285,13 +290,14 @@ def build_motif(
     entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
     existing_pgn: str = "",
     inaccuracy: float = Config.inaccuracy,
+    nags: Optional[dict[str, dict[int, int]]] = None,
 ) -> NoteSpec:
     """The note for one motif (see select.motif_note_key): one game per card, games added over time."""
     parsed = parse_motif_note_key(key)
     if parsed is None:
         raise ValueError(f"not a motif note key: {key}")
     head = f"{motif_label(parsed[0])} (set {parsed[1]})"
-    return _build_grouped(key, head, entries, existing_pgn, inaccuracy)
+    return _build_grouped(key, head, entries, existing_pgn, inaccuracy, nags)
 
 
 def _build_grouped(
@@ -300,6 +306,7 @@ def _build_grouped(
     entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
     existing_pgn: str,
     inaccuracy: float = Config.inaccuracy,
+    nags: Optional[dict[str, dict[int, int]]] = None,
 ) -> NoteSpec:
     """A note of one game per card (opening and motif notes). `head` is the first line of its notes."""
     old_ids = card_ids(existing_pgn) if existing_pgn else {}
@@ -307,7 +314,7 @@ def _build_grouped(
     ids, new_cards = _assign_ids(cards, old_ids)
     entries = sorted(entries, key=lambda e: ids[e[2].fen_key])
     parts = [existing_pgn.strip()] if existing_pgn.strip() else []
-    parts += [_game_pgn(g, s, [c], ids, inaccuracy).strip() for g, s, c in entries]
+    parts += [_game_pgn(g, s, [c], ids, inaccuracy, (nags or {}).get(g.key)).strip() for g, s, c in entries]
     pgn = "\n\n".join(parts)
     numbers = sorted(set(ids.values()))
     return NoteSpec(

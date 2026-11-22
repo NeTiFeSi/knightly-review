@@ -184,6 +184,29 @@ def quick_nag(loss: float, inaccuracy: float) -> int:
     return MISTAKE if loss <= 20 else BLUNDER
 
 
+GAME_LINES = 3  # enough to tell an only good move (the second line is worse) and the good moves apart
+
+
+def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = ()) -> dict[int, int]:
+    """NAG of the played move at each ply of `game` that has one, graded like a puzzle position's moves.
+
+    Plies in `skip` (the puzzle cards, graded in full there) and positions with a single legal move are left
+    out. A plain good move (!) is not marked: nearly every move would be. !!, □ and !? and the bad grades are.
+    Uses `GAME_LINES` lines per position (cached by the analyser), so it is cheaper than a puzzle's full look.
+    """
+    skip = set(skip)
+    out: dict[int, int] = {}
+    board = chess.Board()
+    for ply, u in enumerate(game.moves):
+        if ply not in skip and not board.is_game_over() and board.legal_moves.count() > 1:
+            graded, _ = grade_position(board, analyser, cfg, u, ply, GAME_LINES)
+            played = next((g for g in graded if g.move == u), None)
+            if played is not None and played.nag not in (NEUTRAL, GOOD):
+                out[ply] = played.nag
+        board.push_uci(u)
+    return out
+
+
 def move_losses(game: Game, scores: list[Optional[Score]], cfg: Config) -> Iterator[Candidate]:
     """Every scored move of `game` with its quick-pass loss, in ply order.
 
@@ -338,9 +361,11 @@ def opening_candidates(
 
 
 def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[str] = None,
-                   ply: int = 99) -> tuple[list[Graded], dict[str, Line]]:
-    """Deep multi-line analysis of `board`, graded. `extra` (e.g. the move played) is analysed too."""
-    multipv = cfg.deep_multipv if cfg.deep_multipv > 0 else board.legal_moves.count()  # 0 = every legal move
+                   ply: int = 99, lines: Optional[int] = None) -> tuple[list[Graded], dict[str, Line]]:
+    """Deep multi-line analysis of `board`, graded. `extra` (e.g. the move played) is analysed too.
+
+    `lines`: how many lines to analyse instead of the configured number."""
+    multipv = lines or (cfg.deep_multipv if cfg.deep_multipv > 0 else board.legal_moves.count())  # 0 = every legal move
     ev = analyser.evaluate(board, multipv=multipv, ply=ply)
     by_move = {l.moves[0]: l for l in ev.lines if l.moves}
     if not by_move:

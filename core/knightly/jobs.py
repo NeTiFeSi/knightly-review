@@ -25,7 +25,7 @@ from .config import Config
 from .engine.analyse import Analyser
 from .model import CardSpec, Game, NoteSpec, Score
 from .openings import Group
-from .select import (MOTIF_NOTE_CARDS, build_card, find_candidates, motif_note_key, opening_candidates,
+from .select import (MOTIF_NOTE_CARDS, build_card, find_candidates, game_nags, motif_note_key, opening_candidates,
                      parse_game_note_key, parse_motif_note_key, parse_opening_note_key, quick_nag, ranked_candidates)
 from .sources import chesscom, lichess
 
@@ -75,7 +75,8 @@ def _opponent(g: Game) -> str:
 
 
 def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, int], by_key: dict[str, Game],
-               scored: dict[str, list[Optional[Score]]], an, cfg: Config, result: UpdateResult) -> Optional[NoteSpec]:
+               scored: dict[str, list[Optional[Score]]], an, cfg: Config, result: UpdateResult,
+               nags: Callable[[Game], dict[int, int]]) -> Optional[NoteSpec]:
     """A game's note for one phase: its old cards rebuilt (deep evals come from the cache) plus the new ones."""
     parsed = parse_game_note_key(key)
     if parsed is None or parsed[0] not in by_key:
@@ -98,16 +99,17 @@ def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, in
         if want:
             result.warnings.append(f"{key}: could not rebuild {len(want)} existing card(s); note left unchanged")
             return None
-    return notes.build(g, scored.get(g.key, []), cards, old_ids, cfg.inaccuracy)
+    return notes.build(g, scored.get(g.key, []), cards, old_ids, cfg.inaccuracy, nags(g))
 
 
 def _opening_note(key: str, new: list[tuple[Game, CardSpec]], groups: list[Group],
-                  scored: dict[str, list[Optional[Score]]], existing_pgn: str, inaccuracy: float) -> NoteSpec:
+                  scored: dict[str, list[Optional[Score]]], existing_pgn: str, inaccuracy: float,
+                  nags: Callable[[Game], dict[int, int]]) -> NoteSpec:
     """An opening+ply note: the games already in it kept as they are, plus one game per new card."""
     color, slug, ply = parse_opening_note_key(key)  # type: ignore[misc]
     label = next((gr.label for gr in groups if (gr.color, gr.slug) == (color, slug)), slug)
     entries = [(g, scored.get(g.key, []), c) for g, c in new]
-    return notes.build_opening(key, label, ply, entries, existing_pgn, inaccuracy)
+    return notes.build_opening(key, label, ply, entries, existing_pgn, inaccuracy, {g.key: nags(g) for g, _ in new})
 
 
 def _motif_note(motif: str, existing: dict[str, str], carded: dict[str, dict[str, int]],
@@ -266,6 +268,16 @@ def run_update(
             specs: dict[str, NoteSpec] = {}  # the latest spec of each note, in the order notes were first made
             failed: set[str] = set()
             made = 0
+            graded_games: dict[str, dict[int, int]] = {}
+
+            def nags(g: Game) -> dict[int, int]:
+                """The NAGs of a game's other moves, graded once per run (the analyser caches the searches)."""
+                if g.key not in graded_games:
+                    progress("cards", made, cfg.max_new_cards, f"Grading the moves of {g.white} – {g.black}")
+                    carded_plies = {c.ply for cards in per_note.values() for gg, c in cards if gg.key == g.key}
+                    graded_games[g.key] = game_nags(g, an, cfg, carded_plies)  # puzzle plies are graded in full already
+                return graded_games[g.key]
+
             for c in cands:
                 if made >= cfg.max_new_cards:
                     break
@@ -284,11 +296,12 @@ def run_update(
                 per_note.setdefault(key, []).append((g, card))
                 if by_motif:
                     spec = notes.build_motif(key, [(g, scored.get(g.key, []), c) for g, c in per_note[key]],
-                                             existing.get(key, ""), cfg.inaccuracy)
+                                             existing.get(key, ""), cfg.inaccuracy,
+                                             {g.key: nags(g) for g, _ in per_note[key]})
                 elif by_opening:
-                    spec = _opening_note(key, per_note[key], groups, scored, existing.get(key, ""), cfg.inaccuracy)
+                    spec = _opening_note(key, per_note[key], groups, scored, existing.get(key, ""), cfg.inaccuracy, nags)
                 else:
-                    spec = _game_note(key, per_note[key], carded.get(key, {}), by_key, scored, an, cfg, result)
+                    spec = _game_note(key, per_note[key], carded.get(key, {}), by_key, scored, an, cfg, result, nags)
                 if not spec:
                     failed.add(key)
                     specs.pop(key, None)
@@ -328,15 +341,20 @@ class RemakeResult:
 
 
 def _quick_nags(pg: chess.pgn.Game, g: Game, an, cfg: Config) -> None:
-    """NAGs (?!, ?, ??) on the moves that are not puzzle cards, from the cached scores of the game's positions."""
+    """NAGs on the moves that are not puzzle cards: graded (select.game_nags), else ?!, ?, ?? from cached scores."""
     board = chess.Board()
     keys = [fen_key(board.fen())]
     for u in g.moves:
         board.push_uci(u)
         keys.append(fen_key(board.fen()))
     known = an.known(keys)
+    graded = game_nags(g, an, cfg)
     for ply, node in enumerate(pg.mainline()):
         if notes.KR_TAG.search(node.comment or ""):
+            continue
+        node.nags = set()
+        if ply in graded:
+            node.nags = {graded[ply]}
             continue
         a, b = known.get(keys[ply]), known.get(keys[ply + 1]) if ply + 1 < len(keys) else None
         if a and b and a[1].wdl and b[1].wdl:
