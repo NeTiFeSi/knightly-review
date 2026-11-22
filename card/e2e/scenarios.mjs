@@ -180,7 +180,7 @@ export const scenarios = [
       await ctx.shot('menu');
       await card.clickText(page, '.kr-export-item', 'Copy FEN');
       await card.waitStatus(page, /./);
-      await until(() => page.evaluate(() => /Cop/.test(document.querySelector('.kr-export-item:last-child')?.textContent || '')), 'copy feedback', 3000);
+      await until(() => page.evaluate(() => /Copied/.test(document.querySelector('.kr-export-item:last-child')?.textContent || '')), 'copy feedback ("Copied", not "Copy failed")', 3000);
     },
   },
   {
