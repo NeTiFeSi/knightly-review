@@ -59,6 +59,17 @@ function capitalize(s: string): string {
 /** Shown when the answer was a normal move (no NAG): not rejected for being bad. */
 const NEUTRAL_NOTE = 'Not a bad move, but something better was available.';
 
+/** Badge fill per NAG class (the board's SVG can't read the card's CSS variables reliably). */
+const NAG_COLORS: Record<string, string> = {
+  brilliant: '#168f8f',
+  singular: '#1565c0',
+  good: '#2e7d32',
+  interesting: '#c2185b',
+  dubious: '#b26a00',
+  mistake: '#d84315',
+  blunder: '#c62828',
+};
+
 const EASE_LABELS: Record<Ease, string> = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
 
 function clampEase(n: number): Ease {
@@ -84,6 +95,29 @@ export function pickEase(r: Pick<StoredResult, 'status' | 'hints' | 'timedOut'>,
 function secs(ms: number): string {
   const s = ms / 1000;
   return (s < 10 ? s.toFixed(1).replace(/\.0$/, '') : String(Math.round(s))) + ' s';
+}
+
+/** Copy to the clipboard; webviews without the async API fall back to execCommand. */
+function copyText(text: string): Promise<boolean> {
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (_) {
+      /* not allowed here */
+    }
+    ta.remove();
+    return ok;
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    return navigator.clipboard.writeText(text).then(() => true, () => fallback());
+  return Promise.resolve(fallback());
 }
 
 export function renderError(root: HTMLElement, msg: string): void {
@@ -136,6 +170,7 @@ export class App {
   private timeoutTimer?: number;
   private readonly onVisibility = () => this.syncClock();
   private board!: Board;
+  private exportEl?: HTMLElement;
   private els!: {
     evalFill: HTMLElement;
     evalText: HTMLElement;
@@ -286,6 +321,10 @@ export class App {
       );
       controls.appendChild(giveUpBtn);
     }
+    const exportWrap = h('span', 'kr-export');
+    exportWrap.appendChild(button('kr-export-btn', '⤴ Export', 'Open this position elsewhere, or copy its FEN', () => this.toggleExport()));
+    controls.appendChild(exportWrap);
+    this.exportEl = exportWrap;
     col.appendChild(controls);
 
     const status = h('div', 'kr-status');
@@ -308,6 +347,37 @@ export class App {
       root.addEventListener('mousedown', () => this.cancelGrade(), true);
       root.addEventListener('touchstart', () => this.cancelGrade(), { capture: true, passive: true });
     }    this.drawClock(); // show the full time during the intro too
+  }
+
+  /** Menu under the Export button: the position on the board, as links and a FEN copy. */
+  private toggleExport(): void {
+    const wrap = this.exportEl;
+    if (!wrap) return;
+    const old = wrap.querySelector('.kr-export-menu');
+    if (old) {
+      old.remove();
+      return;
+    }
+    const fen = this.cursor.fen;
+    const menu = h('div', 'kr-export-menu');
+    const link = (text: string, href: string) => {
+      const a = h('a', 'kr-export-item', text);
+      a.href = href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.addEventListener('click', () => menu.remove());
+      menu.appendChild(a);
+    };
+    link('Open in chess.com', 'https://www.chess.com/analysis?tab=analysis&fen=' + encodeURIComponent(fen));
+    link('Open in Lichess', 'https://lichess.org/analysis/' + fen.replace(/ /g, '_'));
+    const copy = button('kr-export-item', 'Copy FEN', 'Copy the position as FEN', () => {
+      copyText(fen).then(ok => {
+        copy.textContent = ok ? 'Copied ✓' : 'Copy failed';
+        window.setTimeout(() => menu.remove(), 900);
+      });
+    });
+    menu.appendChild(copy);
+    wrap.appendChild(menu);
   }
 
   private buildHeader(): HTMLElement {
@@ -774,6 +844,10 @@ export class App {
     const movable = !!run && run.status === 'playing' && !this.busy && !this.replaying && node === run.cur;
     if (showBoard) this.board.show(node, { movable, shapes: this.shapesFor(node) });
     this.root.setAttribute('data-fen', node.fen); // for tests and debugging
+    if (this.exportEl) {
+      const m = this.exportEl.querySelector('.kr-export-menu');
+      if (m) m.remove();
+    }
     this.renderEval(node);
     this.renderMoves();
     this.renderStatus();
@@ -845,7 +919,23 @@ export class App {
     }
     if (!shapes.length && !shapesHidden(node, this.view))
       node.shapes.forEach(s => push({ orig: makeSquare(s.from) as Key, dest: makeSquare(s.to) as Key, brush: s.color }));
+    push(this.nagBadge(node));
     return shapes;
+  }
+
+  /** The move's classification as a round badge on the corner of the square it landed on. */
+  private nagBadge(node: KNode): DrawShape | undefined {
+    if (!node.move || annotationsHidden(node, this.view)) return undefined;
+    const info = nagInfo(node.nags);
+    if (!info) return undefined;
+    const dest = chessgroundMove(node.move)[1] as Key;
+    const size = info.glyph.length > 1 ? 30 : 38;
+    const html =
+      '<circle cx="80" cy="20" r="19" fill="' + NAG_COLORS[info.cls] + '" stroke="#fff" stroke-width="3"/>' +
+      '<text x="80" y="21" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-weight="700" font-size="' + size + '" fill="#fff">' +
+      info.glyph +
+      '</text>';
+    return { orig: dest, customSvg: { html, center: 'orig' } };
   }
 
   private moveArrow(move: Move | undefined, brush: string): DrawShape | undefined {

@@ -281,3 +281,16 @@
   font-size: 0.85em;
   opacity: 0.8;
 }
+
+/* Export menu */
+.kr-export { position: relative; display: inline-block; }
+.kr-export-menu {
+  position: absolute; left: 0; bottom: 100%; z-index: 20; margin-bottom: 4px; min-width: 150px;
+  display: flex; flex-direction: column; background: var(--kr-surface); border: 1px solid var(--kr-border);
+  border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); overflow: hidden;
+}
+.kr-export-item {
+  display: block; padding: 8px 12px; text-align: left; font: inherit; font-size: 14px; color: var(--kr-fg);
+  text-decoration: none; background: transparent; border: 0; border-radius: 0; cursor: pointer; white-space: nowrap;
+}
+.kr-export-item:hover { background: var(--kr-panel); }
