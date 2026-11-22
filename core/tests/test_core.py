@@ -641,6 +641,9 @@ class JobsTest(unittest.TestCase):
             Line(S(-30, 50, 850, 100), ["g8f6", "h5f7"]),
             Line(S(300, 490, 500, 10), ["g7g6", "h5f3"]),
             Line(S(300, 490, 500, 10), ["d8e7", "b1c3"])])}
+        seen = []
+        game_nags(g, FakeAnalyser(), cfg, progress=lambda i, n: seen.append((i, n)))
+        self.assertEqual(seen, [(i, 7) for i in range(7)])  # one report before each position
         g2 = scholar_game(moves=SCHOLAR_MOVES[:5] + ["g8f6"])
         self.assertEqual(game_nags(g2, FakeAnalyser(table=table), cfg), {5: 8})
 
