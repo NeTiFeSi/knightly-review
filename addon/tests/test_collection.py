@@ -103,6 +103,35 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("Chess::Knightly", [d.name for d in self.col.decks.all_names_and_ids()])
         self.assertEqual(self.kc.count_notes(self.col), 1)
 
+    def test_apply_remake_updates_pgn_suspends_and_tags(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        key = "lichess:abcd1234:opening"
+        self.kc.apply_notes(self.col, [self.spec(key, cards="{{c1::1::1}} {{c2::2::2}}")], "KR")
+        nid = self.col.find_notes(f'"note:{self.kc.MODEL}"')[0]
+        self.col.get_note(nid).add_tag("mine")
+        self.kc.apply_remake(self.col, {key: "1. d4 { [%kr 1] } d5 *"}, {key: [2]})
+        note = self.col.get_note(nid)
+        self.assertIn("d4", note["PGN"])
+        self.assertIn("knightly::deprecated", note.tags)
+        cards = {c.ord: c for c in map(self.col.get_card, self.col.card_ids_of_note(nid))}
+        self.assertEqual({o: c.queue for o, c in cards.items()}, {0: 0, 1: -1})  # only cloze 2 suspended
+        # A later regular update of the note keeps the deprecated tag.
+        self.kc.apply_notes(self.col, [self.spec(key, cards="{{c1::1::1}} {{c2::2::2}}")], "KR")
+        self.assertIn("knightly::deprecated", self.col.get_note(nid).tags)
+
+    def test_remake_due_follows_the_generator_version(self):
+        from knightly_review.vendor.knightly import notes as kn
+
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.assertFalse(self.kc.remake_due(self.col))  # no notes yet: marked current
+        self.assertEqual(self.col.get_config(self.kc.VERSION_KEY), kn.GENERATOR_VERSION)
+        self.kc.apply_notes(self.col, [self.spec()], "KR")
+        self.assertFalse(self.kc.remake_due(self.col))
+        self.col.set_config(self.kc.VERSION_KEY, kn.GENERATOR_VERSION - 1)  # cards from an older generator
+        self.assertTrue(self.kc.remake_due(self.col))
+        self.kc.mark_remade(self.col)
+        self.assertFalse(self.kc.remake_due(self.col))
+
     def test_sibling_bury_hint(self):
         self.kc.ensure_installed(self.col, self.card_dir)
         self.assertIsNone(self.kc.sibling_bury_hint(self.col, "KR", 20, 7))  # deck doesn't exist yet

@@ -8,13 +8,16 @@ Anki collection: it takes the existing notes' PGN in and gives NoteSpecs out.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
 import chess
+import chess.pgn
 
 from . import deepen, http, notes, openings, sources
 from .cache import Cache, fen_key
@@ -23,7 +26,7 @@ from .engine.analyse import Analyser
 from .model import CardSpec, Game, NoteSpec, Score
 from .openings import Group
 from .select import (MOTIF_NOTE_CARDS, build_card, find_candidates, motif_note_key, opening_candidates,
-                     parse_game_note_key, parse_motif_note_key, parse_opening_note_key, ranked_candidates)
+                     parse_game_note_key, parse_motif_note_key, parse_opening_note_key, quick_nag, ranked_candidates)
 from .sources import chesscom, lichess
 
 # progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
@@ -95,16 +98,16 @@ def _game_note(key: str, new: list[tuple[Game, CardSpec]], old_ids: dict[str, in
         if want:
             result.warnings.append(f"{key}: could not rebuild {len(want)} existing card(s); note left unchanged")
             return None
-    return notes.build(g, scored.get(g.key, []), cards, old_ids)
+    return notes.build(g, scored.get(g.key, []), cards, old_ids, cfg.inaccuracy)
 
 
 def _opening_note(key: str, new: list[tuple[Game, CardSpec]], groups: list[Group],
-                  scored: dict[str, list[Optional[Score]]], existing_pgn: str) -> NoteSpec:
+                  scored: dict[str, list[Optional[Score]]], existing_pgn: str, inaccuracy: float) -> NoteSpec:
     """An opening+ply note: the games already in it kept as they are, plus one game per new card."""
     color, slug, ply = parse_opening_note_key(key)  # type: ignore[misc]
     label = next((gr.label for gr in groups if (gr.color, gr.slug) == (color, slug)), slug)
     entries = [(g, scored.get(g.key, []), c) for g, c in new]
-    return notes.build_opening(key, label, ply, entries, existing_pgn)
+    return notes.build_opening(key, label, ply, entries, existing_pgn, inaccuracy)
 
 
 def _motif_note(motif: str, existing: dict[str, str], carded: dict[str, dict[str, int]],
@@ -281,9 +284,9 @@ def run_update(
                 per_note.setdefault(key, []).append((g, card))
                 if by_motif:
                     spec = notes.build_motif(key, [(g, scored.get(g.key, []), c) for g, c in per_note[key]],
-                                             existing.get(key, ""))
+                                             existing.get(key, ""), cfg.inaccuracy)
                 elif by_opening:
-                    spec = _opening_note(key, per_note[key], groups, scored, existing.get(key, ""))
+                    spec = _opening_note(key, per_note[key], groups, scored, existing.get(key, ""), cfg.inaccuracy)
                 else:
                     spec = _game_note(key, per_note[key], carded.get(key, {}), by_key, scored, an, cfg, result)
                 if not spec:
@@ -306,6 +309,113 @@ def run_update(
             result.finished = dp.finished
             if dp.finished and not result.new_cards:
                 cache.set(STATE_KEY, {"fingerprint": fp, "finished": True, "ts": time.time()})
+    except http.Cancelled:
+        result.cancelled = True
+    return result
+
+
+_EVAL = re.compile(r"\[%eval [^\]]*\]")
+
+
+@dataclass
+class RemakeResult:
+    pgns: dict[str, str] = field(default_factory=dict)  # note key → new PGN, only for notes that changed
+    deprecated: dict[str, list[int]] = field(default_factory=dict)  # note key → cloze numbers no longer puzzles
+    cards: int = 0  # cards looked at
+    remade: int = 0  # cards rebuilt (same or changed)
+    cancelled: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+
+def _quick_nags(pg: chess.pgn.Game, g: Game, an, cfg: Config) -> None:
+    """NAGs (?!, ?, ??) on the moves that are not puzzle cards, from the cached scores of the game's positions."""
+    board = chess.Board()
+    keys = [fen_key(board.fen())]
+    for u in g.moves:
+        board.push_uci(u)
+        keys.append(fen_key(board.fen()))
+    known = an.known(keys)
+    for ply, node in enumerate(pg.mainline()):
+        if notes.KR_TAG.search(node.comment or ""):
+            continue
+        a, b = known.get(keys[ply]), known.get(keys[ply + 1]) if ply + 1 < len(keys) else None
+        if a and b and a[1].wdl and b[1].wdl:
+            white = ply % 2 == 0
+            node.nags = {quick_nag(a[1].win_pct(white) - b[1].win_pct(white), cfg.inaccuracy)} - {0}
+
+
+def remake_pgn(pgn: str, games: dict[str, Game], an, cfg: Config, min_loss: Optional[float],
+               result: RemakeResult) -> tuple[str, list[int]]:
+    """`pgn` with every tagged puzzle rebuilt by the current code, and the numbers of puzzles that no longer are one.
+
+    A puzzle that is not one any more (or whose game is not in the cache) is left exactly as it was.
+    Everything else in the PGN (the other moves and their evals, the cloze numbers) stays.
+    """
+    f = io.StringIO(pgn)
+    out: list[str] = []
+    dropped: list[int] = []
+    while (pg := chess.pgn.read_game(f)) is not None:
+        g = games.get(pg.headers.get("Site", ""))
+        pg.headers.pop("Round", None)  # the reader adds it back; the notes are written without
+        for node in list(pg.mainline()):
+            m = notes.KR_TAG.search(node.comment or "")
+            if not m:
+                continue
+            number, parent = int(m.group(1)), node.parent
+            assert parent is not None and node.move is not None
+            result.cards += 1
+            if g is None:
+                result.warnings.append(f"{pg.headers.get('Site', '?')}: game not in the cache; card {number} left as it is")
+                continue
+            board = parent.board()
+            ply = board.ply()
+            mine = board.turn == (chess.WHITE if g.user_is_white else chess.BLACK)
+            card = build_card(board.copy(), ply, node.move.uci(), an, cfg, "" if mine else _opponent(g), min_loss)
+            if card is None:
+                dropped.append(number)
+                continue
+            old_eval = _EVAL.search(node.comment or "")
+            for v in list(parent.variations[1:]):
+                parent.remove_variation(v)
+            notes.write_card(parent, node, card, number)
+            if old_eval and "[%eval" not in node.comment:
+                node.comment = old_eval.group(0) + " " + node.comment
+            result.remade += 1
+        if g is not None:
+            _quick_nags(pg, g, an, cfg)
+        out.append(pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True)))
+    return "\n\n".join(out), dropped
+
+
+def remake_notes(cfg: Config, cache: Cache, existing: dict[str, str], *, progress: Optional[Progress] = None,
+                 cancel: Optional[threading.Event] = None,
+                 analyser_factory: Optional[Callable[..., Analyser]] = None,
+                 gate: Optional[threading.Event] = None) -> RemakeResult:
+    """Rebuild the cards of the notes in `existing` (key → PGN) with the current code, keeping cloze numbers.
+
+    Cards that the current code would not make are listed in `deprecated`; the caller suspends them.
+    Games come from the cache, deep evals too, so most cards need no new engine work.
+    """
+    progress = progress or (lambda *a: None)
+    cancel = cancel or threading.Event()
+    result = RemakeResult()
+    games: dict[str, Game] = {}
+    for source, user in (("lichess", cfg.lichess_user), ("chesscom", cfg.chesscom_user)):
+        if user:
+            games.update({g.url: g for g in cache.games(source, user)})
+    try:
+        with (analyser_factory or Analyser)(cfg, cache, cancel) as an:
+            an.gate = gate
+            for i, (key, pgn) in enumerate(sorted(existing.items())):
+                progress("cards", i, len(existing), f"Remaking the cards ({i} of {len(existing)} notes)")
+                if cancel.is_set():
+                    raise http.Cancelled()
+                min_loss = cfg.opening_min_loss if key.startswith("opening:") else None
+                new, dropped = remake_pgn(pgn, games, an, cfg, min_loss, result)
+                if dropped:
+                    result.deprecated[key] = dropped
+                if new.strip() != pgn.strip():
+                    result.pgns[key] = new
     except http.Cancelled:
         result.cancelled = True
     return result

@@ -173,6 +173,17 @@ def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) 
     return moves
 
 
+def quick_nag(loss: float, inaccuracy: float) -> int:
+    """NAG of a move from how much win rate it lost against the position before it (no alternatives needed).
+
+    Only the bad grades can be told this way (?!, ?, ??, as in `grade`); good moves (!, !!, □, !?) need the
+    other candidate moves analysed, so they only exist on puzzle cards.
+    """
+    if loss <= 10:
+        return DUBIOUS if loss >= inaccuracy else NEUTRAL
+    return MISTAKE if loss <= 20 else BLUNDER
+
+
 def move_losses(game: Game, scores: list[Optional[Score]], cfg: Config) -> Iterator[Candidate]:
     """Every scored move of `game` with its quick-pass loss, in ply order.
 
