@@ -694,13 +694,27 @@ def start_update() -> None:
         show_progress()
 
 
+def start_remake() -> None:
+    if updater.running:
+        show_progress()
+        return
+    if not askUser("Rebuild every card Knightly Review made earlier with the current version?\n\n"
+                   "Your scheduling is kept. A card that would not be made as a puzzle any more is "
+                   "suspended (not deleted) and its note gets the tag knightly::deprecated. "
+                   "You can undo this from Edit → Undo.", parent=mw, title="Knightly Review"):
+        return
+    if updater.remake():
+        show_progress()
+
+
 def open_settings(first_run: bool = False) -> None:
     SettingsDialog(mw, first_run=first_run).exec()
 
 
 def setup_menu() -> None:
     menu = mw.form.menuTools.addMenu("Knightly Review")
-    for label, fn in (("Update now", start_update), ("Show update progress", show_progress), ("Settings…", open_settings)):
+    for label, fn in (("Update now", start_update), ("Remake existing cards…", start_remake),
+                      ("Show update progress", show_progress), ("Settings…", open_settings)):
         a = menu.addAction(label)
         a.triggered.connect(lambda _=False, f=fn: f())
     mw.addonManager.setConfigAction(settings.ADDON, open_settings)

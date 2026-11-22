@@ -19,7 +19,7 @@ from knightly import deepen, http, notes, openings, phases, sources
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
-from knightly.jobs import opening_order, run_update
+from knightly.jobs import opening_order, remake_notes, run_update
 from knightly.model import Eval, Game, Line, NoWdl, Score
 from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, NEUTRAL, SINGULAR, Graded, build_card,
                              find_candidates, game_note_key, grade, line_material, opening_candidates,
@@ -585,6 +585,46 @@ class JobsTest(unittest.TestCase):
         self.assertEqual([n.key for n in again.notes], ["opening:black:french-defense:2"])
         self.assertEqual(again.order, ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6",
                                        "opening:black:french-defense:2"])
+
+    def test_remake_keeps_cards_and_deprecates_lost_puzzles(self):
+        import time as _t
+        c = tmpcache(self)
+        now = int(_t.time())
+        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
+        sic.url = "https://lichess.org/s1/black"
+        c.put_games([sic], "knightlyme")
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2)
+        script = {"s1": {5: 30, 3: 12}}
+        made = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic], script))
+        existing = {n.key: n.pgn for n in made.notes}
+        self.assertEqual(len(existing), 1)
+        # Same engine, same code: nothing changes and nothing is deprecated.
+        same = remake_notes(cfg, c, existing, analyser_factory=lambda *a: ScriptedAnalyser([sic], script))
+        self.assertEqual((same.pgns, same.deprecated), ({}, {}))
+        self.assertEqual(same.remade, same.cards)
+        self.assertGreater(same.cards, 0)
+        # The move is no longer a mistake: the card is deprecated and the PGN stays as it was.
+        gone = remake_notes(cfg, c, existing, analyser_factory=lambda *a: ScriptedAnalyser([sic], {"s1": {}}))
+        self.assertEqual(gone.remade, 0)
+        self.assertEqual(list(gone.deprecated.values()), [[1, 2]])
+        self.assertEqual(gone.pgns, {})
+
+    def test_remake_adds_nags_to_the_other_moves(self):
+        c = tmpcache(self)
+        g = scholar_game()
+        g.url = "https://lichess.org/test0001/black"
+        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x")
+        c.put_games([g], "knightlyme")
+        card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), cfg)
+        old = notes.build(g, [None] * 8, [card])  # an old note: evals only, no NAGs on the other moves
+        self.assertNotIn("$6", old.pgn)
+
+        class Known(FakeAnalyser):
+            def known(self, keys):
+                return {k: (13, s) for k, s in self.scores.items() if k in keys}
+
+        res = remake_notes(cfg, c, {old.key: old.pgn}, analyser_factory=lambda *a: Known())
+        self.assertIn("Qh5 $6", res.pgns[old.key])  # 2. Qh5 lost 6 points
 
     def test_game_mode_default(self):
         import time as _t

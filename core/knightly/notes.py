@@ -15,10 +15,15 @@ from . import openings, phases
 from .cache import fen_key
 from .engine.analyse import MATED
 from .model import CardSpec, Game, NoteSpec, Score
-from .select import BLUNDER, DUBIOUS, MISTAKE, game_note_key, parse_game_note_key, parse_motif_note_key
+from .config import Config
+from .select import BLUNDER, DUBIOUS, MISTAKE, game_note_key, parse_game_note_key, parse_motif_note_key, quick_nag
 
 KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
+# Bump when a change in how cards are made (grading, alternatives, comments, motifs) should reach the cards
+# already in the collection: the add-on then remakes them before it adds new ones.
+GENERATOR_VERSION = 2  # 2: NAGs (?!, ?, ??) on every move, not only puzzle moves
+DEPRECATED_TAG = f"{NOTE_TAG}::deprecated"  # on notes with a card that is no longer a puzzle (suspended)
 
 
 GAME_TAG = f"{NOTE_TAG}::game::"
@@ -115,8 +120,23 @@ def _assign_ids(cards: list[CardSpec], existing_ids: Optional[dict[str, int]]) -
     return ids, new_cards
 
 
-def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], ids: dict[str, int]) -> str:
-    """One game with `cards` tagged."""
+def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardSpec, number: int,
+               after: Optional[Score] = None) -> None:
+    """Tag `node` (the played move, after `parent`) as cloze `number`, and add the card's alternatives as variations."""
+    node.nags = {card.played.nag} - {0}
+    node.comment = _join(_eval(card.played.score or after), f"[%kr {number}]", card.comment)
+    for alt in card.alternatives:
+        v = parent.add_variation(chess.Move.from_uci(alt.move))
+        v.nags = {alt.nag} - {0}
+        v.comment = _eval(alt.score)
+        for r in alt.reply:
+            v = v.add_variation(chess.Move.from_uci(r))
+            v.comment = _eval(alt.score)
+
+
+def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], ids: dict[str, int],
+              inaccuracy: float = Config.inaccuracy) -> str:
+    """One game with `cards` tagged. Every other move gets a NAG when its loss shows (?!, ?, ??)."""
     by_ply = {c.ply: c for c in cards}
     pg = chess.pgn.Game()
     h = pg.headers
@@ -140,16 +160,12 @@ def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], 
         after = scores[ply + 1] if ply + 1 < len(scores) else None
         if card is None:
             node.comment = _eval(after)
+            before = scores[ply] if ply < len(scores) else None
+            if before is not None and after is not None and before.wdl and after.wdl:
+                white = ply % 2 == 0
+                node.nags = {quick_nag(before.win_pct(white) - after.win_pct(white), inaccuracy)} - {0}
             continue
-        node.nags = {card.played.nag} - {0}
-        node.comment = _join(_eval(card.played.score or after), f"[%kr {ids[card.fen_key]}]", card.comment)
-        for alt in card.alternatives:
-            v = parent.add_variation(chess.Move.from_uci(alt.move))
-            v.nags = {alt.nag} - {0}
-            v.comment = _eval(alt.score)
-            for r in alt.reply:
-                v = v.add_variation(chess.Move.from_uci(r))
-                v.comment = _eval(alt.score)
+        write_card(parent, node, card, ids[card.fen_key])
     return pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
 
 
@@ -201,6 +217,7 @@ def build(
     scores: list[Optional[Score]],
     cards: list[CardSpec],
     existing_ids: Optional[dict[str, int]] = None,
+    inaccuracy: float = Config.inaccuracy,
 ) -> NoteSpec:
     """The note for one phase of `game`, with `cards` (all in that phase) tagged.
 
@@ -214,7 +231,7 @@ def build(
     key = game_note_key(game.key, phase)
     return NoteSpec(
         key=key,
-        pgn=_game_pgn(game, scores, cards, ids),
+        pgn=_game_pgn(game, scores, cards, ids, inaccuracy),
         cards=_clozes(ids, cards),
         notes=" · ".join(p for p in (phase.capitalize(), _game_link(game)) if p),
         tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, c) for c in cards]),
@@ -246,6 +263,7 @@ def build_opening(
     ply: int,
     entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
     existing_pgn: str = "",
+    inaccuracy: float = Config.inaccuracy,
 ) -> NoteSpec:
     """The note for one opening and ply: one game per card, each with its card tagged.
 
@@ -254,7 +272,7 @@ def build_opening(
     numbers; the new games follow.
     """
     head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
-    return _build_grouped(key, head, entries, existing_pgn)
+    return _build_grouped(key, head, entries, existing_pgn, inaccuracy)
 
 
 def motif_label(motif: str) -> str:
@@ -266,13 +284,14 @@ def build_motif(
     key: str,
     entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
     existing_pgn: str = "",
+    inaccuracy: float = Config.inaccuracy,
 ) -> NoteSpec:
     """The note for one motif (see select.motif_note_key): one game per card, games added over time."""
     parsed = parse_motif_note_key(key)
     if parsed is None:
         raise ValueError(f"not a motif note key: {key}")
     head = f"{motif_label(parsed[0])} (set {parsed[1]})"
-    return _build_grouped(key, head, entries, existing_pgn)
+    return _build_grouped(key, head, entries, existing_pgn, inaccuracy)
 
 
 def _build_grouped(
@@ -280,6 +299,7 @@ def _build_grouped(
     head: str,
     entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
     existing_pgn: str,
+    inaccuracy: float = Config.inaccuracy,
 ) -> NoteSpec:
     """A note of one game per card (opening and motif notes). `head` is the first line of its notes."""
     old_ids = card_ids(existing_pgn) if existing_pgn else {}
@@ -287,7 +307,7 @@ def _build_grouped(
     ids, new_cards = _assign_ids(cards, old_ids)
     entries = sorted(entries, key=lambda e: ids[e[2].fen_key])
     parts = [existing_pgn.strip()] if existing_pgn.strip() else []
-    parts += [_game_pgn(g, s, [c], ids).strip() for g, s, c in entries]
+    parts += [_game_pgn(g, s, [c], ids, inaccuracy).strip() for g, s, c in entries]
     pgn = "\n\n".join(parts)
     numbers = sorted(set(ids.values()))
     return NoteSpec(

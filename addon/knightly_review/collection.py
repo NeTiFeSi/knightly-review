@@ -130,7 +130,8 @@ def _write_note(col: Collection, nt: Any, did: int, spec: NoteSpec) -> None:
     if not spec.key.startswith(("opening:", "motif:")):
         # A game note is rebuilt whole, so its generated tags are replaced (the user's own
         # are kept). An opening or motif note only gets the tags of its new games, so they're added.
-        stale = [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]
+        stale = [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags
+                 and t != kn.DEPRECATED_TAG]
         for t in stale:
             note.remove_tag(t)
     for t in spec.tags:
@@ -232,6 +233,52 @@ def reposition_new(col: Collection, order: list[str]) -> int:
         c.due = pos
     col.update_cards(fresh)
     return len(fresh)
+
+
+VERSION_KEY = "knightlyReviewGenerator"  # in the collection's config: the generator version its cards were last remade for
+
+
+def remake_due(col: Collection) -> bool:
+    """True when the cards in this collection come from an older generator than this add-on's.
+
+    A collection without Knightly notes is marked as current, since its first notes will be.
+    """
+    if col.get_config(VERSION_KEY, None) == kn.GENERATOR_VERSION:
+        return False
+    if count_notes(col) == 0:
+        mark_remade(col)
+        return False
+    return True
+
+
+def mark_remade(col: Collection) -> None:
+    col.set_config(VERSION_KEY, kn.GENERATOR_VERSION)
+
+
+REMAKE_UNDO = "Knightly Review: remake cards"
+
+
+def apply_remake(col: Collection, pgns: dict[str, str], deprecated: dict[str, list[int]]) -> OpChanges:
+    """Write the remade PGNs, and suspend (and tag) the cards that are no longer puzzles, as one undo step.
+
+    `deprecated`: note key → cloze numbers. Nothing is deleted, and the user's own tags are kept.
+    """
+    pos = col.add_custom_undo_entry(REMAKE_UNDO)
+    for key in set(pgns) | set(deprecated):
+        nids = col.find_notes(f'"note:{MODEL}" "tag:{kn.note_key_tag(key)}"')
+        if not nids:
+            continue
+        note = col.get_note(nids[0])
+        if key in pgns:
+            note["PGN"] = kn.pgn_to_field(pgns[key])
+        if key in deprecated:
+            note.add_tag(kn.DEPRECATED_TAG)
+        col.update_note(note)
+        gone = {n - 1 for n in deprecated.get(key, [])}  # cloze number n is card ord n-1
+        ids = [c.id for c in map(col.get_card, col.card_ids_of_note(note.id)) if c.ord in gone]
+        if ids:
+            col.sched.suspend_cards(ids)
+    return col.merge_undo_entries(pos)
 
 
 def sibling_bury_hint(col: Collection, deck: str, new_cards: int, notes: int) -> str | None:

@@ -23,7 +23,7 @@ from aqt.utils import showWarning, tooltip
 from . import collection as kc
 from . import settings
 from .vendor.knightly.cache import SqliteCache
-from .vendor.knightly.jobs import UpdateResult, run_update
+from .vendor.knightly.jobs import RemakeResult, UpdateResult, remake_notes, run_update
 
 Listener = Callable[[str, int, int, str], None]
 
@@ -111,6 +111,10 @@ class Updater:
             if manual:
                 showWarning(f"Knightly Review could not prepare the collection:\n{e}")
             return False
+        if not _round and kc.remake_due(mw.col):
+            # The cards were made by an older version: bring them up to date before adding new ones.
+            self.log("The cards come from an older version of Knightly Review.")
+            return self.remake(then_update=manual)
         core = settings.core_config(cfg)
         deck = cfg.get("deck") or kc.MODEL
         if not _round:
@@ -167,6 +171,83 @@ class Updater:
         self.thread = threading.Thread(target=work, name="knightly-update", daemon=True)
         self.thread.start()
         return True
+
+    def remake(self, then_update: Optional[bool] = None) -> bool:
+        """Rebuild the cards already in the collection with the current code (same cloze numbers, so the
+        scheduling stays). A card that would no longer be made is suspended and its note tagged.
+        `then_update`: None for a remake on its own; otherwise an update (manual if True) follows it.
+        Returns False if an update is running or setup is incomplete."""
+        if self.running or mw.col is None:
+            return False
+        cfg = settings.load()
+        if not settings.configured(cfg):
+            if then_update is None:
+                from .ui import open_settings
+
+                open_settings(first_run=not cfg.get("setup_done"))
+            return False
+        try:
+            kc.ensure_installed(mw.col)
+            existing = kc.existing_notes(mw.col)
+        except Exception as e:
+            showWarning(f"Knightly Review could not prepare the collection:\n{e}")
+            return False
+        core = settings.core_config(cfg)
+        self.stopped = self.keeping = False
+        self.cancel = threading.Event()
+        cancel = self.cancel
+        self.positions, self._logged = (0, 0, ""), ""
+        self.log("── Remake the existing cards ──")
+        self._emit("start", 0, 0, f"Remaking the cards of {len(existing)} notes…", force=True)
+
+        def work() -> None:
+            cache = SqliteCache(settings.CACHE_PATH)
+            try:
+                res = remake_notes(core, cache, existing, progress=self._emit, cancel=cancel, gate=self.gate)
+                err = None
+            except Exception as e:
+                res, err = None, (e, traceback.format_exc())
+            finally:
+                cache.close()
+            mw.taskman.run_on_main(lambda: self._finish_remake(res, err, then_update))
+
+        self.thread = threading.Thread(target=work, name="knightly-remake", daemon=True)
+        self.thread.start()
+        return True
+
+    def _finish_remake(self, res: Optional[RemakeResult], err, then_update: Optional[bool] = None) -> None:
+        if err is not None or res is None or mw.col is None:
+            e, tb = err or (RuntimeError("the collection is closed"), "")
+            print(tb)
+            self._emit("error", 0, 0, f"Remake failed: {e}", force=True)
+            if then_update is not False:
+                showWarning(f"Knightly Review remake failed:\n{e}")
+            return
+        summary = (f"{res.remade} of {res.cards} cards rebuilt in {len(res.pgns)} notes, "
+                   f"{sum(len(v) for v in res.deprecated.values())} suspended as deprecated.")
+        if res.warnings:
+            summary += " Warnings: " + "; ".join(res.warnings[:5]) + (" …" if len(res.warnings) > 5 else "")
+        if res.cancelled:  # nothing was written: the run is all-or-nothing, so a cancel changes nothing
+            self._emit("done", 0, 0, "Cancelled, no card was changed.", force=True)
+            return
+
+        def done(_changes) -> None:
+            if mw.col is not None:
+                kc.mark_remade(mw.col)
+            self._emit("done", 1, 1, summary, force=True)
+            if then_update is None:
+                tooltip("Knightly Review: " + summary, period=5000)
+            else:  # the update that found the cards outdated goes on now
+                QTimer.singleShot(300, lambda: self.start(manual=then_update))  # once the thread has ended
+
+        def failed(e: Exception) -> None:
+            self._emit("error", 0, 0, f"Could not write the remade cards: {e}", force=True)
+
+        if not res.pgns and not res.deprecated:
+            done(None)
+            return
+        CollectionOp(parent=mw, op=lambda col: kc.apply_remake(col, res.pgns, res.deprecated)).success(
+            done).failure(failed).run_in_background()
 
     def stop(self, wait: float = 0) -> None:
         self.stopped = True
@@ -278,6 +359,13 @@ updater = Updater()
 
 def _on_profile_open() -> None:
     cfg = settings.load()
+    try:  # card templates and styling of a new add-on version reach the collection now, not at the next update
+        if mw.col is not None and kc.MODEL in mw.col.models.all_names():
+            changes = kc.ensure_installed(mw.col)
+            if changes:
+                updater.log("Card templates: " + "; ".join(changes))
+    except Exception:
+        traceback.print_exc()
     updater.reschedule()
     if not cfg.get("setup_done"):
         from .ui import open_settings
