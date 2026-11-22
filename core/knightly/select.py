@@ -9,7 +9,8 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 - A **good move** loses at most `cfg.good_move` points.
 - A **sacrifice** gives up material in the short term while an alternative
   keeps more: `cfg.sacrifice_plies` plies down the engine's line (followed
-  further while captures or checks are still going on), the side that moved has
+  further while captures or checks are still going on, or a recapture that was
+  available right after a capture is still owed past an in-between move), the side that moved has
   at least `cfg.sacrifice_points` of material (1/3/3/5/9) less than it has now,
   and at least that much less than the analysed alternative that keeps the most.
 - In a **forced mate** (the best move mates by force), only moves that keep a
@@ -56,9 +57,34 @@ def material(board: chess.Board, color: chess.Color) -> int:
     return sum(v * (len(board.pieces(pt, color)) - len(board.pieces(pt, not color))) for pt, v in VALUES.items())
 
 
-def _settled(board: chess.Board, last: chess.Move, after_board_capture: bool, nxt: Optional[chess.Move]) -> bool:
-    """No exchange or check in progress: counting material here doesn't cut a trade in half."""
-    if after_board_capture or last.promotion or board.is_check():
+def _capture_gain(board: chess.Board, sq: chess.Square) -> Optional[int]:
+    """Net material the side to move wins by capturing on `sq` with its cheapest piece, then
+    letting the exchange there run (either side may stop); None when it has no capture there."""
+    caps = [m for m in board.legal_moves if m.to_square == sq and board.is_capture(m)]
+    if not caps:
+        return None
+    m = min(caps, key=lambda c: VALUES.get(board.piece_type_at(c.from_square), 100))  # the king last
+    got = VALUES.get(board.piece_type_at(sq), 0)
+    board.push(m)
+    back = _capture_gain(board, sq)
+    board.pop()
+    return got - max(0, back or 0)
+
+
+def _recapture_owed(board: chess.Board, sq: chess.Square) -> bool:
+    """Right after a capture on `sq`: can the side to move recapture there without losing material?"""
+    gain = _capture_gain(board, sq)
+    return gain is not None and gain >= 0
+
+
+def _settled(board: chess.Board, last: chess.Move, after_board_capture: bool, nxt: Optional[chess.Move],
+             owed: bool = False) -> bool:
+    """No exchange or check in progress: counting material here doesn't cut a trade in half.
+
+    `owed`: a recapture that was available right after the last capture on its square hasn't
+    been played yet (an in-between move came first), so the trade isn't over.
+    """
+    if after_board_capture or owed or last.promotion or board.is_check():
         return False
     return nxt is None or not board.is_capture(nxt)
 
@@ -75,8 +101,9 @@ def line_material(board: chess.Board, moves: list[str], plies: int, analyser=Non
     done = 0
     last: Optional[chess.Move] = None
     captured = False
+    owed: Optional[tuple[chess.Square, Optional[chess.Piece]]] = None  # square and capturer of a trade still to be finished
     while done < plies + EXTRA_PLIES and not b.is_game_over():
-        if done >= len(seq) and analyser is not None and (done < plies or (last and not _settled(b, last, captured, None))):
+        if done >= len(seq) and analyser is not None and (done < plies or (last and not _settled(b, last, captured, None, owed is not None))):
             ev = analyser.evaluate(b, multipv=1)
             seq += ev.lines[0].moves if ev.lines else []
         if done >= len(seq):
@@ -84,12 +111,18 @@ def line_material(board: chess.Board, moves: list[str], plies: int, analyser=Non
         mv = chess.Move.from_uci(seq[done])
         if mv not in b.legal_moves:
             break
-        if done >= plies and last is not None and _settled(b, last, captured, mv):
+        if done >= plies and last is not None and _settled(b, last, captured, mv, owed is not None):
             break
         captured = b.is_capture(mv)
+        if owed is not None and (captured and mv.to_square == owed[0]):
+            owed = None
         b.push(mv)
         last = mv
         done += 1
+        if owed is not None and b.piece_at(owed[0]) != owed[1]:
+            owed = None  # the capturer left or was taken: nothing left to recapture
+        if captured and owed is None and _recapture_owed(b, mv.to_square):
+            owed = (mv.to_square, b.piece_at(mv.to_square))
     return material(b, color)
 
 

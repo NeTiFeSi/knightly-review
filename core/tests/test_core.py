@@ -323,6 +323,16 @@ class SelectTest(unittest.TestCase):
                  Eval(20, [Line(S(0, 0, 1000, 0), ["e8d7", "e1e2", "d7d6", "e2d3"])])}
         self.assertEqual(line_material(short, ["e4d5"], 4, FakeAnalyser(table=table)), 1)
 
+    def test_line_material_in_between_move(self):
+        # Berlin-style 5.Re1 Nd6 6.Nxe5 Nxe5 7.Bf1 Be7 8.Rxe5: Bf1 is an in-between move, Rxe5 is still owed.
+        b = chess.Board("r1bqkb1r/pppp1ppp/2n5/1B2p3/4n3/5N2/PPPP1PPP/RNBQ1RK1 w kq - 0 5")
+        line = ["f1e1", "e4d6", "f3e5", "c6e5", "b5f1", "f8e7", "e1e5", "e8g8"]
+        self.assertEqual(line_material(b, line, 4), 0)
+        # 5.Nxe5 Nxe5 6.d4: nothing to recapture with yet, the knight really is given up for a while.
+        b = chess.Board("r1bqk2r/ppppnppp/2n5/1Bb1p3/4P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 6 5")
+        line = ["f3e5", "c6e5", "d2d4", "c7c6", "b5e2", "c5d6", "d4e5", "d6e5"]
+        self.assertEqual(line_material(b, line, 4), -2)
+
     def test_find_candidates(self):
         g = scholar_game()
         cands = find_candidates([(g, SCHOLAR_SCORES)], self.cfg)
