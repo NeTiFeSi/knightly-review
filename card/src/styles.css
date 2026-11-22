@@ -203,7 +203,7 @@
 .kr-notes { max-width: 980px; margin: 12px auto 0; text-align: left; }
 
 /* Settings: gear, warning banner, dialog */
-.kr-head { position: relative; padding-right: 44px; min-height: 40px; }
+.kr-head { position: relative; padding-right: 88px; min-height: 40px; }
 .kr-gear {
   position: absolute; right: 0; top: 0; min-width: 36px; padding: 4px 8px; font-size: 18px; line-height: 1;
   color: var(--kr-muted);
@@ -281,3 +281,17 @@
   font-size: 0.85em;
   opacity: 0.8;
 }
+
+/* Export menu */
+.kr-export { position: absolute; right: 48px; top: 0; }
+.kr-export-btn { min-width: 36px; padding: 4px 8px; font-size: 18px; line-height: 1; color: var(--kr-muted); }
+.kr-export-menu {
+  position: absolute; right: 0; top: 100%; z-index: 20; margin-top: 4px; min-width: 150px;
+  display: flex; flex-direction: column; background: var(--kr-surface); border: 1px solid var(--kr-border);
+  border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); overflow: hidden;
+}
+.kr-export-item {
+  display: block; padding: 8px 12px; text-align: left; font: inherit; font-size: 14px; color: var(--kr-fg);
+  text-decoration: none; background: transparent; border: 0; border-radius: 0; cursor: pointer; white-space: nowrap;
+}
+.kr-export-item:hover { background: var(--kr-panel); }
