@@ -97,9 +97,13 @@ function secs(ms: number): string {
   return (s < 10 ? s.toFixed(1).replace(/\.0$/, '') : String(Math.round(s))) + ' s';
 }
 
-/** Copy to the clipboard; webviews without the async API fall back to execCommand. */
+/**
+ * Copy to the clipboard. execCommand runs first, synchronously inside the click, because some
+ * webviews (Anki desktop's) leave navigator.clipboard.writeText pending forever; the async API is
+ * only the fallback, and it gets a timeout so the caller always hears back.
+ */
 function copyText(text: string): Promise<boolean> {
-  const fallback = () => {
+  const viaExecCommand = (): boolean => {
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
@@ -115,9 +119,21 @@ function copyText(text: string): Promise<boolean> {
     ta.remove();
     return ok;
   };
-  if (navigator.clipboard && navigator.clipboard.writeText)
-    return navigator.clipboard.writeText(text).then(() => true, () => fallback());
-  return Promise.resolve(fallback());
+  if (viaExecCommand()) return Promise.resolve(true);
+  if (!(navigator.clipboard && navigator.clipboard.writeText)) return Promise.resolve(false);
+  return new Promise<boolean>(resolve => {
+    const timer = window.setTimeout(() => resolve(false), 1500);
+    navigator.clipboard.writeText(text).then(
+      () => {
+        window.clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        window.clearTimeout(timer);
+        resolve(false);
+      },
+    );
+  });
 }
 
 export function renderError(root: HTMLElement, msg: string): void {
