@@ -79,7 +79,7 @@ Every move on the back of a card has a grade, the standard chess annotation symb
 | `?` | mistake | loses 10–20 % |
 | `??` | blunder | loses more than 20 % |
 
-- By default, `!!`, `□`, `!` and `!?` are accepted as answers; `?!`, `?` and `??` fail the puzzle. Change which ones count with `acceptNags` ([card/README.md](card/README.md#settings)).
+- By default, `!!`, `□`, `!` and `!?` are accepted as answers; `?!`, `?` and `??` fail the puzzle. A move that loses a little more than a good move (1–5 % win rate) gets no mark: normal play, never a puzzle of its own, and not accepted by default (the card says something better was available; turn on `acceptNeutral` to accept it). Change which ones count with `acceptNags` ([card/README.md](card/README.md#settings)).
 - When the best move mates by force, a good move is one that keeps a forced mate, however long. A move that gives the mate up is `?!` at best, even if the engine still calls the position won. Turn on `strictMate` to accept only the fastest mate.
 - A *sacrifice* is a move that, along the engine's line, ends at least 2 points of material (pawn 1, knight and bishop 3, rook 5, queen 9) below the line that keeps the most.
 - The numbers beside moves (`+2.4`, `#3`) are the engine's eval from White's point of view; `#3` is mate in 3.
@@ -125,7 +125,8 @@ These change how a card plays, per device or, with **Save for all devices**, for
 | `afterAnswer` | `flip` | After the puzzle: show the back, stay on the front, or flip and then grade by itself (`grade`: Good if solved, Hard with hints, Again if failed). |
 | `hints` | on | The Hint button: a text hint if the card has one, then the piece to move. |
 | `live` | off | Keep playing past the stored moves against an engine, until mate, a draw or a quiet position. |
-| `goodMove` | 2 | Live play: how much win rate a move may lose and still count. |
+| `acceptNeutral` | off | Also accept normal moves: no mark, between a good move and an inaccuracy. |
+| `goodMove` | 1 | Live play: how much win rate a move may lose and still count. |
 | `timed`, `timeLimit`, `timeAffects` | off, 30 s, nothing | A clock while you think. Out of time can do nothing, fail the card, or grade a slow solve lower. |
 | `showEval` | on | The eval bar and numbers. |
 

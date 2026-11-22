@@ -49,7 +49,7 @@ PUZZLE_FEN = fen_key(board_at(SCHOLAR_MOVES, 5).fen())
 PUZZLE_EVAL = Eval(depth=20, lines=[
     Line(S(-30, 50, 850, 100), ["g7g6", "h5f3"]),
     Line(S(-20, 55, 850, 95), ["d8e7", "b1c3"]),
-    Line(S(-10, 70, 850, 80), ["d8f6", "b1c3"]),
+    Line(S(-10, 60, 850, 90), ["d8f6", "b1c3"]),
     Line(WHITE_MATES, ["g8f6", "h5f7"]),
 ])
 

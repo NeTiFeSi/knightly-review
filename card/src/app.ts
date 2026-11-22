@@ -26,7 +26,7 @@ import {
 } from './pgn';
 import type { LiveEngine } from './engine';
 import { acceptedMoves, graft, MateMiss, mateMiss, Outcome, PuzzleRun } from './puzzle';
-import { isAccepted } from './nag';
+import { acceptList, isAccepted } from './nag';
 import { cardKey, clearResult, loadResult, saveResult, StoredResult } from './state';
 
 function h<K extends keyof HTMLElementTagNameMap>(
@@ -55,6 +55,9 @@ function button(cls: string, text: string, title: string, onClick: () => void): 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+/** Shown when the answer was a normal move (no NAG): not rejected for being bad. */
+const NEUTRAL_NOTE = 'Not a bad move, but something better was available.';
 
 const EASE_LABELS: Record<Ease, string> = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
 
@@ -185,7 +188,7 @@ export class App {
     };
     if (card.side === 'front') {
       clearResult(this.key);
-      this.run = new PuzzleRun(puzzle.position, cfg.acceptNags, puzzle.gameMove.hint, undefined, cfg.strictMate);
+      this.run = new PuzzleRun(puzzle.position, acceptList(cfg), puzzle.gameMove.hint, undefined, cfg.strictMate);
       if (cfg.live && extras.engine) {
         const run = this.run;
         extras.engine.then(engine => {
@@ -826,10 +829,10 @@ export class App {
       });
     } else if (run && run.failure && node === run.failure.at) {
       if (run.failure.best) push(this.moveArrow(parseUci(run.failure.best), 'green'));
-      else acceptedMoves(node, node === run.start, this.cfg.acceptNags, this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
+      else acceptedMoves(node, node === run.start, acceptList(this.cfg), this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.failMove) push(this.moveArrow(this.failMove, 'red'));
     } else if (!run && node === this.puzzle.position) {
-      const accepted = acceptedMoves(node, true, this.cfg.acceptNags, this.cfg.strictMate);
+      const accepted = acceptedMoves(node, true, acceptList(this.cfg), this.cfg.strictMate);
       accepted.forEach(n => push(this.arrow(n, 'green', glyph(n))));
       push(this.arrow(this.puzzle.gameMove, 'red', glyph(this.puzzle.gameMove)));
       const mine = this.userFirstMove();
@@ -837,7 +840,7 @@ export class App {
         push(this.moveArrow(mine.move, 'blue'));
     } else if (!run && this.result && this.result.failAt === node.id && this.result.failAt !== this.puzzle.position.id) {
       if (this.result.failBest) push(this.moveArrow(parseUci(this.result.failBest), 'green'));
-      else acceptedMoves(node, false, this.cfg.acceptNags, this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
+      else acceptedMoves(node, false, acceptList(this.cfg), this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.result.failUci) push(this.moveArrow(parseUci(this.result.failUci), 'red'));
     }
     if (!shapes.length && !shapesHidden(node, this.view))
@@ -938,6 +941,7 @@ export class App {
         if (miss) line('kr-status-main', '✗ ' + f.node!.san + ' ' + this.mateMissText(miss) + again);
         else line('kr-status-main', '✗ ', this.moveBadge(f.node!), again);
         if (f.node!.comment) line('kr-status-comment', f.node!.comment);
+        if (!miss && f.at === run.start && !nagInfo(f.node!.nags)) line('kr-status-sub', NEUTRAL_NOTE);
       }
       this.acceptedLine(line, f.at, f.at === run.start);
       note();
@@ -971,6 +975,7 @@ export class App {
       }
       const end = this.liveEndText(r.liveEnd as never, r.played.length);
       if (end && r.status === 'solved') line('kr-status-sub', end);
+      if (r.status === 'failed' && r.reason === 'rejected' && !r.played.length && mine && mine.node && !nagInfo(mine.node.nags)) line('kr-status-sub', NEUTRAL_NOTE);
       if (r.hints) line('kr-status-sub', 'Used ' + hintCount(r.hints) + '.');
       if (r.elapsedMs !== undefined && r.reason !== 'timeout') {
         const limit = r.limitMs !== undefined ? r.limitMs / 1000 : this.cfg.timeLimit;
@@ -1016,7 +1021,7 @@ export class App {
     at: KNode,
     first: boolean,
   ): void {
-    const acc = acceptedMoves(at, first, this.cfg.acceptNags, this.cfg.strictMate);
+    const acc = acceptedMoves(at, first, acceptList(this.cfg), this.cfg.strictMate);
     if (!acc.length) return;
     const parts: (string | Node)[] = ['Best: '];
     acc.forEach((n, i) => {
@@ -1110,7 +1115,7 @@ export class App {
   }
 
   private keepCandidate(c: KNode): boolean {
-    if (c === this.puzzle.gameMove || c.live || isAccepted(c.nags, this.cfg.acceptNags)) return true;
+    if (c === this.puzzle.gameMove || c.live || isAccepted(c.nags, acceptList(this.cfg))) return true;
     const r = this.result;
     if (r && (r.played.indexOf(c.id) >= 0 || r.failNode === c.id)) return true;
     return c === this.cursor || this.isAncestorOf(c, this.cursor);

@@ -58,3 +58,14 @@ describe('eval', () => {
     expect(g.root.children[0].eval).toBeUndefined();
   });
 });
+
+import { acceptList, isAccepted as accepted } from '../src/nag';
+
+describe('moves with no NAG (normal play)', () => {
+  it('are rejected by default and accepted with acceptNeutral', () => {
+    const base = { acceptNags: [1, 3, 5, 8], acceptNeutral: false };
+    expect(accepted([], acceptList(base))).toBe(false);
+    expect(accepted([], acceptList({ ...base, acceptNeutral: true }))).toBe(true);
+    expect(accepted([6], acceptList({ ...base, acceptNeutral: true }))).toBe(false);
+  });
+});
