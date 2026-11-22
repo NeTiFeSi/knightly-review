@@ -115,7 +115,8 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a â
 | `autoReplyDelay` | `400` | ms before the opponent's reply. |
 | `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
 | `live` | `false` | Keep playing past the PGN with a live engine. |
-| `goodMove` | `2` | Live play: win-% a move may lose against the engine's best and still count. |
+| `acceptNeutral` | `false` | Also accept moves with no NAG (normal play: losing a little more than a good move, under an inaccuracy). |
+| `goodMove` | `1` | Live play: win-% a move may lose against the engine's best and still count. |
 | `liveMaxMoves` | `10` | Live play: at most this many of your moves. |
 | `timed` | `false` | Timed puzzles: a clock runs on the front while you think (not during the opponent's reply or the engine's), and the back shows the time taken. |
 | `timeLimit` | `30` | Timed: seconds for the whole puzzle (5â€“600). |

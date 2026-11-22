@@ -141,11 +141,11 @@ def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], 
         if card is None:
             node.comment = _eval(after)
             continue
-        node.nags = {card.played.nag}
+        node.nags = {card.played.nag} - {0}
         node.comment = _join(_eval(card.played.score or after), f"[%kr {ids[card.fen_key]}]", card.comment)
         for alt in card.alternatives:
             v = parent.add_variation(chess.Move.from_uci(alt.move))
-            v.nags = {alt.nag}
+            v.nags = {alt.nag} - {0}
             v.comment = _eval(alt.score)
             for r in alt.reply:
                 v = v.add_variation(chess.Move.from_uci(r))

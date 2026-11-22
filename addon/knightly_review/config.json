@@ -23,9 +23,10 @@
   "keep_running": "off",
   "keep_running_hours": 0,
   "note_grouping": "game",
-  "opening_min_loss": 2.0,
+  "opening_min_loss": 5.0,
   "include_opponent": false,
   "min_loss": 10.0,
-  "good_move": 2.0,
+  "good_move": 1.0,
+  "inaccuracy": 5.0,
   "setup_done": false
 }

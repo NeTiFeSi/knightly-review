@@ -63,6 +63,12 @@ const GROUPS: Group[] = [
     fields: [
       { key: 'acceptNags', label: 'Moves that count as correct', kind: 'nags' },
       {
+        key: 'acceptNeutral',
+        label: 'Also accept normal moves (no mark)',
+        kind: 'toggle',
+        help: 'Moves that lose a little more than a good move but are no inaccuracy are normal play. By default they are not accepted, and the card says something better was available.',
+      },
+      {
         key: 'strictMate',
         label: 'Forced mates: only the fastest mate counts',
         kind: 'toggle',

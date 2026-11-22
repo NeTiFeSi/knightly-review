@@ -26,6 +26,7 @@ SCHEMA: dict[str, tuple] = {
     "hints": ("bool",),
     "live": ("bool",),
     "goodMove": ("num", 0.1, 20, False),
+    "acceptNeutral": ("bool",),
     "liveMaxMoves": ("num", 1, 30, True),
     "timed": ("bool",),
     "timeLimit": ("num", 5, 600, True),

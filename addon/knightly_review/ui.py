@@ -392,9 +392,9 @@ class SettingsDialog(QDialog):
         self.opening_loss.setRange(0.1, 50)
         self.opening_loss.setSingleStep(0.5)
         self.opening_loss.setSuffix(" %")
-        self.opening_loss.setValue(float(self.cfg.get("opening_min_loss", 2.0)))
+        self.opening_loss.setValue(float(self.cfg.get("opening_min_loss", 5.0)))
         self.opening_loss.setToolTip("By opening: a move you played becomes a card when it loses more than this\n"
-                                     "(in win rate). The default, 2 %, matches \"good move\": every ?!, ? and ??.")
+                                     "(in win rate). The default, 5 %, matches \"inaccuracy\": every ?!, ? and ??.")
         wf.addRow("By opening, card moves losing over:", self.opening_loss)
         self.grouping.currentIndexChanged.connect(
             lambda _i: self.opening_loss.setEnabled(self.grouping.currentData() == "opening"))
@@ -419,7 +419,7 @@ class SettingsDialog(QDialog):
         self.good.setRange(0.1, 10)
         self.good.setSingleStep(0.5)
         self.good.setSuffix(" %")
-        self.good.setValue(float(self.cfg.get("good_move", 2.0)))
+        self.good.setValue(float(self.cfg.get("good_move", 1.0)))
         self.good.setToolTip("A move this close to the engine's best (in win rate) counts as a correct answer.")
         cf.addRow("Good move: within", self.good)
         lay.addWidget(cpu)

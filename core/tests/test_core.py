@@ -21,7 +21,7 @@ from knightly.config import Config
 from knightly.engine import discover, install
 from knightly.jobs import opening_order, run_update
 from knightly.model import Eval, Game, Line, NoWdl, Score
-from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, SINGULAR, Graded, build_card,
+from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, NEUTRAL, SINGULAR, Graded, build_card,
                              find_candidates, game_note_key, grade, line_material, opening_candidates,
                              opening_note_key, parse_game_note_key, parse_opening_note_key, ranked_candidates)
 from knightly.sources import chesscom, lichess
@@ -288,17 +288,20 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(self.g([("a", 0, 2), ("b", 30, 5)], current=5), {"a": BRILLIANT, "b": BLUNDER})
 
     def test_interesting_and_good(self):
-        nags = self.g([("sac", 0, -3), ("safe", 1.5, 0), ("bad", 8, 0)])
+        nags = self.g([("sac", 0, -3), ("safe", 0.8, 0), ("bad", 8, 0)])
         self.assertEqual(nags, {"sac": INTERESTING, "safe": GOOD, "bad": DUBIOUS})
         # Two good moves that sacrifice the same: neither has a good alternative keeping more material.
         self.assertEqual(self.g([("x", 0, -3), ("y", 1, -3), ("greedy", 25, 0)]),
                          {"x": GOOD, "y": GOOD, "greedy": BLUNDER})
 
     def test_bad_move_bands_and_threshold(self):
-        nags = self.g([("best", 0, 0), ("a", 3, 0), ("b", 10, 0), ("c", 10.5, 0), ("d", 20, 0), ("e", 21, 0)])
+        nags = self.g([("best", 0, 0), ("a", 5, 0), ("b", 10, 0), ("c", 10.5, 0), ("d", 20, 0), ("e", 21, 0)])
         self.assertEqual([nags[k] for k in "abcde"], [DUBIOUS, DUBIOUS, MISTAKE, MISTAKE, BLUNDER])
-        self.assertEqual(self.g([("best", 0, 0), ("a", 1.5, 0)])["a"], GOOD)
-        self.assertEqual(self.g([("best", 0, 0), ("a", 1.5, 0)], good_move=1.0)["a"], DUBIOUS)
+        self.assertEqual(self.g([("best", 0, 0), ("a", 0.9, 0)])["a"], GOOD)
+        self.assertEqual(self.g([("best", 0, 0), ("a", 1.5, 0)])["a"], NEUTRAL)
+        self.assertEqual(self.g([("best", 0, 0), ("a", 4.9, 0)])["a"], NEUTRAL)
+        self.assertEqual(self.g([("best", 0, 0), ("a", 1.5, 0)], good_move=2.0)["a"], GOOD)
+        self.assertEqual(self.g([("best", 0, 0), ("a", 3, 0)], inaccuracy=2.0)["a"], DUBIOUS)
 
     def test_forced_mate_needs_a_mating_move(self):
         def g(moves, legal=20):
@@ -404,6 +407,11 @@ class SelectTest(unittest.TestCase):
         self.assertIn("g6 was best", card.comment)
         self.assertIn("loses 52% win rate", card.comment)
 
+    def test_build_card_neutral_move_makes_no_puzzle(self):
+        # The played move loses 3 %: normal play (no NAG), not a mistake.
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
+        self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg, min_loss=1))
+
     def test_build_card_drops_false_alarm(self):
         table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
         self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg))
@@ -488,9 +496,9 @@ class OpeningsTest(unittest.TestCase):
         groups = openings.rank([sic, fr_old, fr_new])
         self.assertEqual([g.family for g in groups], ["Sicilian Defense", "French Defense"])
         analysed = {
-            "lichess:s1": scores_with({5: 3, 3: 2.5, 1: 1.5}, len(SICILIAN)),  # 1.5 is a good move: no card
-            "lichess:f1": scores_with({1: 5}, len(FRENCH)),
-            "lichess:f2": scores_with({1: 5, 3: 4}, len(FRENCH) + 1),
+            "lichess:s1": scores_with({5: 8, 3: 6, 1: 4}, len(SICILIAN)),  # 4 is normal play: no card
+            "lichess:f1": scores_with({1: 6}, len(FRENCH)),
+            "lichess:f2": scores_with({1: 6, 3: 5.5}, len(FRENCH) + 1),
         }
         cands = opening_candidates(groups, analysed, Config())
         self.assertEqual([(c.game_key, c.ply) for c in cands],

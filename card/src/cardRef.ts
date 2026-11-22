@@ -35,6 +35,8 @@ export interface Config {
   live: boolean;
   /** Live play: a move within this many win-% of the engine's best counts as correct. */
   goodMove: number;
+  /** Also accept moves that lose a little more than a good move but are no inaccuracy (no NAG). */
+  acceptNeutral: boolean;
   /** Live play: at most this many of your moves. */
   liveMaxMoves: number;
   /** Timed puzzles: a clock runs while you think. */
@@ -65,7 +67,8 @@ export const DEFAULT_CONFIG: Config = {
   gradeFailed: 1,
   hints: true,
   live: false,
-  goodMove: 2,
+  goodMove: 1,
+  acceptNeutral: false,
   liveMaxMoves: 10,
   timed: false,
   timeLimit: 30,

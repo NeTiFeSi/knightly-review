@@ -7,6 +7,7 @@
    strictMate: in a forced mate, only the fastest mate counts (otherwise any forced mate does)
    intro: 'lastMove' | 'fullGame'      afterAnswer: 'flip' | 'stay' | 'grade'
    gradeSolved / gradeHinted / gradeFailed: 1 Again, 2 Hard, 3 Good, 4 Easy      delays in ms
+   acceptNeutral: also accept normal moves with no NAG (off by default)
    live: play on with an engine past the PGN (off by default)      goodMove: win-% a live move may lose      liveMaxMoves
    timed: a clock on the puzzle (off by default)      timeLimit: seconds      timeAffects: 'nothing' | 'fail' | 'grade'      gradeSlow: ease for a slow solve      showClock */
 window.KR_CONFIG = {
@@ -25,7 +26,8 @@ window.KR_CONFIG = {
   gradeFailed: 1,
   hints: true,
   live: false,
-  goodMove: 2,
+  goodMove: 1,
+  acceptNeutral: false,
   liveMaxMoves: 10,
   timed: false,
   timeLimit: 30,

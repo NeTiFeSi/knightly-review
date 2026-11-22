@@ -6,7 +6,9 @@ score falls below the best move's.
 
 Grading (NAGs) of the candidate moves at a puzzle position:
 
-- A **good move** loses at most `cfg.good_move` points.
+- A **good move** loses at most `cfg.good_move` points. A move that loses
+  more but less than `cfg.inaccuracy` is normal play: no NAG (0). It isn't an
+  accepted answer by default, but it is never a mistake, so it makes no puzzle.
 - A **sacrifice** gives up material in the short term while an alternative
   keeps more: `cfg.sacrifice_plies` plies down the engine's line (followed
   further while captures or checks are still going on, or a recapture that was
@@ -24,7 +26,8 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 | □  ($8) | the only good move, not a sacrifice (a "singular move") |
 | !? ($5) | a good move and a sacrifice, while another good move keeps more material |
 | !  ($1) | any other good move |
-| ?! ($6) | not a good move; loses up to 10 points |
+| (none)  | loses more than a good move but less than `cfg.inaccuracy` (5) points |
+| ?! ($6) | loses `cfg.inaccuracy` to 10 points |
 | ?  ($2) | loses 10 to 20 points |
 | ?? ($4) | loses more than 20 points |
 
@@ -44,6 +47,7 @@ from .config import Config
 from .model import Candidate, CardSpec, Choice, Game, Line, Score
 from .openings import Group
 
+NEUTRAL = 0  # no NAG
 GOOD, MISTAKE, BRILLIANT, BLUNDER, INTERESTING, DUBIOUS, SINGULAR = 1, 2, 3, 4, 5, 6, 8
 ACCEPTED = (BRILLIANT, SINGULAR, INTERESTING, GOOD)
 NAG_SYMBOL = {1: "!", 2: "?", 3: "!!", 4: "??", 5: "!?", 6: "?!", 8: "□"}
@@ -154,7 +158,10 @@ def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) 
     good = [m for m in moves if is_good(m)]
     for m in moves:
         if not is_good(m):
-            m.nag = DUBIOUS if m.loss <= 10 else MISTAKE if m.loss <= 20 else BLUNDER
+            if m.loss <= 10:
+                m.nag = DUBIOUS if m.loss >= cfg.inaccuracy or mating else NEUTRAL
+            else:
+                m.nag = MISTAKE if m.loss <= 20 else BLUNDER
             continue
         sacrifice = m.material <= min(current, most) - cfg.sacrifice_points
         if len(good) == 1 and legal_moves > 1:
@@ -360,7 +367,7 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         return None
     g_played = next(g for g in graded if g.move == played)
     threshold = cfg.min_loss if min_loss is None else min_loss
-    if g_played.loss < threshold / 2 or g_played.nag in ACCEPTED:  # the quick pass overstated it
+    if g_played.loss < threshold / 2 or g_played.nag in ACCEPTED or g_played.nag == NEUTRAL:  # the quick pass overstated it
         return None
     choices: list[Choice] = []
     played_choice = None
