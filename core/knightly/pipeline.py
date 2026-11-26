@@ -35,9 +35,9 @@ from . import notes as notes_mod, similar, stats
 from .cache import fen_key
 from .config import Config
 from .engine.analyse import terminal
-from .follow import follow_puzzle
+from .follow import Decision, follow_puzzle, trimmed
 from .progress import Tracker
-from .model import CardSpec, Game, NoteSpec, Score
+from .model import CardSpec, Choice, Game, NoteSpec, Score
 from .puzzles import Puzzle, Store, puzzle_id
 from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
 
@@ -79,17 +79,17 @@ class Unit:
 
 class Miner:
     def __init__(self, games: Iterable[Game], analyser, cfg: Config, store: Store, *, want: int,
-                 known: Iterable[Puzzle] = (), legacy: Iterable[str] = (), existing: Optional[dict[str, str]] = None,
+                 known: Iterable[Puzzle] = (), claimed: Iterable[str] = (), existing: Optional[dict[str, str]] = None,
                  make: bool = True, tracker: Optional[Tracker] = None,
                  on_note: Optional[Callable[[NoteSpec], None]] = None,
                  clock: Callable[[], float] = time.monotonic):
-        """`games` newest first. `known`: the puzzles already in the collection; `legacy`: fen keys of
-        positions on other cards (never offered again); `existing`: note key → PGN of the collection's notes.
+        """`games` newest first. `known`: the puzzles already in the collection; `claimed`: fen keys of
+        the positions of every card already in the collection (never made twice, whatever the ply); `existing`: note key → PGN of the collection's notes.
         `make=False` (pre-calculating): analyse and warm the cache, make and change no notes."""
         self.games = list(games)
         self.by_key = {g.key: g for g in self.games}
         self.an, self.cfg, self.store, self.want, self.make = analyser, cfg, store, want, make
-        self.legacy = set(legacy)
+        self.claimed = set(claimed)
         self.existing = existing or {}
         self.tracker = tracker or Tracker()
         self.on_note = on_note or (lambda spec: None)
@@ -103,7 +103,8 @@ class Miner:
         self._graded: dict[str, dict[int, int]] = {}
         self.notes: list[NoteSpec] = []
         self.made: set[str] = set()  # keys of the notes made in this run
-        self.found = 0  # puzzles confirmed (made, or only found when `make` is off)
+        self.found = 0  # mistakes confirmed (made, or only found when `make` is off)
+        self.cards = 0  # cards made in this run (what `want` limits)
         self.analysed = 0  # positions searched by the engine in this run
         self.finished = False  # nothing left to continue: the run ended by itself, not out of time
         self._step = ""
@@ -120,9 +121,11 @@ class Miner:
         """The stage's message: the step, the puzzles found so far and the time left."""
         left = self.deadline - self.clock()
         budget = "" if left == math.inf else f" · {max(0, math.ceil(left / 60))} min left"
+        done = self.cards if self.make else self.found
+        what = "cards made" if self.make else "puzzles found"
         if self.want >= UNBOUNDED:
-            return f"{step} ({self.found} puzzles found{budget})"
-        return f"{step} ({self.found} of {self.want} puzzles found{budget})"
+            return f"{step} ({done} {what}{budget})"
+        return f"{step} ({done} of {self.want} {what}{budget})"
 
     def _say(self, step: str, detail: str = "", position: Optional[str] = None) -> None:
         """Change the message of the current stage (a forced update when it differs)."""
@@ -187,13 +190,13 @@ class Miner:
                         self._ply(ply, mine)
             self.finished = True
         except _Stop:
-            self.finished = self.want < UNBOUNDED and self.found >= self.want and self.make
+            self.finished = self.want < UNBOUNDED and self.cards >= self.want and self.make
 
     def _units(self, ply: int, mine: bool) -> list[Unit]:
         out = []
         for pos in self.by_ply.get(ply, {}).values():
             played = {u: st for u, st in pos.moves.items() if (st.mine if mine else st.opp)}
-            if not played or pos.key in self.legacy:
+            if not played or pos.key in self.claimed:
                 continue
             pid = puzzle_id(pos.fen, ply)
             if pid in self.known or pid in self.merged:
@@ -217,7 +220,7 @@ class Miner:
         step = f"Ply {ply}, {who}: grading {len(units)} positions at depth {self.scan[0]} of {self.cfg.sf_depth}"
         self._step = step
         self.tracker.plies(ply, max(self.by_ply, default=0))
-        self.tracker.found(self.found, 0 if self.want >= UNBOUNDED else self.want)
+        self.tracker.found(self.cards if self.make else self.found, 0 if self.want >= UNBOUNDED else self.want)
         self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
         self.tracker.stage("analyse", self._msg(step), total=sum(len(u.child) for u in units), unit="moves",
                            step=f"depth {self.scan[0]} of {self.cfg.sf_depth}")
@@ -243,7 +246,7 @@ class Miner:
                 heapq.heappush(heap, (-self.loss(u), n, u))
             else:
                 self._confirm(u, ply)
-            if self.make and self.found >= self.want:
+            if self.make and self.cards >= self.want:
                 raise _Stop()
 
     def _confirm(self, u: Unit, ply: int) -> None:
@@ -264,7 +267,7 @@ class Miner:
             if card is None:
                 continue
             self.found += 1
-            self.tracker.found(self.found, 0 if self.want >= UNBOUNDED else self.want)
+            self.tracker.found(self.cards if self.make else self.found, 0 if self.want >= UNBOUNDED else self.want)
             if self.make:
                 self._add(u, game, card)
             self._step = ""  # report the new count
@@ -298,6 +301,9 @@ class Miner:
         return notes_mod.puzzle_notes(p.head, self._stats_lines(p), [c for cs in p.links.values() for c in cs])
 
     def _add(self, u: Unit, game: Game, card: CardSpec) -> None:
+        """The notes of a mistake: one for every decision position of its two trees, deepest first, then the
+        mistake's own. A position that is a card already is never made again. Stops between notes at the
+        card limit (the mistake is found again next time and only the missing notes are made)."""
         ply = card.ply
         similar_to = self._similar(u.board)
         if similar_to is not None:
@@ -313,24 +319,84 @@ class Miner:
         second = build_punish(after.copy(stack=False), ply + 1, played_san, self.an, self.cfg, mine=card.mine)
         seen = {fen_key(hist.fen()), fen_key(after.fen())}
         quick = self.scan[0]
-        follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick, tracker=self.tracker)
+        decisions = follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick,
+                                  tracker=self.tracker)
         if second is not None:
-            follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=seen, quick_depth=quick,
-                          include_played=True, tracker=self.tracker)
-        skip = {ply}
+            decisions += follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=seen,
+                                       quick_depth=quick, include_played=True, tracker=self.tracker)
+        for d in sorted(decisions, key=lambda d: -d.depth):  # the leaves first, then towards the root
+            self._sub_note(d, game)
+            if self.cards >= self.want:
+                raise _Stop()
+        self._root_note(u, game, card, second, after)
+
+    def _root_note(self, u: Unit, game: Game, card: CardSpec, second: Optional[CardSpec], after: chess.Board) -> None:
+        ply = card.ply
+        if second is not None and fen_key(after.fen()) in self.claimed:
+            second = None  # that position is a card already
+        # A card is a move and the reply to it: what the trees hold below is the notes of its own.
+        card.alternatives = [trimmed(c, 1) for c in card.alternatives]
+        if second is not None:
+            second.played, second.alternatives = trimmed(second.played, 1), [trimmed(c, 1) for c in second.alternatives]
         p = Puzzle(key=notes_mod.puzzle_key(card.fen_key, ply), fen=u.board.fen(), ply=ply,
                    moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},
                    played=card.played.move, after_fen=after.fen() if second else "", after_ply=ply + 1 if second else 0,
                    head=notes_mod.puzzle_head(game, card))
         p.notes = self._notes_of(p)
         spec = notes_mod.build_puzzle(game, self._scores_of(game), card, second, p.notes, self.cfg.inaccuracy,
-                                      self._nags(game, skip))
+                                      self._nags(game, {ply}))
+        self._emit(p, spec)
+
+    def _emit(self, p: Puzzle, spec: NoteSpec) -> None:
         p.tags, p.pgn, p.cards, p.card_ids = spec.tags, spec.pgn, spec.cards, spec.card_ids
         self.store.put(p)
         self.known[p.id] = p
         self.made.add(p.key)
+        self.claimed.update(spec.card_ids)
+        self.cards += spec.new_cards
         self.notes.append(spec)
+        self.tracker.found(self.cards, 0 if self.want >= UNBOUNDED else self.want)
         self.on_note(spec)
+
+    def _sub_note(self, d: Decision, game: Game) -> None:
+        """The note of a decision position X: find the best move there (with the opponent's reply), and punish the
+        best move that is not good (the position after it). Not made when X is a card already; the second card
+        is left out when its position is a card already or the game is decided there."""
+        key = fen_key(d.fen)
+        mistake = next((c for c in d.choices if c.move not in d.good), None)
+        if key in self.claimed or mistake is None:
+            return
+        board = chess.Board(d.fen)
+        user = chess.WHITE if game.user_is_white else chess.BLACK
+        mine = board.turn == user
+        best = d.choices[0]
+        white = board.turn == chess.WHITE
+        loss = max(0.0, best.score.win_pct(white) - mistake.score.win_pct(white))
+        best_san = board.san(chess.Move.from_uci(best.move))
+        mistake_san = board.san(chess.Move.from_uci(mistake.move))
+        comment = (f"{mistake_san} loses {loss:.0f}% win rate. {best_san} was best." if mine else
+                   f"{mistake_san} loses {loss:.0f}% win rate for your opponent here. {best_san} was best.")
+        others = [trimmed(c, 1) for c in d.choices if c is not mistake]
+        first = CardSpec(fen_key=key, ply=d.ply, played=trimmed(mistake, 0), alternatives=others, loss=loss,
+                         comment=comment, mine=mine)
+        after = board.copy(stack=False)
+        after.push_uci(mistake.move)
+        second = None
+        if fen_key(after.fen()) not in self.claimed:
+            second = build_punish(after.copy(stack=False), d.ply + 1, mistake_san, self.an, self.cfg, mine=mine)
+        if second is not None:
+            follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=set(), quick_depth=self.scan[0],
+                          include_played=True, tracker=self.tracker, max_plies=2)
+            second.played = trimmed(second.played, 1)
+            second.alternatives = [trimmed(c, 1) for c in second.alternatives]
+        p = Puzzle(key=notes_mod.puzzle_key(key, d.ply), fen=d.fen, ply=d.ply,
+                   moves={mistake.move: mistake.nag, **{c.move: c.nag for c in others}}, played=mistake.move,
+                   after_fen=after.fen() if second else "", after_ply=d.ply + 1 if second else 0,
+                   head=notes_mod.puzzle_head(game, first))
+        p.notes = self._notes_of(p)
+        spec = notes_mod.build_puzzle(game, [], first, second, p.notes, self.cfg.inaccuracy,
+                                      lead=(d.before_fen, trimmed(d.reply, 0)))
+        self._emit(p, spec)
 
     def _similar(self, board: chess.Board) -> Optional[Puzzle]:
         best: Optional[tuple[int, Puzzle]] = None

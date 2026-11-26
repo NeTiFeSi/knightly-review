@@ -46,3 +46,30 @@ describe('generated note', () => {
     expect(r.play(mv(r.cur, 'g8f6'))).toMatchObject({ kind: 'failed', reason: 'rejected', san: 'Nf6' });
   });
 });
+
+// A note made from a position inside a mistake's tree: it starts from a FEN, with the opponent's last move.
+const SUB = readFileSync(new URL('../../core/tests/fixtures/generated_sub_note.pgn', import.meta.url), 'utf8');
+
+describe('generated sub-note', () => {
+  it('finds both cards, the position after the lead-in move', () => {
+    const gs = parseGames(SUB);
+    expect(findPuzzle(gs, 1)!.position.san).toBe('Nc3');
+    expect(findPuzzle(gs, 2)).toBeDefined();
+  });
+
+  it('accepts a good move with the opponent reply, and rejects the mistake', () => {
+    const r = new PuzzleRun(findPuzzle(parseGames(SUB), 1)!.position, DEFAULT_ACCEPT);
+    expect(r.userColor).toBe('black');
+    expect(r.play(mv(r.cur, 'g7g6')).kind).toBe('solved');
+    const w = new PuzzleRun(findPuzzle(parseGames(SUB), 1)!.position, DEFAULT_ACCEPT);
+    expect(w.play(mv(w.cur, 'b7b6'))).toMatchObject({ kind: 'failed', reason: 'rejected' });
+  });
+
+  it('plays the punishment as one move and a reply', () => {
+    const r = new PuzzleRun(findPuzzle(parseGames(SUB), 2)!.position, DEFAULT_ACCEPT);
+    expect(r.userColor).toBe('white');
+    const out = r.play(mv(r.cur, 'h5f7'));
+    expect(out.kind).toBe('solved');
+    if (out.kind === 'solved') expect(out.reply!.san).toBe('Qxf7');
+  });
+});

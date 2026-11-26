@@ -30,7 +30,7 @@ python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards
 | `notes.py` | PGN with `[%kr N]` tags: cloze 1 the mistake, cloze 2 its punishment; the Notes field; the notes' tags (from the first puzzle) |
 | `progress.py` | `Tracker`: what a run is doing (stage with a growing total, per-engine searches with live depth, puzzles found, ply, time left), read from any thread; `describe()` formats it for the add-on window and the CLI (tqdm bars when installed) |
 | `jobs.py` | `run_update()`: the single entry point the add-on calls (pauses while `gate` is cleared) |
-| `follow.py` | The solution tree under a puzzle's answers: both sides' good moves followed until a stop (decided, drawn, a Stockfish mate, a small gap, game over) |
+| `follow.py` | The solution tree under a puzzle's answers: both sides' good moves followed until a stop (decided, drawn, a Stockfish mate, a small gap, game over), and the decision positions found on the way; each becomes a note (`pipeline.py`, deepest first) |
 
 `data/openings.tsv` is Lichess's [chess-openings](https://github.com/lichess-org/chess-openings) table (CC0), stored as the position each named line reaches (FEN without move counters), so transpositions are recognised.
 
