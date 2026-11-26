@@ -316,7 +316,7 @@ class Miner:
         follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick, tracker=self.tracker)
         if second is not None:
             follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=seen, quick_depth=quick,
-                          include_played=True, one_move=bool(second.decided), tracker=self.tracker)
+                          include_played=True, tracker=self.tracker)
         skip = {ply}
         p = Puzzle(key=notes_mod.puzzle_key(card.fen_key, ply), fen=u.board.fen(), ply=ply,
                    moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},

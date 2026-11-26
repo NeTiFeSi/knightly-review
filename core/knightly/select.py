@@ -334,18 +334,18 @@ def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: C
     """The second puzzle of a mistake: `board` is the position after the bad move (`ply` half-moves played),
     and the answer is the best reply. The card's main move is that reply, the other moves are graded as usual.
 
-    None when the game is over there or the reply is forced (nothing to find).
+    None when the game is over there, the reply is forced (nothing to find), or the game is decided (no move
+    can change the result): the note then has one card.
     """
     if board.is_game_over() or board.legal_moves.count() < 2:
         return None
     graded, by_move = grade_position(board, analyser, cfg, None, ply)
-    if not graded:
+    if not graded or decided(board, by_move) is not None:  # no move can change the result: no second card
         return None
     best = min(graded, key=lambda g: g.loss).move
     main, others = _choices(graded, by_move, cfg, best)
     assert main is not None
     best_san = board.san(chess.Move.from_uci(best))
-    verdict = decided(board, by_move)
     return CardSpec(
         fen_key=fen_key(board.fen()),
         ply=ply,
@@ -355,5 +355,4 @@ def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: C
         comment=f"{played_san} is punished by {best_san}.",
         mine=mine,
         mate=_mates(graded, best),
-        decided=decided_text(board, verdict) if verdict is not None else "",
     )

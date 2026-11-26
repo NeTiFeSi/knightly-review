@@ -867,12 +867,6 @@ class FollowTest(unittest.TestCase):
         card, _ = self.tree({}, alternatives=("f6g8",), solver=chess.BLACK, board=b)
         self.assertEqual(card.alternatives[0].comment, "Draw by threefold repetition.")
 
-    def test_one_move_check_and_response(self):
-        table = {self.key("e2e4"): _ev(("e7e5", score_for(48)), ("c7c5", score_for(48.5)))}
-        card, _ = self.tree(table, one_move=True)
-        reply = card.alternatives[0].children
-        self.assertEqual([(c.move, c.children) for c in reply], [("e7e5", [])])  # the best reply only, nothing after it
-
     def test_decided_positions_make_no_puzzle(self):
         from knightly.select import decided
         b = board_at(SCHOLAR_MOVES, 5)
@@ -884,11 +878,10 @@ class FollowTest(unittest.TestCase):
         table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
         self.assertIsNone(build_card(b, 5, "g8f6", FakeAnalyser(table=table), Config()))  # every move holds above 50 %
 
-    def test_a_decided_punishment_is_a_one_move_puzzle_with_a_note(self):
+    def test_a_decided_punishment_makes_no_second_card(self):
         after = board_at(SCHOLAR_MOVES, 6)
         table = {fen_key(after.fen()): _ev(("h5h4", score_for(80)), ("h5g4", score_for(75)))}  # White wins whatever
-        card = build_punish(after, 6, "Nf6", FakeAnalyser(table=table), Config())
-        self.assertEqual(card.decided, "The game is decided: White is winning.")
+        self.assertIsNone(build_punish(after, 6, "Nf6", FakeAnalyser(table=table), Config()))
 
 
 class ProgressTest(unittest.TestCase):
