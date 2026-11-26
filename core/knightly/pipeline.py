@@ -36,6 +36,7 @@ from .cache import fen_key
 from .config import Config
 from .engine.analyse import terminal
 from .follow import follow_puzzle
+from .progress import Tracker
 from .model import CardSpec, Game, NoteSpec, Score
 from .puzzles import Puzzle, Store, puzzle_id
 from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
@@ -79,7 +80,7 @@ class Unit:
 class Miner:
     def __init__(self, games: Iterable[Game], analyser, cfg: Config, store: Store, *, want: int,
                  known: Iterable[Puzzle] = (), legacy: Iterable[str] = (), existing: Optional[dict[str, str]] = None,
-                 make: bool = True, progress: Optional[Progress] = None,
+                 make: bool = True, tracker: Optional[Tracker] = None,
                  on_note: Optional[Callable[[NoteSpec], None]] = None,
                  clock: Callable[[], float] = time.monotonic):
         """`games` newest first. `known`: the puzzles already in the collection; `legacy`: fen keys of
@@ -90,7 +91,7 @@ class Miner:
         self.an, self.cfg, self.store, self.want, self.make = analyser, cfg, store, want, make
         self.legacy = set(legacy)
         self.existing = existing or {}
-        self.progress = progress or (lambda *a: None)
+        self.tracker = tracker or Tracker()
         self.on_note = on_note or (lambda spec: None)
         self.clock = clock
         self.deadline = clock() + cfg.analysis_minutes * 60 if cfg.analysis_minutes > 0 else math.inf
@@ -115,21 +116,27 @@ class Miner:
         if self.out_of_time():
             raise _Stop()
 
-    def _report(self, done: int, total: int, step: str) -> None:
-        if step != self._step:
-            self._step = step
-            left = self.deadline - self.clock()
-            budget = "" if left == math.inf else f" · {max(0, math.ceil(left / 60))} min left"
-            if self.want >= UNBOUNDED:
-                self.progress("analyse", self.found, 0, f"{step} ({self.found} puzzles found{budget})")
-            else:
-                self.progress("analyse", self.found, self.want, f"{step} ({self.found} of {self.want} puzzles found{budget})")
-        self.progress("positions", done, total, step)
+    def _msg(self, step: str) -> str:
+        """The stage's message: the step, the puzzles found so far and the time left."""
+        left = self.deadline - self.clock()
+        budget = "" if left == math.inf else f" · {max(0, math.ceil(left / 60))} min left"
+        if self.want >= UNBOUNDED:
+            return f"{step} ({self.found} puzzles found{budget})"
+        return f"{step} ({self.found} of {self.want} puzzles found{budget})"
+
+    def _say(self, step: str, detail: str = "", position: Optional[str] = None) -> None:
+        """Change the message of the current stage (a forced update when it differs)."""
+        self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
+        if position is not None:
+            self.tracker.position(position)
+        self.tracker.message(self._msg(step), step=detail, force=step != self._step)
+        self._step = step
 
     def _score(self, fen: str, depth: int) -> None:
         k = fen_key(fen)
         cur = self.sc.get(k)
         if cur and cur[1] >= depth:
+            self.tracker.advance()
             return
         self._tick()
         board = chess.Board(fen)
@@ -139,6 +146,7 @@ class Miner:
             s, d = self.an.score(board, depth)
             self.analysed += 1
             self.sc[k] = (s, d)
+        self.tracker.advance()
 
     def _pct(self, u: Unit, move: str) -> Optional[float]:
         cur = self.sc.get(fen_key(u.child[move]))
@@ -164,6 +172,8 @@ class Miner:
         else:
             by_score = sorted((m for m in u.child if self._pct(u, m) is not None), key=lambda m: -(self._pct(u, m) or 0))
             moves = list(dict.fromkeys([*u.played, *by_score[:EXTRA_LINES]]))
+        if level:
+            self.tracker.plan(len(moves))
         for m in moves:
             self._score(u.child[m], depth)
 
@@ -205,10 +215,15 @@ class Miner:
             return
         who = "your moves" if mine else "your opponents' moves"
         step = f"Ply {ply}, {who}: grading {len(units)} positions at depth {self.scan[0]} of {self.cfg.sf_depth}"
+        self._step = step
+        self.tracker.plies(ply, max(self.by_ply, default=0))
+        self.tracker.found(self.found, 0 if self.want >= UNBOUNDED else self.want)
+        self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
+        self.tracker.stage("analyse", self._msg(step), total=sum(len(u.child) for u in units), unit="moves",
+                           step=f"depth {self.scan[0]} of {self.cfg.sf_depth}")
         for i, u in enumerate(units):
-            self._report(i, len(units), step)
+            self.tracker.position(f"ply {ply}: position {i + 1} of {len(units)}")
             self._search(u, 0)
-        self._report(len(units), len(units), step)
         floor = self.cfg.min_loss_at(ply) / 2  # the low depths only rule out the clearly fine moves
         heap = [(-self.loss(u), i, u) for i, u in enumerate(units)]
         heapq.heapify(heap)
@@ -220,8 +235,9 @@ class Miner:
                 break  # the heap is ordered: everything left is below too
             if u.level < len(self.scan) - 1:
                 u.level += 1
-                self._report(0, 0, f"Ply {ply}, {who}: checking the biggest losses at depth {self.scan[u.level]} "
-                                   f"of {self.cfg.sf_depth}")
+                self._say(f"Ply {ply}, {who}: checking the biggest losses at depth {self.scan[u.level]} "
+                          f"of {self.cfg.sf_depth}", f"depth {self.scan[u.level]} of {self.cfg.sf_depth}",
+                          f"ply {ply}: a move losing {-neg:.0f} % · {len(heap) + 1} candidates")
                 self._search(u, u.level)
                 n += 1
                 heapq.heappush(heap, (-self.loss(u), n, u))
@@ -232,7 +248,9 @@ class Miner:
 
     def _confirm(self, u: Unit, ply: int) -> None:
         """Full-strength look at the position's worst played moves; the first that is no good move makes the puzzle."""
-        self._report(0, 0, f"Ply {ply}: making a puzzle at full strength")
+        self._say(f"Ply {ply}: making a puzzle at full strength", f"depth {self.cfg.sf_depth} of {self.cfg.sf_depth}, every move",
+                  f"ply {ply}: a move losing {self.loss(u):.0f} %")
+        self.tracker.plan(1)
         game_opponent = ""
         worst = sorted(self._losses(u).items(), key=lambda kv: -kv[1])[:CONFIRM_TRIES]
         for move, loss in worst:
@@ -242,9 +260,11 @@ class Miner:
             game = (st.mine_game if u.mine else st.opp_game) or self.games[0]
             game_opponent = "" if u.mine else ((game.black if game.user_is_white else game.white) or "Your opponent")
             card = build_card(u.board.copy(stack=False), ply, move, self.an, self.cfg, game_opponent)
+            self.tracker.advance()
             if card is None:
                 continue
             self.found += 1
+            self.tracker.found(self.found, 0 if self.want >= UNBOUNDED else self.want)
             if self.make:
                 self._add(u, game, card)
             self._step = ""  # report the new count
@@ -264,10 +284,9 @@ class Miner:
         """The NAGs of a game's other moves, graded once per run (the analyser caches the searches)."""
         if game.key not in self._graded:
             label = f"Grading the moves of {game.white} – {game.black}"
-            self.progress("cards", self.found, self.want, label)
-            self._graded[game.key] = game_nags(game, self.an, self.cfg, skip,  # puzzle plies are graded in full already
-                                               lambda i, n: self.progress("positions", i, n, label))
-            self.progress("positions", 0, 0, "")
+            with self.tracker.sub("cards", label, total=len(game.moves), unit="positions", step="grading the moves"):
+                self._graded[game.key] = game_nags(  # puzzle plies are graded in full already
+                    game, self.an, self.cfg, skip, lambda i, n: self.tracker.advance() if i else None)
         return self._graded[game.key]
 
     def _stats_lines(self, p: Puzzle) -> list[str]:
@@ -294,10 +313,10 @@ class Miner:
         second = build_punish(after.copy(stack=False), ply + 1, played_san, self.an, self.cfg, mine=card.mine)
         seen = {fen_key(hist.fen()), fen_key(after.fen())}
         quick = self.scan[0]
-        follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick)
+        follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick, tracker=self.tracker)
         if second is not None:
             follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=seen, quick_depth=quick,
-                          include_played=True)
+                          include_played=True, tracker=self.tracker)
         skip = {ply}
         p = Puzzle(key=notes_mod.puzzle_key(card.fen_key, ply), fen=u.board.fen(), ply=ply,
                    moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},

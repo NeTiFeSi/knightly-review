@@ -13,13 +13,14 @@ from pathlib import Path
 
 import chess
 
-from helpers import (FIXTURES, FRENCH, score_for, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
+from helpers import (FIXTURES, FRENCH, FakeAnalysis, score_for, sf_info, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
                      FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
-from knightly import http, notes, openings, phases, pipeline, puzzles, similar, sources, stats
+from knightly import http, notes, progress, openings, phases, pipeline, puzzles, similar, sources, stats
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
 from knightly.jobs import run_update
+from knightly.progress import Tracker
 from knightly.model import Eval, Game, Line, NoWdl, Score
 from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, NEUTRAL, SINGULAR, Graded, build_card,
                              build_punish, grade, line_material)
@@ -883,6 +884,141 @@ class FollowTest(unittest.TestCase):
         self.assertIsNone(build_punish(after, 6, "Nf6", FakeAnalyser(table=table), Config()))
 
 
+class ProgressTest(unittest.TestCase):
+    def test_plan_and_advance_count_like_a_queue(self):
+        t = Tracker()
+        t.stage("analyse", "Ply 0", total=3, unit="moves", step="depth 5 of 13")
+        t.plan(2)
+        threads = [threading.Thread(target=lambda: [t.advance() for _ in range(50)]) for _ in range(4)]
+        [th.start() for th in threads]
+        [th.join() for th in threads]
+        s = t.snapshot()
+        self.assertEqual((s.done, s.total, s.unit, s.step), (200, 5, "moves", "depth 5 of 13"))
+
+    def test_stage_changes_are_forced_and_advances_throttled(self):
+        now = [0.0]
+        t = Tracker(clock=lambda: now[0], min_interval=1.0)
+        seen = []
+        t.listen(lambda s: seen.append((s.stage, s.done)))
+        t.stage("analyse", "a", total=10)
+        for _ in range(5):
+            t.advance()  # within the interval: not delivered
+        self.assertEqual(seen, [("analyse", 0)])
+        now[0] = 2.0
+        t.advance()
+        t.stage("analyse", "b", total=4)  # forced even right after
+        self.assertEqual(seen, [("analyse", 0), ("analyse", 6), ("analyse", 0)])
+
+    def test_rate_and_eta(self):
+        now = [0.0]
+        t = Tracker(clock=lambda: now[0])
+        t.stage("analyse", "x", total=100)
+        for i in range(1, 11):
+            now[0] = i * 0.5
+            t.advance()
+        s = t.snapshot()
+        self.assertAlmostEqual(s.rate, 2.0, places=1)
+        self.assertAlmostEqual(s.eta, 45.0, places=0)
+        d = progress.describe(s)
+        self.assertIn("10 of 100", d["stage"])
+        self.assertIn("2.0/s", d["stage"])
+        self.assertAlmostEqual(d["stage_ratio"], 0.1)
+
+    def test_sub_stage_restores_the_outer_one(self):
+        t = Tracker()
+        t.stage("analyse", "outer", total=10, unit="moves")
+        t.advance(4)
+        with t.sub("cards", "grading", total=7, unit="positions"):
+            t.advance()
+            self.assertEqual((t.snapshot().stage, t.snapshot().done, t.snapshot().total), ("cards", 1, 7))
+        s = t.snapshot()
+        self.assertEqual((s.stage, s.message, s.done, s.total), ("analyse", "outer", 4, 10))
+
+    def test_engine_rows(self):
+        t = Tracker()
+        t.engine("stockfish", "Stockfish 17", True)
+        t.engine("lc0", "Lc0 0.31", True)
+        t.search_start("stockfish", chess.STARTING_FEN, 0, 20, 13)
+        t.search_progress("stockfish", depth=9, nodes=10**6, nps=1_200_000, ms=800)
+        d = progress.describe(t.snapshot())["engines"]
+        self.assertEqual(d["stockfish"]["detail"], "ply 0 · depth 9 of 13 · 20 lines · 1200 knps")
+        self.assertAlmostEqual(d["stockfish"]["ratio"], 9 / 13)
+        self.assertEqual(d["lc0"]["detail"], "idle")
+        t.search_end("stockfish", ms=900)
+        t.search_end("stockfish", cached=True)
+        self.assertEqual(progress.describe(t.snapshot())["engines"]["stockfish"]["counts"], "1 searched · 1 from the cache")
+        t.search_start("lc0", chess.STARTING_FEN, 3, 1, 900)
+        t.search_progress("lc0", ms=450)
+        self.assertEqual(progress.describe(t.snapshot())["engines"]["lc0"]["detail"], "ply 3 · 0.5 of 0.9 s")
+        # A disabled engine is not described.
+        self.assertNotIn("lc0", progress.describe(Tracker().snapshot())["engines"])
+
+    def test_legacy_listener(self):
+        calls = []
+        t = Tracker()
+        t.listen(progress.legacy_listener(lambda *a: calls.append(a)))
+        t.found(0, 3)
+        t.stage("analyse", "Ply 0 (0 of 3 puzzles found)", total=4, unit="moves", step="depth 5 of 13")
+        self.assertEqual(calls, [("analyse", 0, 3, "Ply 0 (0 of 3 puzzles found)"), ("positions", 0, 4, "depth 5 of 13")])
+
+    def test_engine_streams_progress_and_caches_like_analyse(self):
+        from knightly.engine.analyse import Engine
+
+        t = Tracker()
+        t.engine("stockfish", "SF", True)
+        seen = []
+
+        class Proc:
+            def analysis(self, board, limit, multipv, root_moves=None):
+                return FakeAnalysis([sf_info(5), sf_info(9), sf_info(13)], on_info=lambda i: seen.append(
+                    t.snapshot().engines["stockfish"].depth))
+
+        c = tmpcache(self)
+        eng = Engine("stockfish", "x", Config(sf_depth=13), c, tracker=t)
+        eng._proc = Proc()
+        b = chess.Board()
+        ev = eng.evaluate(b, 1)
+        self.assertEqual(seen, [0, 5, 9])  # the depth shown while each info arrives (the last one is current after)
+        self.assertEqual(t.snapshot().engines["stockfish"].depth, 13)
+        self.assertEqual(ev.lines[0].moves, ["e2e4"])
+        e = t.snapshot().engines["stockfish"]
+        self.assertEqual((e.searches, e.cached, e.busy), (1, 0, False))
+        eng.evaluate(b, 1)  # from the cache
+        e = t.snapshot().engines["stockfish"]
+        self.assertEqual((e.searches, e.cached), (1, 1))
+
+    def test_cancel_stops_a_search_in_progress(self):
+        from knightly.engine.analyse import Engine
+
+        cancel = threading.Event()
+        made = []
+
+        class Proc:
+            def analysis(self, board, limit, multipv, root_moves=None):
+                a = FakeAnalysis([sf_info(5), sf_info(9), sf_info(13)], on_info=lambda i: cancel.set() if i["depth"] == 9 else None)
+                made.append(a)
+                return a
+
+        eng = Engine("stockfish", "x", Config(sf_depth=13), tmpcache(self), cancel=cancel)
+        eng._proc = Proc()
+        with self.assertRaises(http.Cancelled):
+            eng.evaluate(chess.Board(), 1)
+        self.assertTrue(made[0].stopped)
+
+    def test_a_run_reports_consistent_stages(self):
+        c = seed(self, [recent()])
+        t = Tracker()
+        stages = []
+        t.listen(lambda s: stages.append((s.stage, s.done, s.total)))
+        res = run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE), tracker=t)
+        self.assertEqual(res.new_cards, 2)
+        self.assertTrue(stages)
+        self.assertTrue(all(d <= tot for _, d, tot in stages if tot))
+        s = t.snapshot()
+        self.assertEqual((s.found, s.want), (1, 10))
+        self.assertGreater(s.max_ply, 0)
+
+
 class StatsTest(unittest.TestCase):
     def test_collect_counts_moves_by_side(self):
         a = game_from(SICILIAN, white=False, id="s1", end_ts=200)
@@ -994,11 +1130,9 @@ class AnalyserTest(unittest.TestCase):
         class Proc:
             calls = 0
 
-            def analyse(self, board, limit, multipv, root_moves=None):
+            def analysis(self, board, limit, multipv, root_moves=None):
                 Proc.calls += 1
-                return [{"depth": limit.depth, "pv": [chess.Move.from_uci("e2e4")],
-                         "score": chess.engine.PovScore(chess.engine.Cp(20), chess.WHITE),
-                         "wdl": chess.engine.PovWdl(chess.engine.Wdl(300, 650, 50), chess.WHITE)}]
+                return FakeAnalysis([sf_info(limit.depth)])
 
         c = tmpcache(self)
         b = chess.Board()

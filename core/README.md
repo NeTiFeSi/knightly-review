@@ -28,6 +28,7 @@ python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards
 | `phases.py` | Opening, middlegame or endgame: a port of Lichess's game divider (scalachess `Divider`) |
 | `openings.py` | Names a game's opening (family), for the notes' tags |
 | `notes.py` | PGN with `[%kr N]` tags: cloze 1 the mistake, cloze 2 its punishment; the Notes field; the notes' tags (from the first puzzle) |
+| `progress.py` | `Tracker`: what a run is doing (stage with a growing total, per-engine searches with live depth, puzzles found, ply, time left), read from any thread; `describe()` formats it for the add-on window and the CLI (tqdm bars when installed) |
 | `jobs.py` | `run_update()`: the single entry point the add-on calls (pauses while `gate` is cleared) |
 | `follow.py` | The solution tree under a puzzle's answers: both sides' good moves followed until a stop (decided, drawn, a Stockfish mate, a small gap, game over) |
 

@@ -24,6 +24,7 @@ from . import collection as kc
 from . import settings
 from .vendor.knightly.cache import SqliteCache
 from .vendor.knightly.jobs import UpdateResult, run_update
+from .vendor.knightly.progress import Tracker
 
 Listener = Callable[[str, int, int, str], None]
 
@@ -43,6 +44,7 @@ class Updater:
         self._logged = ""
         self._lock = threading.Lock()
         self.timer: Optional[QTimer] = None
+        self.tracker = Tracker()  # what the current (or last) run is doing; the progress window reads it
         self._last_emit = 0.0
         self._pending = False
         # "Keep analysing" (settings.keep_running): after an update made its cards, more rounds follow
@@ -122,6 +124,7 @@ class Updater:
             core.analysis_minutes = min(core.analysis_minutes or left_min, max(0.05, left_min))
         self.cancel = threading.Event()
         cancel = self.cancel
+        self.tracker = tracker = Tracker()
         writer = kc.RunWriter(mw.col, deck)
         self.positions, self._logged = (0, 0, ""), ""
         self.log("── " + {"more": "Next batch of cards", "precalc": "Pre-calculating for later updates"}.get(
@@ -153,7 +156,7 @@ class Updater:
             try:
                 res = run_update(core, cache, existing=existing, progress=self._emit, cancel=cancel,
                                  force=manual and not _round, precalculate=_round == "precalc",
-                                 fetch=_round == "", on_note=on_note)
+                                 fetch=_round == "", on_note=on_note, tracker=tracker)
                 err = None
             except Exception as e:  # reported on the main thread
                 res, err = None, (e, traceback.format_exc())

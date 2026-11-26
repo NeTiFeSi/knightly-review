@@ -10,7 +10,7 @@ The add-on does three jobs:
 |---|---|
 | `__init__.py` | The `pycmd` handler; sets up the menu and hooks |
 | `runner.py` | Background updates (notes written as they are built): thread, cancel on profile close, startup and periodic scheduling |
-| `ui.py` | Settings (also the first-run welcome), engine finder/installer, progress window |
+| `ui.py` | Settings (also the first-run welcome), engine finder/installer, progress window (reads the run's `Tracker` several times a second: step bar with rate and ETA, a live row per engine, the position being worked on) |
 | `collection.py` | Note type, `_knightly.js` media, adding/updating notes (pylib only, no Qt) |
 | `settings.py` | Add-on config, `user_files/` paths, the Lichess token file |
 | `config_block.py` | Validating and rewriting the `KR_CONFIG` block |

@@ -27,6 +27,7 @@ from aqt.qt import (
     QPushButton,
     QSpinBox,
     Qt,
+    QTimer,
     QUrl,
     QVBoxLayout,
     QWidget,
@@ -571,17 +572,31 @@ class ProgressWindow(QDialog):
         self.stage_name = QLabel()
         self.bar = QProgressBar()
         self.bar.setTextVisible(True)
-        self.pos_name = QLabel("Positions")
-        self.pos_bar = QProgressBar()
-        self.pos_bar.setTextVisible(True)
-        self.pos_bar.setFormat("%v / %m")
-        self.pos_info = QLabel()
-        self.pos_info.setStyleSheet("color: gray")
+        self.step_label = QLabel("Step")
+        self.step_bar = QProgressBar()
+        self.step_bar.setTextVisible(True)
+        self.step_bar.setFormat("%p %")
+        self.step_info = QLabel()
+        self.step_info.setStyleSheet("color: gray")
         grid.addWidget(self.stage_name, 0, 0)
         grid.addWidget(self.bar, 0, 1)
-        grid.addWidget(self.pos_name, 1, 0)
-        grid.addWidget(self.pos_bar, 1, 1)
-        grid.addWidget(self.pos_info, 2, 1)
+        grid.addWidget(self.step_label, 1, 0)
+        grid.addWidget(self.step_bar, 1, 1)
+        grid.addWidget(self.step_info, 2, 1)
+        # One row per engine (Lc0's only when it is enabled): live depth or time of the search in progress.
+        self.engine_rows: dict[str, tuple[QLabel, QProgressBar, QLabel]] = {}
+        for i, kind in enumerate(("stockfish", "lc0")):
+            name, bar, info = QLabel(), QProgressBar(), QLabel()
+            bar.setRange(0, 1000)
+            bar.setTextVisible(False)
+            info.setStyleSheet("color: gray")
+            self.engine_rows[kind] = (name, bar, info)
+            grid.addWidget(name, 3 + 2 * i, 0)
+            grid.addWidget(bar, 3 + 2 * i, 1)
+            grid.addWidget(info, 4 + 2 * i, 1)
+        self.position_info = QLabel()
+        self.position_info.setStyleSheet("color: gray")
+        grid.addWidget(self.position_info, 7, 1)
         lay.addLayout(grid)
 
         self.log = QPlainTextEdit()
@@ -604,6 +619,10 @@ class ProgressWindow(QDialog):
         self.resize(560, 380)
         updater.listeners.append(self.update_progress)
         self.update_progress(*updater.last)
+        self._timer = QTimer(self)  # the numbers come from the run's tracker, a few times a second
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(200)
+        self._poll()
 
     def update_progress(self, stage: str, done: int, total: int, msg: str) -> None:
         self.label.setText(msg)
@@ -619,19 +638,34 @@ class ProgressWindow(QDialog):
         else:
             self.bar.setRange(0, 0)  # busy
         self.cancel_btn.setEnabled(updater.keeping or (updater.running and stage not in ("done", "error")))
-        self._update_positions(stage)
         self._update_log()
 
-    def _update_positions(self, stage: str) -> None:
-        done, total, msg = updater.positions
-        show = total > 0
-        for w in (self.pos_name, self.pos_bar, self.pos_info):
-            w.setVisible(show)
-        if not show:
+    def _poll(self) -> None:
+        """Step, engines and position, from the run's tracker (see core/knightly/progress.py)."""
+        if not self.isVisible():
             return
-        self.pos_bar.setRange(0, total)
-        self.pos_bar.setValue(done)
-        self.pos_info.setText("" if self.label.text().startswith(msg) else msg)
+        from .vendor.knightly.progress import describe
+
+        d = describe(updater.tracker.snapshot())
+        show = d["stage_ratio"] is not None
+        for w in (self.step_label, self.step_bar):
+            w.setVisible(show)
+        if show:
+            self.step_bar.setRange(0, 1000)
+            self.step_bar.setValue(int(1000 * d["stage_ratio"]))
+            self.step_label.setText(d["step"] or "Step")
+        self.step_info.setText(" · ".join(x for x in (d["stage"], d["ply"], d["budget"], d["elapsed"]) if x))
+        for kind, (name, bar, info) in self.engine_rows.items():
+            e = d["engines"].get(kind)
+            for w in (name, bar, info):
+                w.setVisible(bool(e))
+            if not e:
+                continue
+            name.setText(e["label"])
+            bar.setValue(int(1000 * (e["ratio"] or 0)))
+            info.setText(f'{e["detail"]} · {e["counts"]}')
+        self.position_info.setText(d["position"])
+        self.position_info.setVisible(bool(d["position"]))
 
     def _update_log(self) -> None:
         new = updater.history_since(self._seq)

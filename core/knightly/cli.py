@@ -8,8 +8,11 @@ import os
 import sys
 from pathlib import Path
 
+import threading
+
 from .cache import SqliteCache
 from .config import Config
+from .progress import Tracker, describe
 
 
 def default_cache() -> str:
@@ -17,6 +20,53 @@ def default_cache() -> str:
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "knightly") if sys.platform == "win32" else os.path.expanduser("~/.cache")
     )
     return os.path.join(base, "knightly", "cache.sqlite")
+
+
+class _Bars:
+    """tqdm bars on a terminal (stage, and one per engine in use), refreshed from the tracker's snapshots a few
+    times a second. Needs `tqdm`; without it (or off a terminal) the plain message lines are printed."""
+
+    def __init__(self, tracker: Tracker):
+        self.tracker, self.stop_ev = tracker, threading.Event()
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.bars: dict = {}
+        try:
+            from tqdm import tqdm
+
+            self.tqdm = tqdm
+        except ImportError:
+            self.tqdm = None
+
+    def start(self) -> None:
+        if self.tqdm:
+            self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_ev.set()
+        if self.tqdm:
+            self.thread.join(1)
+            for b in self.bars.values():
+                b.close()
+
+    def _bar(self, key: str, position: int):
+        if key not in self.bars:
+            self.bars[key] = self.tqdm(total=1, position=position, leave=False, bar_format="{desc} {bar} {postfix}")
+        return self.bars[key]
+
+    def _loop(self) -> None:
+        while not self.stop_ev.wait(0.2):
+            d = describe(self.tracker.snapshot())
+            top = self._bar("stage", 0)
+            top.set_description_str((d["message"] or "…")[:90])
+            top.total, top.n = 1000, int(1000 * (d["stage_ratio"] or 0))
+            top.set_postfix_str(f'{d["stage"]} · {d["found"]} · {d["elapsed"]}')
+            top.refresh()
+            for i, (kind, e) in enumerate(d["engines"].items(), start=1):
+                b = self._bar(kind, i)
+                b.set_description_str(f'{e["label"]:<14}')
+                b.total, b.n = 1000, int(1000 * (e["ratio"] or 0))
+                b.set_postfix_str(f'{e["detail"]} · {e["counts"]}')
+                b.refresh()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,7 +145,17 @@ def main(argv: list[str] | None = None) -> int:
         if stage != "positions":  # one per position: too chatty for a terminal
             print(f"[{stage}] {msg}", file=sys.stderr)
 
-    res = run_update(cfg, SqliteCache(args.cache), progress=progress, force=True)
+    tracker = Tracker()
+    view = _Bars(tracker) if sys.stderr.isatty() else None
+    if view:
+        progress = lambda *a: None  # noqa: E731  (the bars show everything; the messages go above them)
+    if view:
+        view.start()
+    try:
+        res = run_update(cfg, SqliteCache(args.cache), progress=progress, force=True, tracker=tracker)
+    finally:
+        if view:
+            view.stop()
     out = {
         "new_games": res.new_games,
         "analysed_positions": res.analysed_positions,

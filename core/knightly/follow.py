@@ -31,6 +31,7 @@ import chess
 from .cache import fen_key
 from .config import Config
 from .model import CardSpec, Choice
+from .progress import Tracker
 from .select import ACCEPTED, Graded, _choices, decided, decided_text, grade_position
 
 FOLLOW_GOOD = 1.0  # a move this close to the best (win-rate points) is followed; fixed on purpose
@@ -60,6 +61,8 @@ class _Ctx:
     seen: set[str]  # positions written in this note
     quick_depth: int
     start: int  # length of the move stack at the puzzle position
+    tracker: Optional[Tracker] = None
+    nodes: int = 0  # positions analysed so far in the note's trees
 
 
 def _join(a: str, b: str) -> str:
@@ -98,7 +101,14 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx) -> None:
         if s.mate is not None:
             ch.comment = _join(ch.comment, f"Mate in {abs(s.mate)} according to Stockfish.")
             return
+    tr = ctx.tracker
+    if tr:
+        ctx.nodes += 1
+        tr.plan(1)
+        tr.message(f"Solution tree: {ctx.nodes} positions so far", step=f"ply {board.ply()}", force=False)
     graded, by_move = grade_position(board, ctx.an, ctx.cfg, None, board.ply(), sf_only=ctx.mate)
+    if tr:
+        tr.advance()
     if not graded:
         return
     if not ctx.mate:
@@ -135,13 +145,14 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx) -> None:
 
 
 def follow_puzzle(board: chess.Board, card: CardSpec, an, cfg: Config, *, solver: chess.Color, seen: set[str],
-                  quick_depth: int, include_played: bool = False) -> None:
+                  quick_depth: int, include_played: bool = False,
+                  tracker: Optional[Tracker] = None) -> None:
     """Grow the solution tree under the answers of `card`, a puzzle at `board` (which carries the moves that
     led to it, for the repetition rules). `solver` is the colour finding the answer; `seen` the positions
     already written in the note (shared by its two puzzles). `include_played`: the card's main move is an
     answer too (the punishment puzzle)."""
     ctx = _Ctx(an=an, cfg=dataclasses.replace(cfg, good_move=FOLLOW_GOOD), solver=solver, mate=card.mate,
-               seen=seen, quick_depth=quick_depth, start=len(board.move_stack))
+               seen=seen, quick_depth=quick_depth, start=len(board.move_stack), tracker=tracker)
     answers = ([card.played] if include_played else []) + [a for a in card.alternatives if a.nag in ACCEPTED]
     for ch in answers:
         board.push(chess.Move.from_uci(ch.move))
