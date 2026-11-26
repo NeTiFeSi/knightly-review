@@ -30,7 +30,7 @@ RELEASES = "https://api.github.com/repos/official-stockfish/Stockfish/releases/l
 
 @dataclass
 class InstallOption:
-    manager: str  # "pacman", "apt", "dnf", "zypper", "brew", "winget"
+    manager: str  # "yay", "paru", "apt", "dnf", "zypper", "brew", "winget"
     command: str  # what to show / copy
     argv: Optional[list[str]] = None  # set when we can run it for the user (no admin rights needed)
 
@@ -65,13 +65,19 @@ def package_options() -> list[InstallOption]:
         return []
     ids = (_os_release().get("ID", "") + " " + _os_release().get("ID_LIKE", "")).split()
     table = [
-        ({"arch", "manjaro", "endeavouros"}, "pacman", "sudo pacman -S stockfish"),
         ({"debian", "ubuntu", "linuxmint", "pop"}, "apt", "sudo apt install stockfish"),
-        ({"fedora", "rhel", "centos"}, "dnf", "sudo dnf install stockfish"),
+        ({"fedora"}, "dnf", "sudo dnf install stockfish"),
         ({"opensuse", "suse", "opensuse-tumbleweed", "opensuse-leap"}, "zypper", "sudo zypper install stockfish"),
         ({"gentoo"}, "emerge", "sudo emerge games-board/stockfish"),
     ]
     out = []
+    if {"arch", "manjaro", "endeavouros"} & set(ids):
+        # Not in Arch's official repos, only the AUR: suggest it only when an AUR helper is installed,
+        # otherwise the caller shows the download instead of a command that fails.
+        for helper in ("yay", "paru"):
+            if shutil.which(helper):
+                out.append(InstallOption(helper, f"{helper} -S stockfish"))
+                break
     for names, manager, cmd in table:
         if names & set(ids) and shutil.which(manager):
             out.append(InstallOption(manager, cmd))
