@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import re
 import stat
 import sys
 import tarfile
@@ -11,7 +12,10 @@ import threading
 import unittest
 from pathlib import Path
 
+import io
+
 import chess
+import chess.pgn
 
 from helpers import (FIXTURES, FRENCH, FakeAnalysis, score_for, sf_info, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
                      FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
@@ -27,6 +31,7 @@ from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MIS
 from knightly.sources import chesscom, lichess
 
 GOLDEN = FIXTURES / "generated_note.pgn"
+GOLDEN_SUB = FIXTURES / "generated_sub_note.pgn"  # a note made from a position inside a mistake's tree
 
 
 def division_games() -> list[tuple[str, list[str], tuple]]:
@@ -1015,8 +1020,112 @@ class ProgressTest(unittest.TestCase):
         self.assertTrue(stages)
         self.assertTrue(all(d <= tot for _, d, tot in stages if tot))
         s = t.snapshot()
-        self.assertEqual((s.found, s.want), (1, 10))
+        self.assertEqual((s.found, s.want), (2, 10))  # cards made
         self.assertGreater(s.max_ply, 0)
+
+
+class SubNoteTest(unittest.TestCase):
+    """A decision position inside a mistake's tree is a note of its own, made before the mistake's (leaf to root)."""
+
+    def pos(self, *moves):
+        b = board_at(SCHOLAR_MOVES, 5)
+        for m in moves:
+            b.push_uci(m)
+        return b
+
+    def table(self):
+        e = fen_key(self.pos("d8e7").fen())  # after 3... Qe7: White to move (the opponent)
+        x1 = fen_key(self.pos("d8e7", "b1c3").fen())  # Black's decision: g6 and h6 are good, b6 loses 8 %
+        x2 = fen_key(self.pos("d8e7", "d2d3").fen())  # a small gap: the line ends there
+        q = fen_key(self.pos("d8e7", "b1c3", "b7b6").fen())  # after the mistake b6: White punishes
+        qxf7 = fen_key(self.pos("d8e7", "b1c3", "b7b6", "h5f7").fen())
+        return {
+            **PUNISH_TABLE,
+            e: _ev(("b1c3", score_for(51)), ("d2d3", score_for(50.5)), ("a2a3", score_for(40))),
+            x1: _ev(("g7g6", score_for(48)), ("h7h6", score_for(48.5)), ("b7b6", score_for(56))),
+            x2: _ev(("g7g6", score_for(48)), ("b7b6", score_for(50))),
+            q: _ev(("h5f7", score_for(70)), ("g1f3", score_for(69.5)), ("a2a3", score_for(40))),
+            qxf7: _ev(("e7f7", score_for(50)), ("e8d8", score_for(70))),
+        }
+
+    def go(self, games=None, existing=None, **kw):
+        c = seed(self, games or [recent()])
+        table = self.table()
+        return c, run_update(Config(**CFG, **kw), c, fetch=False, existing=existing or {},
+                             analyser_factory=lambda *a: FakeAnalyser(table=table))
+
+    def test_the_deepest_position_is_made_first_and_the_mistake_last(self):
+        _, res = self.go()
+        keys = [n.key for n in res.notes]
+        x1 = self.pos("d8e7", "b1c3")
+        self.assertEqual(keys, [puzzles.puzzle_key(fen_key(x1.fen()), x1.ply()), puzzles.puzzle_key(PUZZLE_FEN, 5)])
+        sub = res.notes[0]
+        dated = re.sub(r'\[Date "[^"]*"\]', '[Date "?"]', sub.pgn)  # the game is recent: its date moves
+        if os.environ.get("UPDATE_GOLDEN"):
+            GOLDEN_SUB.write_text(dated + "\n")
+        self.assertEqual(dated + "\n", GOLDEN_SUB.read_text())  # the card's tests play it too
+        self.assertEqual((sub.new_cards, sub.cards), (2, "{{c1::1::1}} {{c2::2::2}}"))
+        # It starts from the position before the opponent's last move, which is its first move.
+        self.assertIn('[FEN "', sub.pgn)
+        games = chess.pgn.read_game(io.StringIO(sub.pgn))
+        self.assertEqual(games.headers["SetUp"], "1")
+        self.assertEqual(games.next().san(), "Nc3")
+        mistake = games.next().next()
+        self.assertEqual((mistake.san(), mistake.comment.count("[%kr 1]")), ("b6", 1))
+        self.assertEqual(notes.card_ids(sub.pgn), {fen_key(x1.fen()): 1, self.q(): 2})
+        self.assertIn("b6 loses 8% win rate. g6 was best.", sub.pgn)
+        self.assertEqual(res.new_cards, 4)
+
+    def q(self):
+        return fen_key(self.pos("d8e7", "b1c3", "b7b6").fen())
+
+    def test_a_note_is_one_move_and_the_reply(self):
+        _, res = self.go()
+        sub = chess.pgn.read_game(io.StringIO(res.notes[0].pgn))
+        mistake = sub.next().next()
+        punish = mistake.variations[0]
+        self.assertEqual(punish.san(), "Qxf7+")
+        self.assertIn("[%kr 2]", punish.comment)
+        self.assertEqual([v.san() for v in punish.variations], ["Qxf7"])  # the response, and nothing after it
+        self.assertEqual(punish.variations[0].variations, [])
+        alts = {v.san() for v in sub.next().variations}
+        self.assertTrue({"g6", "h6"} <= alts)
+
+    def test_no_position_is_made_twice(self):
+        _, first = self.go()
+        existing = {n.key: n.pgn for n in first.notes}
+        _, again = self.go(existing=existing)
+        self.assertEqual(again.notes, [])
+        # A game that makes the mistake at the position of a note is not a new puzzle.
+        g2 = recent(id="g2", end_ts=int(__import__("time").time()) - 60,
+                    moves=SCHOLAR_MOVES[:5] + ["d8e7", "b1c3", "b7b6"])
+        table = self.table()
+
+        def an(*_):
+            f = FakeAnalyser(table=table)
+            f.scores[self.q()] = score_for(56)  # the bad move b6 scores as a mistake
+            return f
+
+        c = seed(self, [recent(), g2])
+        res = run_update(Config(**CFG, max_new_cards=40), c, fetch=False, existing=existing, analyser_factory=an)
+        self.assertEqual(res.notes, [])
+
+    def test_the_card_limit_counts_cards_and_the_run_resumes(self):
+        c, res = self.go(max_new_cards=1)
+        self.assertEqual(len(res.notes), 1)  # the deepest note (2 cards) reached the limit: the mistake waits
+        existing = {n.key: n.pgn for n in res.notes}
+        table = self.table()
+        res2 = run_update(Config(**CFG, max_new_cards=1), c, fetch=False, existing=existing,
+                          analyser_factory=lambda *a: FakeAnalyser(table=table))
+        self.assertEqual([n.key for n in res2.notes], [puzzles.puzzle_key(PUZZLE_FEN, 5)])
+
+    def test_no_second_card_when_the_punish_position_is_a_card_already(self):
+        _, first = self.go()
+        # Keep only the sub-note: the root's second position (after Nf6) is free, but the sub-note's own
+        # punish position is claimed by it, so a repeat makes nothing of it.
+        existing = {first.notes[0].key: first.notes[0].pgn}
+        _, again = self.go(existing=existing)
+        self.assertEqual([n.new_cards for n in again.notes], [2])  # only the mistake's own note
 
 
 class StatsTest(unittest.TestCase):

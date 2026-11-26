@@ -102,9 +102,11 @@ def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardS
 
 
 def _puzzle_pgn(game: Game, scores: list[Optional[Score]], first: CardSpec, inaccuracy: float = Config.inaccuracy,
-                nags: Optional[dict[int, int]] = None) -> str:
+                nags: Optional[dict[int, int]] = None, lead: Optional[tuple[str, Choice]] = None) -> str:
     """The game up to the mistake (every earlier move with its NAG: `nags`, ply → NAG, see select.game_nags,
-    else ?!, ?, ?? from the loss shown by `scores`), then the mistake tagged `[%kr 1]` with the solution trees."""
+    else ?!, ?, ?? from the loss shown by `scores`), then the mistake tagged `[%kr 1]` with the solution trees.
+    `lead` = (FEN, move): instead of the game's moves, the note starts from that position and plays that move (the
+    opponent's reply that led to `first`'s position, for a note made from a position inside a tree)."""
     pg = chess.pgn.Game()
     h = pg.headers
     h["Event"] = game.event or "?"
@@ -119,6 +121,15 @@ def _puzzle_pgn(game: Game, scores: list[Optional[Score]], first: CardSpec, inac
         h["BlackElo"] = game.black_elo
     del h["Round"]
 
+    if lead is not None:
+        h["FEN"], h["SetUp"] = lead[0], "1"
+        r = pg.add_variation(chess.Move.from_uci(lead[1].move))
+        r.nags = {lead[1].nag} - {0}
+        r.comment = _join(_eval(lead[1].score), lead[1].comment)
+        parent = r
+        node = parent.add_variation(chess.Move.from_uci(first.played.move))
+        write_card(parent, node, first, 1, first.played.score)
+        return pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
     node: chess.pgn.GameNode = pg
     for ply, u in enumerate(game.moves[: first.ply + 1]):
         parent = node
@@ -204,6 +215,7 @@ def build_puzzle(
     notes: str,
     inaccuracy: float = Config.inaccuracy,
     nags: Optional[dict[int, int]] = None,
+    lead: Optional[tuple[str, Choice]] = None,
 ) -> NoteSpec:
     """The note of one mistake: cloze 1 is the position before it, cloze 2 (when there is one) the position
     after it, where the best reply punishes it. Tags describe the first puzzle only.
@@ -222,7 +234,7 @@ def build_puzzle(
         first.played.children = [second.played, *second.alternatives]
     return NoteSpec(
         key=key,
-        pgn=_puzzle_pgn(game, scores, first, inaccuracy, nags).strip(),
+        pgn=_puzzle_pgn(game, scores, first, inaccuracy, nags, lead).strip(),
         cards=_clozes(ids, cards),
         notes=notes,
         tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, first)]),

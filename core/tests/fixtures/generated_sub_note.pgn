@@ -1,0 +1,16 @@
+[Event "Rated blitz game"]
+[Site "https://lichess.org/test0001/black"]
+[Date "?"]
+[White "Opponent"]
+[Black "KnightlyMe"]
+[Result "1-0"]
+[WhiteElo "1500"]
+[BlackElo "1480"]
+[FEN "r1b1kbnr/ppppqppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4"]
+[SetUp "1"]
+
+4. Nc3 $1 { [%eval 0.00] } 4... b6 $6
+{ [%eval 0.00] [%kr 1] b6 loses 8% win rate. g6 was best. } ( 4... g6 $1
+{ [%eval 0.00] } ) ( 4... h6 $1 { [%eval 0.00] } ) 5. Qxf7+ $5
+{ [%eval 0.00] [%kr 2] b6 is punished by Qxf7+. } ( 5. Nf3 $1 { [%eval 0.00] }
+) ( 5. a3 $4 { [%eval 0.00] } ) 5... Qxf7 $8 { [%eval 0.00] } 1-0

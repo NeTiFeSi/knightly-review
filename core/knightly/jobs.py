@@ -129,18 +129,17 @@ def run_update(
         # cards from older versions (their positions are never offered again).
         store = puzzles.Store(cache)
         known: list[puzzles.Puzzle] = []
-        legacy: set[str] = set()
+        claimed: set[str] = set()  # the position of every card in the collection: never made twice
         for key, pgn in existing.items():
+            claimed |= set(notes.card_ids(pgn))
             if puzzles.parse_key(key):
                 p = store.get(key) or puzzles.from_pgn(key, pgn)
                 if p is not None:
                     known.append(p)
-                    continue
-            legacy |= set(notes.card_ids(pgn))
         for key in store.keys():  # puzzles whose note is gone from the collection may be made again
             if key not in existing:
                 store.delete(key)
-        exclude = legacy | {fen_key(p.fen) for p in known}
+        exclude = claimed
 
         fp = fingerprint(cfg, by_key, exclude)
         last = cache.get(STATE_KEY) or {}
@@ -155,7 +154,7 @@ def run_update(
         an_ctx = analyser_factory(cfg, cache, cancel) if analyser_factory else Analyser(cfg, cache, cancel, tracker=tracker)
         with an_ctx as an:
             miner = pipeline.Miner(games, an, cfg, store, want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
-                                   known=known, legacy=legacy, existing=existing, make=not precalculate,
+                                   known=known, claimed=claimed, existing=existing, make=not precalculate,
                                    tracker=tracker, on_note=on_note)
             try:
                 miner.run()

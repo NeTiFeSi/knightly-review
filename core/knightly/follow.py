@@ -23,7 +23,7 @@ The line ends on the move that led to the stop: the position of the stop is not 
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import chess
@@ -53,6 +53,20 @@ def draw_reason(board: chess.Board) -> str:
 
 
 @dataclass
+class Decision:
+    """A position of the solver where the tree continues: a card of its own (see pipeline.py)."""
+
+    before_fen: str  # the position before the opponent's last move
+    reply: Choice  # that move, as written in the tree
+    fen: str  # the decision position (full FEN)
+    ply: int  # half-moves played there
+    choices: list[Choice]  # the graded moves of the position, best first (the good ones carry the tree below them)
+    good: list[str]  # the followed (good) moves, UCI
+    depth: int  # plies from the puzzle's first position
+    solver: chess.Color
+
+
+@dataclass
 class _Ctx:
     an: object
     cfg: Config  # with good_move = FOLLOW_GOOD
@@ -63,6 +77,8 @@ class _Ctx:
     start: int  # length of the move stack at the puzzle position
     tracker: Optional[Tracker] = None
     nodes: int = 0  # positions analysed so far in the note's trees
+    max_plies: int = 0  # >0: stop after this many plies from the answer (the answer and one reply)
+    decisions: list[Decision] = field(default_factory=list)
 
 
 def _join(a: str, b: str) -> str:
@@ -82,8 +98,9 @@ def _good_set(graded: list[Graded]) -> tuple[list[Graded], str]:
     return [g for g in graded if g.loss <= FOLLOW_GOOD], "plain"
 
 
-def _expand(board: chess.Board, ch: Choice, ctx: _Ctx) -> None:
-    """`board` is the position after `ch.move`: write what follows, or why the line ends."""
+def _expand(board: chess.Board, ch: Choice, ctx: _Ctx, before_fen: str = "") -> None:
+    """`board` is the position after `ch.move` (played from `before_fen`): write what follows, or why the line
+    ends."""
     if board.is_checkmate():
         return
     reason = draw_reason(board)
@@ -135,28 +152,47 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx) -> None:
             ch.children.append(c)
         elif solver_to_move:
             ch.children.append(c)  # a one-ply graded variation
+    if solver_to_move and before_fen:
+        ctx.decisions.append(Decision(before_fen=before_fen, reply=ch, fen=board.fen(), ply=board.ply(),
+                                      choices=ch.children, good=[c.move for c in ch.children if c.move in names],
+                                      depth=len(board.move_stack) - ctx.start, solver=ctx.solver))
+    if ctx.max_plies and len(board.move_stack) - ctx.start >= ctx.max_plies - 1:
+        return  # the answer and one reply are enough: the replies are not analysed
     for c in ch.children:
         if c.move in names:
+            here = board.fen()
             board.push(chess.Move.from_uci(c.move))
             try:
-                _expand(board, c, ctx)
+                _expand(board, c, ctx, here)
             finally:
                 board.pop()
 
 
 def follow_puzzle(board: chess.Board, card: CardSpec, an, cfg: Config, *, solver: chess.Color, seen: set[str],
-                  quick_depth: int, include_played: bool = False,
-                  tracker: Optional[Tracker] = None) -> None:
+                  quick_depth: int, include_played: bool = False, tracker: Optional[Tracker] = None,
+                  max_plies: int = 0) -> list[Decision]:
     """Grow the solution tree under the answers of `card`, a puzzle at `board` (which carries the moves that
     led to it, for the repetition rules). `solver` is the colour finding the answer; `seen` the positions
     already written in the note (shared by its two puzzles). `include_played`: the card's main move is an
-    answer too (the punishment puzzle)."""
+    answer too (the punishment puzzle). `max_plies=2`: only each answer and the opponent's reply (their
+    positions are not analysed further). Returns the decision positions found (see `Decision`)."""
     ctx = _Ctx(an=an, cfg=dataclasses.replace(cfg, good_move=FOLLOW_GOOD), solver=solver, mate=card.mate,
-               seen=seen, quick_depth=quick_depth, start=len(board.move_stack), tracker=tracker)
+               seen=seen, quick_depth=quick_depth, start=len(board.move_stack), tracker=tracker,
+               max_plies=max_plies)
     answers = ([card.played] if include_played else []) + [a for a in card.alternatives if a.nag in ACCEPTED]
     for ch in answers:
+        here = board.fen()
         board.push(chess.Move.from_uci(ch.move))
         try:
-            _expand(board, ch, ctx)
+            _expand(board, ch, ctx, here)
         finally:
             board.pop()
+    return ctx.decisions
+
+
+def trimmed(ch: Choice, levels: int = 1) -> Choice:
+    """A copy of `ch` that keeps `levels` of the moves below it (1: the opponent's reply). The "transposes"
+    comments go: the card does not follow lines any more."""
+    comment = ch.comment.replace("Transposes to a line above.", "").strip()
+    return Choice(move=ch.move, nag=ch.nag, score=ch.score, comment=comment, tag=ch.tag,
+                  children=[trimmed(c, levels - 1) for c in ch.children] if levels > 0 else [])
