@@ -1081,6 +1081,21 @@ class SubNoteTest(unittest.TestCase):
     def q(self):
         return fen_key(self.pos("d8e7", "b1c3", "b7b6").fen())
 
+    def test_the_mistake_is_the_non_good_move_our_games_played(self):
+        # Black has two moves that are not good at the decision position: b6 (the best of them, 8 %) and a6 (9 %).
+        table = self.table()
+        x1 = fen_key(self.pos("d8e7", "b1c3").fen())
+        table[x1] = _ev(("g7g6", score_for(48)), ("h7h6", score_for(48.5)), ("b7b6", score_for(56)), ("a7a6", score_for(57)))
+        g2 = recent(id="g2", end_ts=int(__import__("time").time()) - 60,
+                    moves=SCHOLAR_MOVES[:5] + ["d8e7", "b1c3", "a7a6"])
+        c = seed(self, [recent(), g2])
+        res = run_update(Config(**CFG, max_new_cards=40), c, fetch=False,
+                         analyser_factory=lambda *a: FakeAnalyser(table=table))
+        sub = chess.pgn.read_game(io.StringIO(res.notes[0].pgn))
+        self.assertEqual(sub.next().next().san(), "a6")  # played in a game, though b6 is the better mistake
+        _, plain = self.go()
+        self.assertEqual(chess.pgn.read_game(io.StringIO(plain.notes[0].pgn)).next().next().san(), "b6")
+
     def test_a_note_is_one_move_and_the_reply(self):
         _, res = self.go()
         sub = chess.pgn.read_game(io.StringIO(res.notes[0].pgn))

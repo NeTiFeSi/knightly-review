@@ -372,9 +372,14 @@ class Miner:
         best move that is not good (the position after it). Not made when X is a card already; the second card
         is left out when its position is a card already or the game is decided there."""
         key = fen_key(d.fen)
-        mistake = next((c for c in d.choices if c.move not in d.good), None)
+        mistake = next((c for c in d.choices if c.move not in d.good), None)  # the best move that is not good
         if key in self.claimed or mistake is None:
             return
+        seen = self.by_fen.get(key)
+        if seen is not None:  # a move that is not good and that our games played there is the better mistake
+            played = [c for c in d.choices if c.move not in d.good and c.move in seen.moves]
+            if played:
+                mistake = max(played, key=lambda c: seen.moves[c.move].games)
         board = chess.Board(d.fen)
         user = chess.WHITE if game.user_is_white else chess.BLACK
         mine = board.turn == user
