@@ -145,7 +145,6 @@ class CardSpec:
     mine: bool = True
     motifs: list[str] = field(default_factory=list)  # tactical motifs of the best move, main one first
     mate: bool = False  # the best move mates by force (the tree follows mates to the end, see follow.py)
-    decided: str = ""  # "The game is decided: White is winning." when no move can change the result
 
 
 @dataclass

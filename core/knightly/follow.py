@@ -60,7 +60,6 @@ class _Ctx:
     seen: set[str]  # positions written in this note
     quick_depth: int
     start: int  # length of the move stack at the puzzle position
-    one_move: bool = False  # only the answer and one reply
 
 
 def _join(a: str, b: str) -> str:
@@ -87,11 +86,6 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx) -> None:
     reason = draw_reason(board)
     if reason:
         ch.comment = _join(ch.comment, reason)
-        return
-    if ctx.one_move:
-        ev = ctx.an.evaluate(board, multipv=1, ply=board.ply(), sf_only=ctx.mate)
-        if ev.lines and ev.lines[0].moves:
-            ch.children = [Choice(move=ev.lines[0].moves[0], nag=0, score=ev.lines[0].score)]
         return
     key = fen_key(board.fen())
     if key in ctx.seen:
@@ -141,13 +135,13 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx) -> None:
 
 
 def follow_puzzle(board: chess.Board, card: CardSpec, an, cfg: Config, *, solver: chess.Color, seen: set[str],
-                  quick_depth: int, include_played: bool = False, one_move: bool = False) -> None:
+                  quick_depth: int, include_played: bool = False) -> None:
     """Grow the solution tree under the answers of `card`, a puzzle at `board` (which carries the moves that
     led to it, for the repetition rules). `solver` is the colour finding the answer; `seen` the positions
     already written in the note (shared by its two puzzles). `include_played`: the card's main move is an
-    answer too (the punishment puzzle). `one_move`: only each answer and one reply."""
+    answer too (the punishment puzzle)."""
     ctx = _Ctx(an=an, cfg=dataclasses.replace(cfg, good_move=FOLLOW_GOOD), solver=solver, mate=card.mate,
-               seen=seen, quick_depth=quick_depth, start=len(board.move_stack), one_move=one_move)
+               seen=seen, quick_depth=quick_depth, start=len(board.move_stack))
     answers = ([card.played] if include_played else []) + [a for a in card.alternatives if a.nag in ACCEPTED]
     for ch in answers:
         board.push(chess.Move.from_uci(ch.move))

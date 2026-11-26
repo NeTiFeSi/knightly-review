@@ -218,10 +218,8 @@ def build_puzzle(
         ids[second.fen_key] = 2
         cards.append(second)
         second.played.tag = 2
-        second.played.comment = _join(_join(second.comment, second.decided), second.played.comment)
+        second.played.comment = _join(second.comment, second.played.comment)
         first.played.children = [second.played, *second.alternatives]
-        if second.decided:
-            first.played.comment = _join(first.played.comment, second.decided)
     return NoteSpec(
         key=key,
         pgn=_puzzle_pgn(game, scores, first, inaccuracy, nags).strip(),
