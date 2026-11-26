@@ -49,6 +49,7 @@ class Puzzle:
     played: str = ""  # the mistake (UCI)
     after_fen: str = ""  # the position of the second puzzle
     after_ply: int = 0
+    after_moves: dict[str, int] = field(default_factory=dict)  # UCI → NAG of the second card's moves
     head: str = ""  # first line of the note's Notes field (phase and game link)
     tags: list[str] = field(default_factory=list)
     pgn: str = ""

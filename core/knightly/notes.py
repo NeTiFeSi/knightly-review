@@ -196,15 +196,13 @@ def puzzle_head(game: Game, card: CardSpec) -> str:
     return " · ".join(p for p in (card_phase(game, card).capitalize(), _game_link(game)) if p)
 
 
-def puzzle_notes(head: str, stats: list[str], links: list[str]) -> str:
-    """The Notes field: `head`, then how often the moves were played (see stats.lines), then the comments
-    from similar positions."""
-    out = [head] if head else []
-    if stats:
-        out += ["<b>Played before</b>"] + [html.escape(x) for x in stats]
+def puzzle_notes(head: str, sections: list[str], links: list[str]) -> str:
+    """The Notes field: `head`, then the stats of the games (one HTML section per card, see statsview.py), then the
+    comments from similar positions."""
+    out = ([head] if head else []) + ["".join(s for s in sections if s)]
     if links:
         out += ["<b>Similar positions</b>"] + [html.escape(x) for x in links]
-    return "<br>".join(out)
+    return "<br>".join(x for x in out if x)
 
 
 def build_puzzle(

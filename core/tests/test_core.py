@@ -19,7 +19,7 @@ import chess.pgn
 
 from helpers import (FIXTURES, FRENCH, FakeAnalysis, score_for, sf_info, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
                      FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
-from knightly import http, notes, progress, openings, phases, pipeline, puzzles, similar, sources, stats
+from knightly import http, notes, progress, openings, phases, pipeline, puzzles, similar, sources, stats, statsview
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
@@ -454,8 +454,9 @@ class NotesTest(unittest.TestCase):
         self.assertIsNone(puzzles.parse_key("lichess:abcd:opening"))
 
     def test_notes_field(self):
-        text = notes.puzzle_notes("Opening", ["Nf3: played 3 times"], ["Bd3 would also be a good move if x."])
-        self.assertEqual(text, "Opening<br><b>Played before</b><br>Nf3: played 3 times<br><b>Similar positions</b>"
+        text = notes.puzzle_notes("Opening", ['<div class="kr-stats" data-card="1">x</div>', ""],
+                                  ["Bd3 would also be a good move if x."])
+        self.assertEqual(text, 'Opening<br><div class="kr-stats" data-card="1">x</div><br><b>Similar positions</b>'
                                "<br>Bd3 would also be a good move if x.")
         self.assertEqual(notes.puzzle_notes("Opening", [], []), "Opening")
 
@@ -554,8 +555,9 @@ class JobsTest(unittest.TestCase):
         res = run_update(Config(**CFG), c, fetch=False, existing={first.notes[0].key: first.notes[0].pgn}, analyser_factory=an)
         (changed,) = res.notes
         self.assertEqual((changed.key, changed.new_cards, res.new_cards), (first.notes[0].key, 0, 0))
-        self.assertIn("Nf6: played 2 times (you 2, opponents 0; 100% of the 2 games that reached this position).",
-                      changed.notes)
+        self.assertIn("2 games reached this position · White 2 (100%)", changed.notes)
+        self.assertIn('<div class="kr-stats" data-card="1">', changed.notes)
+        self.assertIn("After the mistake: 2 games reached this position", changed.notes)
         self.assertEqual(changed.pgn, first.notes[0].pgn)
         self.assertEqual(changed.tags, first.notes[0].tags)
 
@@ -1139,17 +1141,78 @@ class StatsTest(unittest.TestCase):
         self.assertEqual({u: (st.mine, st.opp) for u, st in after_e4.moves.items()}, {"c7c5": (1, 0), "e7e6": (0, 1)})
         self.assertEqual(after_e4.moves["c7c5"].mine_game, a)  # the newest game that played it
 
-    def test_lines_only_for_repeated_moves(self):
-        a = game_from(SICILIAN, white=False, id="s1", end_ts=200)
-        b = game_from(SICILIAN, white=True, id="s2", end_ts=100)
-        c = game_from(FRENCH, white=False, id="f1", end_ts=50)
-        by_ply = stats.collect([a, b, c])
-        start = by_ply[0][fen_key(chess.Board().fen())]
-        self.assertEqual(stats.lines(start), ["e4: played 3 times (you 1, opponents 2; 100% of the 3 games that reached this position)."])
-        after_e4 = by_ply[1][fen_key(board_at(SICILIAN, 1).fen())]
-        self.assertEqual(stats.lines(after_e4, "Then "),
-                         ["Then c5: played 2 times (you 1, opponents 1; 67% of the 3 games that reached this position)."])
-        self.assertEqual(stats.lines(None), [])
+    def test_positions_are_matched_whatever_the_ply_and_count_each_game_once(self):
+        a = game_from(SICILIAN, white=False, id="s1", end_ts=200, result="1-0")
+        b = game_from(["g1f3", "g8f6", "e2e4", "e7e5"], white=True, id="x", result="1/2-1/2")
+        c = game_from(["e2e4", "e7e5", "g1f3", "g8f6"], white=True, id="y", result="0-1")  # 1.e4 e5 2.Nf3 Nf6
+        pos = stats.collect_positions([a, b, c])
+        start = pos[fen_key(chess.Board().fen())]
+        self.assertEqual((start.reached, {u: m.games for u, m in start.moves.items()}), (3, {"e2e4": 2, "g1f3": 1}))
+        self.assertEqual({u: (m.white, m.draw, m.black) for u, m in start.moves.items()},
+                         {"e2e4": (1, 0, 1), "g1f3": (0, 1, 0)})
+        # After 1.e4 e5 2.Nf3 Nf6 and 1.Nf3 Nf6 2.e4 e5: the same position at the same ply, two games.
+        meet = pos[fen_key(board_at(["e2e4", "e7e5", "g1f3", "g8f6"], 4).fen())]
+        self.assertEqual(meet.reached, 2)
+        t = start.totals()
+        self.assertEqual((t.games, t.white, t.draw, t.black), (3, 1, 1, 1))
+
+    def test_a_game_that_repeats_a_position_counts_once(self):
+        g = game_from(["g1f3", "g8f6", "f3g1", "f6g8", "g1f3"], white=True, id="r", result="1-0")
+        start = stats.collect_positions([g])[fen_key(chess.Board().fen())]
+        self.assertEqual(start.reached, 1)
+        self.assertEqual(start.moves["g1f3"].games, 1)
+
+    def test_unfinished_games_count_as_played_not_as_a_result(self):
+        a = game_from(FRENCH, white=True, id="a", result="*")
+        b = game_from(FRENCH, white=True, id="b", result="1-0")
+        pos = stats.collect_positions([a, b])[fen_key(chess.Board().fen())]
+        self.assertEqual((pos.moves["e2e4"].games, pos.moves["e2e4"].decided), (2, 1))
+
+
+class StatsViewTest(unittest.TestCase):
+    def pos(self, games):
+        return stats.collect_positions(games)[fen_key(chess.Board().fen())]
+
+    def test_percentages_always_add_up_to_100(self):
+        for parts in ([1, 1, 1], [5, 3, 4], [1, 0, 0], [7, 2, 2], [0, 0, 0]):
+            got = statsview.percents(parts)
+            self.assertEqual(sum(got), 100 if sum(parts) else 0, parts)
+        self.assertEqual(statsview.percents([1, 1, 1]), [34, 33, 33])
+
+    def test_a_position_needs_two_distinct_games(self):
+        one = self.pos([game_from(FRENCH, white=True, id="a")])
+        self.assertEqual(statsview.section(1, one), "")
+        self.assertEqual(statsview.section(1, None), "")
+        two = self.pos([game_from(FRENCH, white=True, id="a"), game_from(FRENCH, white=True, id="b")])
+        self.assertIn('<div class="kr-stats" data-card="1">', statsview.section(1, two))
+
+    def test_rows_bars_and_badges(self):
+        games = ([game_from(["e2e4"], white=True, id=f"e{i}", result="1-0") for i in range(3)]
+                 + [game_from(["e2e4"], white=True, id="ed", result="1/2-1/2")]
+                 + [game_from(["d2d4"], white=True, id="d1", result="0-1"), game_from(["a2a3"], white=True, id="a1")])
+        html_ = statsview.section(1, self.pos(games), nags={"e2e4": GOOD, "a2a3": MISTAKE}, mistake="a2a3")
+        self.assertIn("6 games reached this position · White 4 (67%) · draws 1 (17%) · Black 1 (16%)", html_)
+        self.assertIn('<span class="kr-stat-move">e4<b class="kr-stat-nag">!</b></span>', html_)
+        self.assertIn("4 games · 67%", html_)
+        self.assertLess(html_.index("e4"), html_.index("d4"))  # most played first
+        self.assertIn('kr-stat-row kr-good', html_)
+        self.assertIn('kr-stat-row kr-bad', html_)  # the mistake
+        self.assertIn('title="White 3 · draws 1 · Black 0"', html_)  # e4: 4 games, 1 draw, no Black win
+
+    def test_only_six_rows_and_the_rest_in_one(self):
+        first = ["a2a3", "b2b3", "c2c3", "d2d3", "e2e3", "f2f3", "g2g3", "h2h3"]
+        games = [game_from([m], white=True, id=f"g{i}", result="1-0") for i, m in enumerate(first)]
+        html_ = statsview.section(1, self.pos(games))
+        self.assertEqual(html_.count('<div class="kr-stat-row'), 7)
+        self.assertIn("other 2 moves", html_)
+
+    def test_small_segments_have_no_label_and_a_section_names_its_card(self):
+        games = [game_from(["e2e4"], white=True, id=f"w{i}", result="1-0") for i in range(30)]
+        games.append(game_from(["e2e4"], white=True, id="b", result="0-1"))
+        h = statsview.section(2, self.pos(games), heading="After the mistake: ")
+        self.assertIn('data-card="2"', h)
+        self.assertIn("After the mistake: 31 games reached this position", h)
+        self.assertIn('<i class="b" style="width:3%"></i>', h)  # no label under 8 %
 
 
 class SimilarTest(unittest.TestCase):

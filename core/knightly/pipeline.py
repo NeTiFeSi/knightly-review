@@ -31,7 +31,7 @@ from typing import Callable, Iterable, Optional
 
 import chess
 
-from . import notes as notes_mod, similar, stats
+from . import notes as notes_mod, similar, stats, statsview
 from .cache import fen_key
 from .config import Config
 from .engine.analyse import terminal
@@ -98,6 +98,7 @@ class Miner:
         self.known: dict[str, Puzzle] = {p.id: p for p in known}
         self.merged = {bid for p in self.known.values() for bid in p.links}
         self.by_ply = stats.collect(self.games)
+        self.by_fen = stats.collect_positions(self.games)  # for the Notes field: matched whatever the ply
         self.scan = scan_steps(cfg.sf_depth)
         self.sc: dict[str, tuple[Score, int]] = {}  # fen key → (score, depth), White's view
         self._graded: dict[str, dict[int, int]] = {}
@@ -292,13 +293,16 @@ class Miner:
                     game, self.an, self.cfg, skip, lambda i, n: self.tracker.advance() if i else None)
         return self._graded[game.key]
 
-    def _stats_lines(self, p: Puzzle) -> list[str]:
-        first = self.by_ply.get(p.ply, {}).get(fen_key(p.fen))
-        after = self.by_ply.get(p.after_ply, {}).get(fen_key(p.after_fen)) if p.after_fen else None
-        return stats.lines(first) + stats.lines(after, "After the mistake, ")
+    def _stats_sections(self, p: Puzzle) -> list[str]:
+        """The explorer tables of the note's two positions (each only when two games reached it)."""
+        out = [statsview.section(1, self.by_fen.get(fen_key(p.fen)), nags=p.moves, mistake=p.played)]
+        if p.after_fen:
+            out.append(statsview.section(2, self.by_fen.get(fen_key(p.after_fen)), "After the mistake: ",
+                                         nags=p.after_moves))
+        return out
 
     def _notes_of(self, p: Puzzle) -> str:
-        return notes_mod.puzzle_notes(p.head, self._stats_lines(p), [c for cs in p.links.values() for c in cs])
+        return notes_mod.puzzle_notes(p.head, self._stats_sections(p), [c for cs in p.links.values() for c in cs])
 
     def _add(self, u: Unit, game: Game, card: CardSpec) -> None:
         """The notes of a mistake: one for every decision position of its two trees, deepest first, then the
@@ -341,11 +345,16 @@ class Miner:
         p = Puzzle(key=notes_mod.puzzle_key(card.fen_key, ply), fen=u.board.fen(), ply=ply,
                    moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},
                    played=card.played.move, after_fen=after.fen() if second else "", after_ply=ply + 1 if second else 0,
-                   head=notes_mod.puzzle_head(game, card))
+                   head=notes_mod.puzzle_head(game, card),
+                   after_moves=self._moves_of(second))
         p.notes = self._notes_of(p)
         spec = notes_mod.build_puzzle(game, self._scores_of(game), card, second, p.notes, self.cfg.inaccuracy,
                                       self._nags(game, {ply}))
         self._emit(p, spec)
+
+    @staticmethod
+    def _moves_of(card: Optional[CardSpec]) -> dict[str, int]:
+        return {} if card is None else {card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}}
 
     def _emit(self, p: Puzzle, spec: NoteSpec) -> None:
         p.tags, p.pgn, p.cards, p.card_ids = spec.tags, spec.pgn, spec.cards, spec.card_ids
@@ -392,7 +401,7 @@ class Miner:
         p = Puzzle(key=notes_mod.puzzle_key(key, d.ply), fen=d.fen, ply=d.ply,
                    moves={mistake.move: mistake.nag, **{c.move: c.nag for c in others}}, played=mistake.move,
                    after_fen=after.fen() if second else "", after_ply=d.ply + 1 if second else 0,
-                   head=notes_mod.puzzle_head(game, first))
+                   head=notes_mod.puzzle_head(game, first), after_moves=self._moves_of(second))
         p.notes = self._notes_of(p)
         spec = notes_mod.build_puzzle(game, [], first, second, p.notes, self.cfg.inaccuracy,
                                       lead=(d.before_fen, trimmed(d.reply, 0)))
