@@ -205,3 +205,32 @@ class ScriptedAnalyser(FakeAnalyser):
                     self.table[fen_key(b.fen())] = Eval(20, [Line(score_for(e), [alt]), Line(score_for(after), [u])])
                 e = after
             self.scores.update(positions_scored(g.moves, scores_with(script.get(g.id, {}), len(g.moves))))
+
+
+class FakeAnalysis:
+    """python-chess's streaming `analysis()` result, scripted: iterating yields `infos` one by one."""
+
+    def __init__(self, infos, on_info=None):
+        self.infos, self.multipv, self.stopped, self.on_info = list(infos), list(infos), False, on_info
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.stop()
+
+    def __iter__(self):
+        for i in self.infos:
+            if self.on_info:
+                self.on_info(i)
+            yield i
+
+    def stop(self):
+        self.stopped = True
+
+
+def sf_info(depth, move="e2e4", cp=20, nodes=1000, nps=500000, time_s=0.1):
+    import chess.engine
+    return {"depth": depth, "nodes": nodes, "nps": nps, "time": time_s, "pv": [chess.Move.from_uci(move)],
+            "score": chess.engine.PovScore(chess.engine.Cp(cp), chess.WHITE),
+            "wdl": chess.engine.PovWdl(chess.engine.Wdl(300, 650, 50), chess.WHITE)}

@@ -1,7 +1,7 @@
 """Test-only add-on for the README screenshots (card/e2e/screenshots.mjs). NOT part of Knightly Review.
 
 Install it in the isolated test profile only (symlink into its addons21/). It listens on
-127.0.0.1:8767 and, on `GET /shot?what=settings|engine|progress&file=/abs/path.png`, opens that
+127.0.0.1:8767 and, on `GET /shot?what=settings|engine|progress|live[&wait=ms]&file=/abs/path.png`, opens that
 Knightly Review window with sample data and saves a picture of it (Qt's own widget.grab(), so no
 screen capture and no window decorations).
 """
@@ -32,6 +32,9 @@ def _make(what: str):
         return ui.SettingsDialog(mw)
     if what == "engine":
         return ui.EngineDialog(mw)
+    if what == "live":  # a real update on the test profile's settings, grabbed while it runs
+        ui.start_update()
+        return ui._progress
     if what == "progress":
         updater.last = ("analyse", 7, 20, "Looking for puzzles in game 9 of 12…")
         updater.positions = (31, 64, "Checking the best alternatives (deep analysis)")
@@ -62,7 +65,7 @@ def _tidy(w) -> None:
     w.resize(max(w.width(), 560), w.height())
 
 
-def _grab(what: str, file: str, done: dict) -> None:
+def _grab(what: str, file: str, done: dict, wait: int = 1500) -> None:
     try:
         w = _make(what)
         w.show()
@@ -77,7 +80,7 @@ def _grab(what: str, file: str, done: dict) -> None:
                 done["event"].set()
 
         # Give it a moment to lay out and for background scans (the engine search) to finish.
-        mw.progress.single_shot(1500, snap)
+        mw.progress.single_shot(wait, snap)
     except Exception as e:  # noqa: BLE001
         done["error"] = repr(e)
         done["event"].set()
@@ -92,8 +95,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         done = {"event": threading.Event()}
-        mw.taskman.run_on_main(lambda: _grab(q["what"], q["file"], done))
-        done["event"].wait(30)
+        wait = int(q.get("wait", 1500))
+        mw.taskman.run_on_main(lambda: _grab(q["what"], q["file"], done, wait))
+        done["event"].wait(30 + wait / 1000)
         body = ("ok" if done.get("ok") else done.get("error", "failed")).encode()
         self.send_response(200 if done.get("ok") else 500)
         self.end_headers()

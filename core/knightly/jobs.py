@@ -19,6 +19,7 @@ from .cache import Cache, fen_key
 from .config import Config
 from .engine.analyse import Analyser
 from .model import Game, NoteSpec
+from .progress import Tracker, legacy_listener
 from .sources import chesscom, lichess
 
 # progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
@@ -94,6 +95,7 @@ def run_update(
     analyser_factory: Optional[Callable[..., Analyser]] = None,
     precalculate: bool = False,
     on_note: Optional[Callable[[NoteSpec], None]] = None,
+    tracker: Optional[Tracker] = None,
 ) -> UpdateResult:
     """`precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
     the searches in the cache. `analysis_minutes` still bounds it.
@@ -101,7 +103,12 @@ def run_update(
     `on_note`: called with a note's whole spec as soon as it is built, so the caller can write it while
     the run goes on: a new puzzle note, or an old one whose Notes field changed (a move played again,
     a similar position). `result.notes` ends with the same specs, and holds those made so far if the run
-    is cancelled."""
+    is cancelled.
+    `tracker`: a progress.Tracker to read the run's progress from (stage, engines, counters) while it goes on;
+    `progress` still gets the older `(stage, done, total, message)` calls."""
+    tracker = tracker or Tracker()
+    if progress:
+        tracker.listen(legacy_listener(progress))
     progress = progress or (lambda *a: None)
     cancel = cancel or threading.Event()
     existing = existing or {}
@@ -145,10 +152,11 @@ def run_update(
             cache.set(STATE_KEY, {"fingerprint": fp, "finished": False, "ts": time.time()})
 
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
-        with (analyser_factory or Analyser)(cfg, cache, cancel) as an:
+        an_ctx = analyser_factory(cfg, cache, cancel) if analyser_factory else Analyser(cfg, cache, cancel, tracker=tracker)
+        with an_ctx as an:
             miner = pipeline.Miner(games, an, cfg, store, want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
                                    known=known, legacy=legacy, existing=existing, make=not precalculate,
-                                   progress=progress, on_note=on_note)
+                                   tracker=tracker, on_note=on_note)
             try:
                 miner.run()
             finally:  # a cancelled run keeps the notes it made

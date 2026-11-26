@@ -22,6 +22,7 @@ from ..cache import Cache, fen_key
 from ..config import Config
 from ..http import Cancelled
 from ..model import Eval, Line, NoWdl, Score
+from ..progress import LC0 as P_LC0, STOCKFISH as P_SF, Tracker
 from .discover import LC0, STOCKFISH, kind_of, popen_kwargs
 
 WDL_OPTION = "UCI_ShowWDL"
@@ -57,11 +58,14 @@ def is_mate(ev: Optional[Eval]) -> bool:
 class Engine:
     """One engine process of a known kind, with its own search limit and cache entries."""
 
-    def __init__(self, kind: str, path: str, cfg: Config, cache: Cache):
+    def __init__(self, kind: str, path: str, cfg: Config, cache: Cache, tracker: Optional[Tracker] = None,
+                 cancel: Optional[threading.Event] = None):
         self.kind, self.path, self.cfg, self.cache = kind, path, cfg, cache
         self._proc: Optional[chess.engine.SimpleEngine] = None
         self.name = ""
         self.calls = 0
+        self.tracker = tracker  # told about every search (progress.py)
+        self.cancel = cancel  # a search in progress stops when this is set
 
     def limit(self, depth: Optional[int] = None, ms: Optional[int] = None) -> tuple[chess.engine.Limit, int]:
         """The search limit and the cache effort it stands for: Stockfish by depth (`cfg.sf_depth`
@@ -94,7 +98,24 @@ class Engine:
                 conf["WeightsFile"] = self.cfg.lc0_weights
             eng.configure({k: v for k, v in conf.items() if k in eng.options})
             self._proc, self.name = eng, name
+            if self.tracker:
+                self.tracker.engine(P_SF if self.kind == STOCKFISH else P_LC0, name=name, enabled=True)
         return self._proc
+
+    def _search(self, board: chess.Board, limit: chess.engine.Limit, multipv: int,
+                root: Optional[list[chess.Move]], t0: float) -> list:
+        """The engine's best line(s), streaming its progress to the tracker; stops at once on cancel."""
+        kind = P_SF if self.kind == STOCKFISH else P_LC0
+        with self.proc().analysis(board, limit, multipv=multipv, root_moves=root) as a:
+            for info in a:
+                if self.cancel is not None and self.cancel.is_set():
+                    a.stop()
+                    raise Cancelled()
+                if self.tracker and "depth" in info:
+                    self.tracker.search_progress(kind, depth=int(info.get("depth", 0)), nodes=int(info.get("nodes", 0)),
+                                                 nps=int(info.get("nps", 0)),
+                                                 ms=round(info.get("time", time.monotonic() - t0) * 1000))
+            return [dict(i) for i in a.multipv]
 
     def evaluate(self, board: chess.Board, multipv: int, moves: Optional[list[str]] = None,
                  depth: Optional[int] = None, ms: Optional[int] = None, timed: bool = False) -> Eval:
@@ -103,16 +124,26 @@ class Engine:
         cached result must know how long it took (`Eval.ms`), or the search is run again."""
         key = fen_key(board.fen())
         limit, effort = self.limit(depth, ms)
+        kind = P_SF if self.kind == STOCKFISH else P_LC0
         if not moves:
             ev = self.cache.get_eval(key, self.kind, multipv=multipv, min_effort=effort)
             if ev and (ev.ms or not timed):
+                if self.tracker:
+                    self.tracker.search_end(kind, cached=True)
                 return ev
         root = [chess.Move.from_uci(m) for m in moves] if moves else None
+        if self.tracker:
+            self.tracker.search_start(kind, board.fen(), board.ply(), multipv, effort)
         t0 = time.monotonic()
-        infos = self.proc().analyse(board, limit, multipv=multipv, root_moves=root)
+        try:
+            infos = self._search(board, limit, multipv, root, t0)
+        except BaseException:
+            if self.tracker:
+                self.tracker.search_end(kind, ms=round((time.monotonic() - t0) * 1000))
+            raise
         took = max(1, round((time.monotonic() - t0) * 1000))
-        if isinstance(infos, dict):
-            infos = [infos]
+        if self.tracker:
+            self.tracker.search_end(kind, ms=took)
         lines = [Line(_score(i), [m.uci() for m in i.get("pv", [])]) for i in infos if "score" in i]
         ev = Eval(depth=int(min(i.get("depth", 0) for i in infos)), lines=lines, source=self.kind, ms=took)
         self.calls += 1
@@ -132,11 +163,16 @@ class Engine:
 class Analyser:
     """Stockfish, plus Lc0 when enabled. Not thread-safe: use one per worker thread."""
 
-    def __init__(self, cfg: Config, cache: Cache, cancel: Optional[threading.Event] = None):
+    def __init__(self, cfg: Config, cache: Cache, cancel: Optional[threading.Event] = None,
+                 tracker: Optional[Tracker] = None):
         self.cfg = cfg
         self.cancel = cancel or threading.Event()
-        self.sf = Engine(STOCKFISH, cfg.stockfish_path, cfg, cache)
-        self.lc0 = Engine(LC0, cfg.lc0_path, cfg, cache) if cfg.use_lc0 and cfg.lc0_path else None
+        self.tracker = tracker
+        self.sf = Engine(STOCKFISH, cfg.stockfish_path, cfg, cache, tracker, self.cancel)
+        self.lc0 = Engine(LC0, cfg.lc0_path, cfg, cache, tracker, self.cancel) if cfg.use_lc0 and cfg.lc0_path else None
+        if tracker:
+            tracker.engine(P_SF, enabled=True)
+            tracker.engine(P_LC0, enabled=self.lc0 is not None)
         self.picked = {STOCKFISH: 0, LC0: 0}
 
     @property
