@@ -818,7 +818,7 @@ export class App {
     } else if (!run && node === this.puzzle.position) {
       const accepted = acceptedMoves(node, true, acceptList(this.cfg), this.cfg.strictMate);
       accepted.forEach(n => push(this.arrow(n, 'green', glyph(n))));
-      push(this.arrow(this.puzzle.gameMove, 'red', glyph(this.puzzle.gameMove)));
+      if (!this.gameMoveIsAnswer()) push(this.arrow(this.puzzle.gameMove, 'red', glyph(this.puzzle.gameMove)));
       const mine = this.userFirstMove();
       if (mine && !accepted.concat([this.puzzle.gameMove]).some(n => n.uci === mine.uci))
         push(this.moveArrow(mine.move, 'blue'));
@@ -970,11 +970,24 @@ export class App {
       }
     } else line('kr-status-main', toMove + '.');
     this.acceptedLine(line, this.puzzle.position, true);
-    line('kr-status-sub', 'Game: ', this.moveBadge(this.puzzle.gameMove));
+    if (!this.gameMoveIsAnswer()) line('kr-status-sub', this.mistakeLabel() + ' ', this.moveBadge(this.puzzle.gameMove));
     if (this.puzzle.gameMove.hint) line('kr-status-sub', '💡 Hint: ' + this.puzzle.gameMove.hint);
     if (this.gradePending)
       line('kr-status-sub kr-status-note', 'Marking as ' + this.gradePending.label + '… tap anywhere to cancel.');
     note();
+  }
+
+  /**
+   * The tagged move is normally the mistake (played in a game, or the best move that is not good). On a
+   * punishment card it is the answer itself: it is no "game move" then, so no red arrow and no "Game:" line.
+   */
+  private gameMoveIsAnswer(): boolean {
+    return isAccepted(this.puzzle.gameMove.nags, acceptList(this.cfg));
+  }
+
+  /** "Game:" for a move played in the game, "Mistake:" in a note made from a position inside a line (FEN start). */
+  private mistakeLabel(): string {
+    return this.puzzle.game.headers.get('SetUp') === '1' ? 'Mistake:' : 'Game:';
   }
 
   private acceptedLine(

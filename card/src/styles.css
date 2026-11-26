@@ -202,6 +202,44 @@
 /* Notes field (back) */
 .kr-notes { max-width: 980px; margin: 12px auto 0; text-align: left; }
 
+/* Stats of our games, like an opening explorer: a table of moves with White / draw / Black bars. */
+.kr-notes {
+  --st-muted: #656d76; --st-border: #c3cbd3; --st-row: #f6f8fa;
+  --st-w: #f1f1f1; --st-w-fg: #222; --st-d: #9aa0a6; --st-d-fg: #111; --st-b: #3a3d42; --st-b-fg: #f4f4f4;
+  --st-good: #2e7d32; --st-bad: #c62828;
+}
+.nightMode .kr-notes, .night_mode .kr-notes, .card.nightMode .kr-notes {
+  --st-muted: #9198a1; --st-border: #4a525b; --st-row: #1c2128; --st-good: #6fcf75; --st-bad: #ff7b72;
+}
+.kr-stats { margin: 12px 0 6px; font-size: 14px; }
+.kr-stats[hidden] { display: none; }
+.kr-stats-head { color: var(--st-muted); margin-bottom: 6px; }
+.kr-stats-bar, .kr-stat-wdl {
+  display: flex; height: 20px; overflow: hidden; border-radius: 3px; border: 1px solid var(--st-border);
+  background: var(--st-row); font-size: 12px; line-height: 18px; text-align: center;
+}
+.kr-stats-bar { margin-bottom: 8px; }
+.kr-stats-bar i, .kr-stat-wdl i { display: block; font-style: normal; overflow: hidden; white-space: nowrap; min-width: 0; }
+.kr-stats i.w { background: var(--st-w); color: var(--st-w-fg); }
+.kr-stats i.d { background: var(--st-d); color: var(--st-d-fg); }
+.kr-stats i.b { background: var(--st-b); color: var(--st-b-fg); }
+.kr-stat-row {
+  display: grid; grid-template-columns: 8.5em 7.5em 1fr; align-items: center; gap: 8px; padding: 3px 6px;
+  border-left: 3px solid transparent; border-radius: 3px; margin-bottom: 3px; background: var(--st-row);
+}
+.kr-stat-row.kr-good { border-left-color: var(--st-good); }
+.kr-stat-row.kr-bad { border-left-color: var(--st-bad); }
+.kr-stat-move { font-weight: 600; white-space: nowrap; }
+.kr-stat-nag { margin-left: 3px; font-weight: 700; }
+.kr-good .kr-stat-nag { color: var(--st-good); }
+.kr-bad .kr-stat-nag { color: var(--st-bad); }
+.kr-stat-games { color: var(--st-muted); white-space: nowrap; }
+.kr-stat-other .kr-stat-move { font-weight: 400; color: var(--st-muted); }
+@media (max-width: 520px) {
+  .kr-stat-row { grid-template-columns: 1fr auto; }
+  .kr-stat-row .kr-stat-wdl { grid-column: 1 / -1; }
+}
+
 /* Settings: gear, warning banner, dialog */
 .kr-head { position: relative; padding-right: 88px; min-height: 40px; }
 .kr-gear {

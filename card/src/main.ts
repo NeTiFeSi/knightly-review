@@ -3,6 +3,7 @@ import { App, renderError } from './app';
 import { checkConfig, configDiff, DEFAULT_CONFIG, readCard } from './cardRef';
 import { addonAvailable, addonHello, isDesktop, loadOverrides, saveOverrides, storageWorks } from './settings';
 import { SettingsPanel } from './settingsPanel';
+import { showStatsFor } from './statsView';
 import css from './styles.css';
 import baseCss from 'chessground/assets/chessground.base.css';
 import boardCss from 'chessground/assets/chessground.brown.css';
@@ -85,6 +86,7 @@ export function mount(opts?: { resumed?: boolean }): void {
     const card = readCard(root);
     if (typeof card === 'string') return renderError(root, card);
     const cfg = loadConfig();
+    if (card.side === 'back') showStatsFor(document, card.n);
     current = App.create(root, card, cfg.config, {
       warnings: cfg.warnings,
       resumed: !!(opts && opts.resumed),

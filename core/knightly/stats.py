@@ -66,21 +66,78 @@ def collect(games: Iterable[Game]) -> dict[int, dict[str, Pos]]:
     return out
 
 
-def lines(pos: Optional[Pos], label: str = "") -> list[str]:
-    """One HTML line per move played more than once from `pos`, most played first:
-    'Nf3: played 7 times (you 5, opponents 2; 58% of the 12 games that reached this position).'"""
-    if pos is None:
-        return []
-    board = chess.Board(pos.fen)
-    total = pos.reached
-    out = []
-    for u, st in sorted(pos.moves.items(), key=lambda kv: -kv[1].total):
-        if st.total < 2:
-            continue
-        try:
-            san = board.san(chess.Move.from_uci(u))
-        except ValueError:
-            continue
-        out.append(f"{label}{san}: played {st.total} times (you {st.mine}, opponents {st.opp}; "
-                   f"{round(100 * st.total / total)}% of the {total} games that reached this position).")
+# ---------------------------------------------------------------- explorer: per position, whatever the ply
+
+
+@dataclass
+class MoveResults:
+    """How often a move was played from a position (in how many games) and how those games ended."""
+
+    games: int = 0
+    white: int = 0  # games White won
+    draw: int = 0
+    black: int = 0  # games Black won
+
+    @property
+    def decided(self) -> int:
+        """Games with a result (an unfinished game counts as played, not as a result)."""
+        return self.white + self.draw + self.black
+
+
+@dataclass
+class Position:
+    """A position as the games reached it, matched by fen key whatever the ply (transpositions merge)."""
+
+    fen: str
+    games: set[str] = field(default_factory=set)  # distinct games that reached it
+    moves: dict[str, MoveResults] = field(default_factory=dict)  # UCI → results, first seen first
+    results: dict[str, str] = field(default_factory=dict)  # game key → its result
+
+    @property
+    def reached(self) -> int:
+        return len(self.games)
+
+    def totals(self) -> MoveResults:
+        """The results of every game that reached the position."""
+        t = MoveResults(games=self.reached)
+        for r in self.results.values():
+            t.white += r == "1-0"
+            t.draw += r == "1/2-1/2"
+            t.black += r == "0-1"
+        return t
+
+
+def collect_positions(games: Iterable[Game]) -> dict[str, Position]:
+    """fen key → position, with the moves played from it and their results, over `games`. A game counts once
+    for a position and once for each move played from it, even when the position repeats in the game."""
+    out: dict[str, Position] = {}
+    for g in games:
+        board = chess.Board()
+        seen: set[str] = set()
+        seen_moves: set[tuple[str, str]] = set()
+        for u in g.moves:
+            k = fen_key(board.fen())
+            pos = out.get(k)
+            if pos is None:
+                pos = out[k] = Position(board.fen())
+            if k not in seen:
+                seen.add(k)
+                pos.games.add(g.key)
+                pos.results[g.key] = g.result
+            if (k, u) not in seen_moves:
+                seen_moves.add((k, u))
+                m = pos.moves.setdefault(u, MoveResults())
+                m.games += 1
+                m.white += g.result == "1-0"
+                m.draw += g.result == "1/2-1/2"
+                m.black += g.result == "0-1"
+            board.push_uci(u)
+        # The position after the last move has no move from it, but the game reached it.
+        k = fen_key(board.fen())
+        pos = out.get(k)
+        if pos is None:
+            pos = out[k] = Position(board.fen())
+        if g.key not in pos.games:
+            pos.games.add(g.key)
+            pos.results[g.key] = g.result
     return out
