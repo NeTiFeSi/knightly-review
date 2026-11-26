@@ -6,13 +6,13 @@ import { CARD_DIR, MODEL } from './common.mjs';
 import { ankiConnect } from './desktop.mjs';
 
 const BLOCK = /window\.KR_CONFIG\s*=\s*\{[^{}]*\}\s*;?/;
-export const MEDIA = ['_knightly.js', '_kr_stockfish.js', '_kr_stockfish.wasm'];
+export const MEDIA = ['_knightly.js'];
 const hash = s => createHash('sha256').update(s).digest('hex').slice(0, 10);
 
 function built() {
   const read = f => readFileSync(CARD_DIR + 'dist/' + f, 'utf8');
   return {
-    // The card bundle and the built-in engine (src/wasm.ts).
+    // The card bundle.
     media: Object.fromEntries(MEDIA.map(f => [f, readFileSync(CARD_DIR + 'dist/' + f)])),
     front: read('templates/front.html'),
     back: read('templates/back.html'),
@@ -40,6 +40,9 @@ export async function deploy(port, { apply = false } = {}) {
 
   const models = await ac('modelNames');
   if (!models.includes(MODEL)) throw new Error(`note type "${MODEL}" not found; import the sample .apkg first`);
+  const fields = await ac('modelFieldNames', { modelName: MODEL });
+  const needVisits = !fields.includes('Visits'); // the templates read it (which replies each card showed)
+  if (needVisits) changes.push('field Visits: added');
   const cur = await ac('modelTemplates', { modelName: MODEL });
   const templates = {};
   for (const [name, t] of Object.entries(cur)) {
@@ -59,6 +62,7 @@ export async function deploy(port, { apply = false } = {}) {
   if (css.css !== b.css) changes.push('styling: updated');
 
   if (apply && changes.length) {
+    if (needVisits) await ac('modelFieldAdd', { modelName: MODEL, fieldName: 'Visits' });
     for (const [filename, data] of mediaUpdates)
       await ac('storeMediaFile', { filename, data: data.toString('base64'), deleteExisting: true });
     await ac('updateModelTemplates', { model: { name: MODEL, templates } });

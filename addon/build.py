@@ -83,7 +83,7 @@ def vendor() -> None:
 
 def card() -> None:
     dist = ROOT / "card" / "dist"
-    need = [dist / "_knightly.js", dist / "_kr_stockfish.js", dist / "_kr_stockfish.wasm",
+    need = [dist / "_knightly.js",
             dist / "templates" / "front.html", dist / "templates" / "back.html", dist / "templates" / "style.css"]
     missing = [str(p) for p in need if not p.exists()]
     if missing:

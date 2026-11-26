@@ -5,7 +5,7 @@ export interface StoredResult {
   status: 'solved' | 'failed';
   /** Node ids of the user's accepted moves. */
   played: string[];
-  reason?: 'rejected' | 'unknown' | 'gaveup' | 'live' | 'timeout';
+  reason?: 'rejected' | 'unknown' | 'gaveup' | 'timeout';
   /** Position id where the attempt failed. */
   failAt?: string;
   failSan?: string;
@@ -13,16 +13,8 @@ export interface StoredResult {
   failUci?: string;
   /** Node id of the rejected move, when it is in the PGN. */
   failNode?: string;
-  /** Live play: node id where it started, the engine UCIs played (failed move last), and why it ended. */
-  liveFrom?: string;
-  live?: string[];
-  liveEnd?: string;
-  /** Live failure: the engine's best move (UCI) and its SAN. */
-  failBest?: string;
-  failBestSan?: string;
-  /** Live failure in a forced mate: the best mate, and the failed move's (absent when it dropped the mate). */
-  failBestMate?: number;
-  failMate?: number;
+  /** The line ended in a draw (repetition, fifty moves…): the message. */
+  draw?: string;
   /** Hints revealed during the attempt. */
   hints?: number;
   /** Timed puzzles: your thinking time in ms, and whether it went over the limit. */

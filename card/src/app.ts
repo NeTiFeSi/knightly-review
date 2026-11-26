@@ -25,8 +25,8 @@ import {
   ViewOptions,
   visibleChildren,
 } from './pgn';
-import type { LiveEngine } from './engine';
-import { acceptedMoves, graft, MateMiss, mateMiss, Outcome, PuzzleRun } from './puzzle';
+import { acceptedMoves, MateMiss, mateMiss, Outcome, PuzzleRun } from './puzzle';
+import { cardVisits } from './visits';
 import { acceptList, isAccepted } from './nag';
 import { cardKey, clearResult, loadResult, saveResult, StoredResult } from './state';
 
@@ -145,8 +145,6 @@ export function renderError(root: HTMLElement, msg: string): void {
 export interface AppExtras {
   /** Config problems to show in a banner. */
   warnings: string[];
-  /** Resolves to the live engine, or undefined when there is none (see engine.ts). */
-  engine?: Promise<LiveEngine | undefined>;
   /** Re-mounted after the settings dialog closed: don't start an automatic grade again. */
   resumed: boolean;
   /** Thinking time (ms) already spent before a re-mount, so the settings dialog can't reset the clock. */
@@ -171,8 +169,6 @@ export class App {
   private manualNote?: string;
   /** The user's rejected move, for the red arrow. */
   private failMove?: Move;
-  /** Waiting for the live engine. */
-  private thinking = false;
   /** Back: show every candidate move at the puzzle position, not only the accepted ones. */
   private showAllCandidates = false;
   private timers: number[] = [];
@@ -240,17 +236,9 @@ export class App {
     };
     if (card.side === 'front') {
       clearResult(this.key);
-      this.run = new PuzzleRun(puzzle.position, acceptList(cfg), puzzle.gameMove.hint, undefined, cfg.strictMate);
-      if (cfg.live && extras.engine) {
-        const run = this.run;
-        extras.engine.then(engine => {
-          if (engine && run.status === 'playing' && !run.live)
-            run.enableLive({ engine, options: { goodMove: cfg.goodMove, maxMoves: cfg.liveMaxMoves, strictMate: cfg.strictMate } });
-        });
-      }
+      this.run = new PuzzleRun(puzzle.position, acceptList(cfg), puzzle.gameMove.hint, cfg.strictMate, cardVisits(this.key));
     } else {
       this.result = loadResult(this.key);
-      this.regraft();
     }
     this.cursor = puzzle.position;
     this.build();
@@ -682,28 +670,9 @@ export class App {
     if (c) this.goto(c);
   }
 
-  /** Back: put the moves played live back onto the tree, so they can be seen and stepped through. */
-  private regraft(): void {
-    const r = this.result;
-    if (!r || !r.live || !r.liveFrom) return;
-    let at = findNode(this.games, r.liveFrom);
-    try {
-      for (const uci of r.live) {
-        if (!at) break;
-        at = graft(at, uci);
-      }
-    } catch (_) {
-      /* a stale result: show what could be rebuilt */
-    }
-  }
-
   private onUserMove(move: Move): void {
     const run = this.run;
     if (!run || run.status !== 'playing' || this.busy) return;
-    if (run.live) {
-      this.onLiveMove(move);
-      return;
-    }
     let out: Outcome;
     try {
       out = run.play(move);
@@ -738,76 +707,7 @@ export class App {
       if (out.kind === 'solved') this.persist();
       this.render();
       if (out.kind === 'solved') this.finish();
-      if (out.kind === 'live') this.enterLive();
     }, this.cfg.autoReplyDelay);
-  }
-
-  /** The PGN line is done: ask the live engine whether to play on. */
-  private enterLive(): void {
-    const run = this.run!;
-    this.think(run.startLive(), true).then(ended => {
-      if (ended) {
-        this.persist();
-        this.render();
-        this.finish();
-      } else this.render();
-    });
-  }
-
-  /** Wait for the engine. `redraw`: false keeps the user's just-played move on the board meanwhile. */
-  private think<T>(p: Promise<T>, redraw = false): Promise<T> {
-    this.thinking = true;
-    this.busy = true;
-    this.render(redraw);
-    const done = () => {
-      this.thinking = false;
-      this.busy = false;
-    };
-    return p.then(
-      v => {
-        done();
-        return v;
-      },
-      e => {
-        done();
-        throw e;
-      },
-    );
-  }
-
-  private onLiveMove(move: Move): void {
-    const run = this.run!;
-    // Show the user's move at once, then wait for the engine's verdict.
-    this.think(run.playLive(move)).then(out => {
-      this.failMove = out.kind === 'failed' ? move : undefined;
-      if (out.kind === 'failed') {
-        this.cursor = out.at;
-        this.persist();
-        this.render();
-        this.finish();
-        return;
-      }
-      if (out.kind === 'live') return; // not produced by playLive
-      this.view.revealed.add(out.played.id);
-      this.cursor = out.played;
-      const reply = out.reply;
-      if (!reply) {
-        this.persist();
-        this.render();
-        this.finish();
-        return;
-      }
-      this.busy = true;
-      this.render();
-      this.later(() => {
-        this.view.revealed.add(reply.id);
-        this.busy = false;
-        this.cursor = reply;
-        if (out.kind === 'solved') this.persist();
-        this.render();
-        if (out.kind === 'solved') this.finish();
-      }, this.cfg.autoReplyDelay);
-    });
   }
 
   private giveUp(): void {
@@ -838,13 +738,7 @@ export class App {
       failSan: f && f.san,
       failNode: f && f.node && f.node.id,
       failUci: this.failMove && makeUci(this.failMove),
-      failBest: f && f.best,
-      failBestSan: f && f.bestSan,
-      failBestMate: f && f.bestMate,
-      failMate: f && f.mate,
-      liveFrom: run.liveFrom && run.liveFrom.id,
-      live: run.liveMoves.length ? run.liveMoves.slice() : undefined,
-      liveEnd: run.liveEnd,
+      draw: run.draw,
       hints: run.hintsUsed,
       elapsedMs,
       limitMs: timed ? this.cfg.timeLimit * 1000 : undefined,
@@ -919,8 +813,7 @@ export class App {
         if (hint.kind === 'piece') hint.squares.forEach(sq => push({ orig: makeSquare(sq) as Key, brush: 'yellow' }));
       });
     } else if (run && run.failure && node === run.failure.at) {
-      if (run.failure.best) push(this.moveArrow(parseUci(run.failure.best), 'green'));
-      else acceptedMoves(node, node === run.start, acceptList(this.cfg), this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
+      acceptedMoves(node, node === run.start, acceptList(this.cfg), this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.failMove) push(this.moveArrow(this.failMove, 'red'));
     } else if (!run && node === this.puzzle.position) {
       const accepted = acceptedMoves(node, true, acceptList(this.cfg), this.cfg.strictMate);
@@ -930,8 +823,7 @@ export class App {
       if (mine && !accepted.concat([this.puzzle.gameMove]).some(n => n.uci === mine.uci))
         push(this.moveArrow(mine.move, 'blue'));
     } else if (!run && this.result && this.result.failAt === node.id && this.result.failAt !== this.puzzle.position.id) {
-      if (this.result.failBest) push(this.moveArrow(parseUci(this.result.failBest), 'green'));
-      else acceptedMoves(node, false, acceptList(this.cfg), this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
+      acceptedMoves(node, false, acceptList(this.cfg), this.cfg.strictMate).forEach(n => push(this.arrow(n, 'green', glyph(n))));
       if (this.result.failUci) push(this.moveArrow(parseUci(this.result.failUci), 'red'));
     }
     if (!shapes.length && !shapesHidden(node, this.view))
@@ -999,16 +891,7 @@ export class App {
         return;
       }
       if (run.status === 'playing') {
-        if (this.thinking) {
-          line('kr-status-main', run.live && run.played.length ? 'Checking your move…' : 'The engine is thinking…');
-          line('kr-status-sub', 'Playing on with ' + (run.liveSetup ? run.liveSetup.engine.name : 'the engine') + '.');
-          return;
-        }
-        if (run.live && run.played.length) {
-          const last = run.played[run.played.length - 1];
-          el.classList.add('kr-good');
-          line('kr-status-main', '✓ ', this.moveBadge(last), ' — keep going until it’s settled');
-        } else if (run.played.length) {
+        if (run.played.length) {
           const last = run.played[run.played.length - 1];
           el.classList.add('kr-good');
           line('kr-status-main', this.moveBadge(last), ' — keep going');
@@ -1026,8 +909,9 @@ export class App {
         el.classList.add('kr-good');
         const how = run.hintsUsed ? '✓ Solved with ' + hintCount(run.hintsUsed) + ' — ' : '✓ Solved — ';
         line('kr-status-main', how, this.moveBadge(run.played[0]));
-        const end = this.liveEndText(run.liveEnd, run.played.length);
-        if (end) line('kr-status-sub', end);
+        const last = run.line[run.line.length - 1];
+        if (run.draw) line('kr-status-sub', run.draw);
+        else if (last && last.comment) line('kr-status-comment', last.comment);
         note();
         return;
       }
@@ -1036,13 +920,7 @@ export class App {
       if (f.reason === 'gaveup') line('kr-status-main', '✗ Answer shown' + again);
       else if (f.reason === 'timeout') line('kr-status-main', '✗ Time ran out at ' + this.cfg.timeLimit + ' s' + again);
       else if (f.reason === 'unknown') line('kr-status-main', '✗ ' + f.san + ' is not in the analysis' + again);
-      else if (f.reason === 'live') {
-        const miss = liveMateMiss(f.bestMate, f.mate);
-        line('kr-status-main', '✗ ' + f.san + ' ' + (miss ? this.mateMissText(miss) : 'lets the advantage slip') + again);
-        if (f.bestSan) line('kr-status-sub', 'Best: ' + f.bestSan);
-        note();
-        return;
-      } else {
+      else {
         const miss = mateMiss(f.at, f.node!, this.cfg.strictMate);
         // Its NAG may say "! Good": the mate rule is what rejected it, so say that instead.
         if (miss) line('kr-status-main', '✗ ' + f.node!.san + ' ' + this.mateMissText(miss) + again);
@@ -1073,15 +951,9 @@ export class App {
       if (r.status === 'failed' && r.played.length) {
         const at = r.failAt ? findNode(this.games, r.failAt) : undefined;
         if (r.reason === 'timeout') line('kr-status-sub', 'Then time ran out at ' + this.cfg.timeLimit + ' s.');
-        else if (r.reason === 'live') {
-          const miss = liveMateMiss(r.failBestMate, r.failMate);
-          const what = miss ? (miss.kind === 'drops' ? ' missed the forced mate' : ' mated, but slower') : ' let it slip';
-          line('kr-status-sub', 'Then ' + (r.failSan || 'a move') + (at && at.san ? ' after ' + at.san : '') + what + (r.failBestSan ? '; ' + r.failBestSan + ' was best.' : '.'));
-        }
         else line('kr-status-sub', 'Then missed ' + (r.failSan || 'the continuation') + (at && at.san ? ' after ' + at.san : '') + '.');
       }
-      const end = this.liveEndText(r.liveEnd as never, r.played.length);
-      if (end && r.status === 'solved') line('kr-status-sub', end);
+      if (r.draw) line('kr-status-sub', r.draw);
       if (r.status === 'failed' && r.reason === 'rejected' && !r.played.length && mine && mine.node && !nagInfo(mine.node.nags)) line('kr-status-sub', NEUTRAL_NOTE);
       if (r.hints) line('kr-status-sub', 'Used ' + hintCount(r.hints) + '.');
       if (r.elapsedMs !== undefined && r.reason !== 'timeout') {
@@ -1103,24 +975,6 @@ export class App {
     if (this.gradePending)
       line('kr-status-sub kr-status-note', 'Marking as ' + this.gradePending.label + '… tap anywhere to cancel.');
     note();
-  }
-
-  private liveEndText(reason: string | undefined, moves: number): string | undefined {
-    const n = moves + (moves === 1 ? ' move' : ' moves');
-    switch (reason) {
-      case 'mate':
-        return 'Checkmate after ' + n + '.';
-      case 'draw':
-        return 'Drawn after ' + n + '.';
-      case 'quiet':
-        return moves > 1 ? 'Played on for ' + n + ' until the position settled.' : undefined;
-      case 'limit':
-        return 'Played ' + n + ' (the limit).';
-      case 'unavailable':
-        return 'The engine was not available to play on.';
-      default:
-        return undefined;
-    }
   }
 
   private acceptedLine(
@@ -1222,7 +1076,7 @@ export class App {
   }
 
   private keepCandidate(c: KNode): boolean {
-    if (c === this.puzzle.gameMove || c.live || isAccepted(c.nags, acceptList(this.cfg))) return true;
+    if (c === this.puzzle.gameMove || isAccepted(c.nags, acceptList(this.cfg))) return true;
     const r = this.result;
     if (r && (r.played.indexOf(c.id) >= 0 || r.failNode === c.id)) return true;
     return c === this.cursor || this.isAncestorOf(c, this.cursor);
@@ -1255,19 +1109,9 @@ export class App {
     if (n === this.cursor) m.classList.add('kr-active');
     if (n === this.puzzle.gameMove) m.classList.add('kr-puzzle-move');
     if (!n.mainline) m.classList.add('kr-side');
-    if (n.live) {
-      m.classList.add('kr-live');
-      m.title = 'Played with the live engine';
-    }
     m.addEventListener('click', () => this.goto(n));
     wrap.appendChild(m);
     return wrap;
   }
 }
 
-/** A live failure in a forced mate, from the engine's mate counts. */
-function liveMateMiss(best: number | undefined, mate: number | undefined): MateMiss | undefined {
-  if (best === undefined || best === null) return undefined;
-  if (mate === undefined || mate === null) return { kind: 'drops', best };
-  return mate > best ? { kind: 'slower', mate, best } : undefined;
-}

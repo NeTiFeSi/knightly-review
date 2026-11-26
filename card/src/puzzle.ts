@@ -1,98 +1,46 @@
 // Front-side answer checking: pure logic, no DOM.
 //
-// The PGN gives the puzzle's first move(s). Where it runs out, a live engine (when
-// available) takes over: see live.ts. Live moves are grafted onto the move tree as
-// extra nodes (`live: true`), so the move list and navigation work as usual.
-import { normalizeMove } from 'chessops/chess';
+// The PGN is the whole solution tree: the user's accepted moves, and the opponent's good replies
+// (one is picked, the least seen first). A position that came up by another move order is a leaf in the
+// PGN that continues like the position written in full elsewhere (`expandAlias`).
 import { makeFen } from 'chessops/fen';
 import { makeSan } from 'chessops/san';
 import type { Color, Move, Square } from 'chessops/types';
-import { makeSquare, makeUci, parseSquare, parseUci } from 'chessops/util';
-import type { ELine, LiveEngine } from './engine';
-import { EndReason, LiveLine, LiveOptions } from './live';
+import { parseSquare } from 'chessops/util';
 import { isAccepted, isRejected } from './nag';
-import { KNode, positionOf } from './pgn';
+import { expandAlias, fenKey, KNode, positionOf } from './pgn';
 
-export type FailReason = 'rejected' | 'unknown' | 'gaveup' | 'live' | 'timeout';
+export type FailReason = 'rejected' | 'unknown' | 'gaveup' | 'timeout';
 
 export type Outcome =
   | { kind: 'continue'; played: KNode; reply: KNode }
-  | { kind: 'solved'; played: KNode; reply?: KNode }
-  /** The PGN line ended; the live engine takes over (call startLive()). */
-  | { kind: 'live'; played: KNode; reply?: KNode }
-  | {
-      kind: 'failed';
-      reason: FailReason;
-      at: KNode;
-      san?: string;
-      node?: KNode;
-      best?: string;
-      bestSan?: string;
-      /** Live play in a forced mate: the best mate, and the move's own (undefined when it drops the mate). */
-      bestMate?: number;
-      mate?: number;
-    };
+  /** `draw`: the line ended in a draw (repetition, fifty moves, no material), which counts as solved. */
+  | { kind: 'solved'; played: KNode; reply?: KNode; draw?: string }
+  | { kind: 'failed'; reason: FailReason; at: KNode; san?: string; node?: KNode };
 
-/** Engine UCI (castling as e1g1) for a chessops move (castling as king-takes-rook). */
-export function engineUci(at: KNode, move: Move): string {
-  const pos = positionOf(at);
-  if ('from' in move) {
-    const piece = pos.board.get(move.from);
-    const target = pos.board.get(move.to);
-    if (piece && piece.role === 'king' && target && target.color === piece.color && target.role === 'rook') {
-      const rank = move.from >> 3;
-      const file = (move.to & 7) > (move.from & 7) ? 6 : 2;
-      return makeSquare(move.from) + makeSquare(rank * 8 + file);
-    }
-  }
-  return makeUci(move);
+/** How often each reply position was shown in this card's reviews (see visits.ts). */
+export interface Visits {
+  get(key: string): number;
+  add(key: string): void;
 }
 
-function evalOf(l?: ELine): KNode['eval'] {
-  if (!l) return undefined;
-  if (l.mate !== undefined && l.mate !== null) return { mate: l.mate };
-  if (l.cp !== undefined && l.cp !== null) return { pawns: l.cp / 100 };
+/** The reply to show: among `replies`, the ones seen least; ties are broken at random. */
+export function pickReply(replies: KNode[], visits?: Visits, random: () => number = Math.random): KNode | undefined {
+  if (!replies.length) return undefined;
+  const seen = (n: KNode) => (visits ? visits.get(fenKey(n.fen)) : 0);
+  const least = Math.min(...replies.map(seen));
+  const pool = replies.filter(n => seen(n) === least);
+  return pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
+}
+
+/** Why the position is drawn (the line ends there as solved), given how often it occurred and the clock. */
+export function drawReason(node: KNode, occurrences: number, halfmoves: number): string | undefined {
+  const pos = positionOf(node);
+  if (pos.isStalemate()) return 'Stalemate.';
+  if (occurrences >= 3) return 'Draw by threefold repetition.';
+  if (halfmoves >= 100) return 'Draw by the fifty-move rule.';
+  if (pos.isInsufficientMaterial()) return 'Draw: not enough material.';
   return undefined;
-}
-
-/** Add a live move under `parent` (or return the existing child for it). */
-export function graft(parent: KNode, uci: string, line?: ELine): KNode {
-  const pos = positionOf(parent);
-  const raw = parseUci(uci);
-  if (!raw) throw new Error('bad move ' + uci);
-  const move = normalizeMove(pos, raw);
-  if (!pos.isLegal(move)) throw new Error('illegal move ' + uci);
-  const san = makeSan(pos, move);
-  pos.play(move);
-  const fen = makeFen(pos.toSetup());
-  const existing = parent.children.find(c => c.fen === fen);
-  if (existing) return existing;
-  const node: KNode = {
-    id: parent.id + '.' + parent.children.length,
-    fen,
-    turn: pos.turn,
-    ply: parent.ply + 1,
-    mainline: false,
-    check: pos.isCheck(),
-    san,
-    uci: makeUci(move),
-    move,
-    nags: [],
-    comment: '',
-    startingComment: '',
-    eval: evalOf(line),
-    shapes: [],
-    live: true,
-    parent,
-    children: [],
-  };
-  parent.children.push(node);
-  return node;
-}
-
-export interface LiveSetup {
-  engine: LiveEngine;
-  options: LiveOptions;
 }
 
 /**
@@ -164,36 +112,35 @@ export class PuzzleRun {
   /** Every node revealed by play (user moves and replies). */
   readonly line: KNode[] = [];
   failure?: Extract<Outcome, { kind: 'failed' }>;
+  /** Why the line ended in a draw, if it did. */
+  draw?: string;
   /** Hints revealed so far, over the whole attempt. */
   hintsUsed = 0;
   /** Hints revealed at the current position (reset when the line advances). */
   hints: Hint[] = [];
-  /** Set while playing on with the live engine. */
-  live?: LiveLine;
-  /** Node where live play started. */
-  liveFrom?: KNode;
-  /** Engine UCIs played live, user moves and replies in order (the failed move last). */
-  readonly liveMoves: string[] = [];
-  /** Why live play ended ("unavailable" when the engine failed). */
-  liveEnd?: EndReason | 'unavailable';
+  /** How often each position (fen key) occurred on the way here, game moves included. */
+  private readonly seen = new Map<string, number>();
+  /** Half-moves since the last capture or pawn move, along the path actually played. */
+  private halfmoves: number;
 
   constructor(
     readonly start: KNode,
     readonly accept: readonly number[],
     /** Optional text hint for the first move (`[%hint …]`). */
     readonly hintText?: string,
-    /** Engine to continue past the PGN with; without it the puzzle ends where the PGN does. */
-    public liveSetup?: LiveSetup,
     /** In a forced mate, accept only the fastest mate (any forced mate otherwise). */
     readonly strictMate = false,
+    /** Which replies this card showed before (the least seen is shown). */
+    readonly visits?: Visits,
+    readonly random: () => number = Math.random,
   ) {
     this.cur = start;
     this.userColor = start.turn;
-  }
-
-  /** Turn on live play (the engine may become available after the card is shown). */
-  enableLive(setup: LiveSetup): void {
-    this.liveSetup = setup;
+    for (let n: KNode | undefined = start; n; n = n.parent) {
+      const k = fenKey(n.fen);
+      this.seen.set(k, (this.seen.get(k) || 0) + 1);
+    }
+    this.halfmoves = positionOf(start).halfmoves;
   }
 
   get isFirst(): boolean {
@@ -201,7 +148,7 @@ export class PuzzleRun {
   }
 
   accepted(): KNode[] {
-    if (this.live) return [];
+    expandAlias(this.cur);
     return acceptedMoves(this.cur, this.isFirst, this.accept, this.strictMate);
   }
 
@@ -213,8 +160,6 @@ export class PuzzleRun {
     this.accepted().forEach(n => {
       if (n.move && 'from' in n.move && squares.indexOf(n.move.from) < 0) squares.push(n.move.from);
     });
-    const best = this.live && this.live.best();
-    if (best) squares.push(parseSquare(best.slice(0, 2))!);
     if (squares.length) levels.push({ kind: 'piece', squares });
     return levels;
   }
@@ -232,118 +177,52 @@ export class PuzzleRun {
     return h;
   }
 
+  /** Count `node` (just played from `before`) for the draw rules; returns why the game is drawn, if it is. */
+  private count(before: KNode, node: KNode): string | undefined {
+    const pos = positionOf(before);
+    const m = node.move!;
+    const reset = 'from' in m && (pos.board.has(m.to) || pos.board.get(m.from)?.role === 'pawn');
+    this.halfmoves = reset ? 0 : this.halfmoves + 1;
+    const k = fenKey(node.fen);
+    const n = (this.seen.get(k) || 0) + 1;
+    this.seen.set(k, n);
+    return drawReason(node, n, this.halfmoves);
+  }
+
+  private solve(played: KNode, reply?: KNode, draw?: string): Outcome {
+    this.status = 'solved';
+    this.draw = draw;
+    return { kind: 'solved', played, reply, draw };
+  }
+
   play(move: Move): Outcome {
     if (this.status !== 'playing') throw new Error('puzzle is over');
-    if (this.live) throw new Error('live play: use playLive()');
+    expandAlias(this.cur);
     const pos = positionOf(this.cur);
     if (!pos.isLegal(move)) throw new Error('illegal move');
     const san = makeSan(pos, move);
     pos.play(move);
-    const fen = makeFen(pos.toSetup());
-    const node = this.cur.children.find(c => c.fen === fen);
+    const key = fenKey(makeFen(pos.toSetup()));
+    const node = this.cur.children.find(c => fenKey(c.fen) === key);
     if (!node) return this.fail({ kind: 'failed', reason: 'unknown', at: this.cur, san });
     if (this.accepted().indexOf(node) < 0)
       return this.fail({ kind: 'failed', reason: 'rejected', at: this.cur, san: node.san, node });
 
+    const before = this.cur;
     this.played.push(node);
     this.line.push(node);
-    const reply = node.children[0];
-    if (!reply) return this.endOfLine(node);
+    const drawn = this.count(before, node);
+    if (drawn) return this.solve(node, undefined, drawn);
+    expandAlias(node);
+    const reply = pickReply(node.children, this.visits, this.random);
+    if (!reply) return this.solve(node);
+    if (this.visits) this.visits.add(fenKey(reply.fen));
     this.line.push(reply);
-    if (!reply.children.length) return this.endOfLine(node, reply);
+    const drawnReply = this.count(node, reply);
+    expandAlias(reply);
+    if (drawnReply || !reply.children.length) return this.solve(node, reply, drawnReply);
     this.cur = reply;
     this.hints = [];
-    return { kind: 'continue', played: node, reply };
-  }
-
-  /** The PGN ran out: hand over to the live engine, or finish. */
-  private endOfLine(played: KNode, reply?: KNode): Outcome {
-    const at = reply || played;
-    if (!this.liveSetup || at.turn !== this.userColor) {
-      this.status = 'solved';
-      return { kind: 'solved', played, reply };
-    }
-    const capture = !!at.san && at.san.indexOf('x') >= 0;
-    this.live = new LiveLine(this.liveSetup.engine, at.fen, this.userColor, this.liveSetup.options, capture);
-    this.liveFrom = at;
-    this.cur = at;
-    this.hints = [];
-    this.live.prefetch().catch(() => undefined);
-    return { kind: 'live', played, reply };
-  }
-
-  /** After a 'live' outcome: decide whether the puzzle already ends here. True when it does. */
-  async startLive(): Promise<boolean> {
-    const live = this.live!;
-    let end: EndReason | 'unavailable' | undefined;
-    try {
-      end = await live.endHere();
-    } catch (_) {
-      end = 'unavailable';
-    }
-    if (end) this.endLive(end);
-    return !!end;
-  }
-
-  private endLive(reason: EndReason | 'unavailable'): void {
-    this.liveEnd = reason;
-    this.status = 'solved';
-    this.live = undefined;
-  }
-
-  /** A user move while playing live. Engine errors end the puzzle as solved ("unavailable"). */
-  async playLive(move: Move): Promise<Outcome> {
-    const live = this.live;
-    if (!live || this.status !== 'playing') throw new Error('not playing live');
-    const at = this.cur;
-    const pos = positionOf(at);
-    if (!pos.isLegal(move)) throw new Error('illegal move');
-    const uci = engineUci(at, move);
-    let step;
-    try {
-      step = await live.play(uci);
-    } catch (_) {
-      const node = graft(at, uci);
-      this.liveMoves.push(uci);
-      this.played.push(node);
-      this.line.push(node);
-      this.cur = node;
-      this.endLive('unavailable');
-      return { kind: 'solved', played: node };
-    }
-    if (step.kind === 'failed') {
-      const node = graft(at, uci, step.line);
-      this.liveMoves.push(uci);
-      return this.fail({
-        kind: 'failed',
-        reason: 'live',
-        at,
-        san: step.san,
-        node,
-        best: step.best,
-        bestSan: step.bestSan,
-        bestMate: step.bestMate,
-        mate: step.mate,
-      });
-    }
-    const node = graft(at, uci);
-    this.liveMoves.push(uci);
-    this.played.push(node);
-    this.line.push(node);
-    this.hints = [];
-    if (!step.reply) {
-      this.cur = node;
-      this.endLive(step.kind === 'solved' ? step.reason : 'quiet');
-      return { kind: 'solved', played: node };
-    }
-    const reply = graft(node, step.reply, step.replyLine);
-    this.liveMoves.push(step.reply);
-    this.line.push(reply);
-    this.cur = reply;
-    if (step.kind === 'solved') {
-      this.endLive(step.reason);
-      return { kind: 'solved', played: node, reply };
-    }
     return { kind: 'continue', played: node, reply };
   }
 
@@ -359,7 +238,6 @@ export class PuzzleRun {
   private fail(o: Extract<Outcome, { kind: 'failed' }>): Outcome {
     this.status = 'failed';
     this.failure = o;
-    this.live = undefined;
     return o;
   }
 }

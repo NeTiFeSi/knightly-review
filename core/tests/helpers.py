@@ -82,7 +82,7 @@ class FakeAnalyser:
     def __exit__(self, *a):
         pass
 
-    def evaluate(self, board, *, multipv=1, ply=99) -> Eval:
+    def evaluate(self, board, *, multipv=1, ply=99, sf_only=False) -> Eval:
         self.calls += 1
         ev = self.table.get(fen_key(board.fen()))
         if ev:
@@ -98,6 +98,8 @@ class FakeAnalyser:
     def score(self, board, depth):
         k = fen_key(board.fen())
         self.searched.append((k, depth))
+        if k in self.table and self.table[k].lines:
+            return self.table[k].lines[0].score, depth
         s = self.scores.get(k)
         return (s if s is not None else self.evaluate(board).lines[0].score), depth
 

@@ -16,9 +16,9 @@ from .vendor.knightly import notes as kn
 from .vendor.knightly.model import NoteSpec
 
 MODEL = "Knightly Review"
-FIELDS = ("PGN", "Cards", "Notes")
+FIELDS = ("PGN", "Cards", "Notes", "Visits")  # Visits: which replies each card showed (synced; see __init__.py)
 BUNDLE = "_knightly.js"
-MEDIA = (BUNDLE, "_kr_stockfish.js", "_kr_stockfish.wasm")  # card bundle + built-in engine for other clients
+MEDIA = (BUNDLE,)  # the card bundle
 CARD_DIR = Path(__file__).resolve().parent / "card"
 
 
@@ -83,9 +83,13 @@ def ensure_installed(col: Collection, card_dir: Path = CARD_DIR) -> list[str]:
         return changes
 
     names = [f["name"] for f in nt["flds"]]
-    if names[: len(FIELDS)] != list(FIELDS) or nt.get("type") != MODEL_CLOZE:
+    if names[:3] != list(FIELDS[:3]) or nt.get("type") != MODEL_CLOZE:
         raise RuntimeError(f'the "{MODEL}" note type has unexpected fields {names}; rename it and try again')
     dirty = False
+    if "Visits" not in names:  # added in a later version: the templates below read it
+        mm.add_field(nt, mm.new_field("Visits"))
+        dirty = True
+        changes.append("Visits field added")
     for t in nt["tmpls"]:
         for side, fresh in (("qfmt", a["front"]), ("afmt", a["back"])):
             new = _keep_config(fresh, t[side])

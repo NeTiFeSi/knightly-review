@@ -363,7 +363,7 @@ class SettingsDialog(QDialog):
         self.keep.addItem("Keep analysing, to have cards ready for later updates", "precalculate")
         self.keep.addItem("Keep adding cards, with no limit per update", "unlimited")
         self.keep.setCurrentIndex(max(0, self.keep.findData(self.cfg.get("keep_running", "off"))))
-        self.keep.setToolTip("After an update has made its cards. Pauses while you review with the live engine. "
+        self.keep.setToolTip("After an update has made its cards. "
                              "Stop it with Cancel in the progress window or by closing the profile.")
         wf.addRow("After the update:", self.keep)
         self.keep_hours = QDoubleSpinBox()
@@ -504,7 +504,7 @@ class SettingsDialog(QDialog):
                 "Keeping the analysis running uses the CPU (and the GPU with Lc0) at full load, for as long as "
                 "you chose.\n\n• Laptops: the battery drains fast.\n• Heat, fan noise, and possible thermal "
                 "throttling.\n• Other programs get slower; lower “Threads” to leave room.\n\n"
-                "It pauses while you play against the engine on a card, and stops with Cancel in the progress "
+                "It stops with Cancel in the progress "
                 "window or when you close the profile.\n\nTurn it on?", parent=self):
             return
         self.cfg.pop("engine_path", None)  # replaced by stockfish_path

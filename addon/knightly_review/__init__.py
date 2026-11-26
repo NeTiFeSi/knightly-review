@@ -4,7 +4,8 @@
   (runner.py, ui.py; the chess work is the bundled core in vendor/knightly).
 - Lets the card's settings dialog (⚙) save its settings into the note type's
   templates, so they sync to every device. The card talks to it with
-  pycmd('kr:hello') and pycmd('kr:config:{json}').
+  pycmd('kr:hello') and pycmd('kr:config:{json}'). It also keeps which replies a card showed
+  (pycmd('kr:visits:<card key>|{json}')) in the note's Visits field, so other devices show others.
 """
 
 from __future__ import annotations
@@ -66,6 +67,29 @@ def _save(card, cfg: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "updated": replaced}
 
 
+def _save_visits(card: Any, payload: str) -> dict:
+    """`payload` is '<card key>|<json counts>'. Merged into the note's Visits field ({card key: counts}); the
+    larger count of each position wins, so a device never lowers what another saved. Written without an
+    undo step or a reviewer refresh (the card on screen must not redraw)."""
+    key, _, raw = payload.partition("|")
+    counts = json.loads(raw)
+    note = card.note()
+    if "Visits" not in note.keys() or not key or not isinstance(counts, dict):
+        return {"ok": False}
+    try:
+        stored = json.loads(note["Visits"] or "{}")
+    except ValueError:
+        stored = {}
+    mine = stored.get(key, {})
+    merged = {k: max(int(counts.get(k, 0)), int(mine.get(k, 0))) for k in set(counts) | set(mine)}
+    if merged == mine:
+        return {"ok": True, "same": True}
+    stored[key] = merged
+    note["Visits"] = json.dumps(stored, separators=(",", ":"))
+    card.col.update_note(note)
+    return {"ok": True}
+
+
 def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tuple[bool, Any]:
     if not message.startswith(PREFIX):
         return handled
@@ -73,26 +97,12 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
     if card is None:
         return handled
     if message == "kr:hello":
-        from . import live, settings
-
+        return True, {"kr": 1, "version": VERSION}
+    if message.startswith("kr:visits:"):  # which replies this card showed: kept in the note, so it syncs
         try:
-            engine = live.engine_label(settings.load())
-        except Exception:
-            engine = None
-        return True, {"kr": 1, "version": VERSION, "engine": engine}
-    if message == "kr:warm":  # a card with live play on: start the engines early
-        from . import live, settings
-
-        if live.engine_label(settings.load()):
-            live.service.warm()
-        return True, {"ok": True}
-    if message.startswith("kr:engine:"):
-        from . import live
-
-        try:
-            return True, live.handle(message, context)
+            return True, _save_visits(card, message[len("kr:visits:"):])
         except Exception as e:
-            return True, {"error": str(e)}
+            return True, {"ok": False, "error": str(e)}
     if message.startswith("kr:config:"):
         try:
             cfg = json.loads(message[len("kr:config:"):])

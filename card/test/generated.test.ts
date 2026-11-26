@@ -31,7 +31,7 @@ describe('generated note', () => {
     expect(r.userColor).toBe('black');
     const out = r.play(mv(r.cur, 'g7g6'));
     expect(out.kind).toBe('solved');
-    if (out.kind === 'solved') expect(out.reply!.san).toBe('Qf3');
+    if (out.kind === 'solved') expect(out.reply).toBeUndefined(); // the solution tree ends after the move
   });
 
   it('accepts the other good alternatives', () => {
@@ -44,24 +44,5 @@ describe('generated note', () => {
   it('rejects the move that was played in the game', () => {
     const r = run();
     expect(r.play(mv(r.cur, 'g8f6'))).toMatchObject({ kind: 'failed', reason: 'rejected', san: 'Nf6' });
-  });
-});
-
-// The punishment is not the game's own reply: it sits in a short game of its own.
-const SHORT = readFileSync(new URL('../../core/tests/fixtures/generated_note_short.pgn', import.meta.url), 'utf8');
-
-describe('generated note with the punishment in its own game', () => {
-  it('finds each puzzle in its own game', () => {
-    const gs = parseGames(SHORT);
-    expect(gs).toHaveLength(2);
-    expect(findPuzzle(gs, 1)).toBeDefined();
-    expect(findPuzzle(gs, 2)).toBeDefined();
-    expect(findPuzzle(gs, 3)).toBeUndefined();
-  });
-
-  it('plays puzzle 2 as the punisher', () => {
-    const r = new PuzzleRun(findPuzzle(parseGames(SHORT), 2)!.position, DEFAULT_ACCEPT);
-    expect(r.userColor).toBe('white');
-    expect(r.play(mv(r.cur, 'h5f7')).kind).toBe('solved');
   });
 });

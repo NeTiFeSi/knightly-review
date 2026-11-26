@@ -79,19 +79,6 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    title: 'Playing on (live engine)',
-    fields: [
-      {
-        key: 'live',
-        label: 'Keep playing after the first move',
-        kind: 'toggle',
-        help: 'Until mate, a draw or a quiet position. Uses the add-on’s engines on desktop, a built-in Stockfish elsewhere.',
-      },
-      { key: 'goodMove', label: 'A move counts as good within', kind: 'range', min: 0.5, max: 10, step: 0.5, format: v => v + ' % win rate', when: c => c.live },
-      { key: 'liveMaxMoves', label: 'At most', kind: 'range', min: 1, max: 20, step: 1, format: v => v + (v === 1 ? ' move' : ' moves'), when: c => c.live },
-    ],
-  },
-  {
     title: 'Timed puzzles',
     fields: [
       { key: 'timed', label: 'Time limit on the puzzle', kind: 'toggle', help: 'The clock runs while you think, not during the opponent’s reply. The back shows the time taken.' },

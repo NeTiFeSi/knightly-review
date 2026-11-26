@@ -49,9 +49,7 @@ The back lists the alternatives, each graded with its line, with arrows for your
 
 ![The back of a card: graded alternatives, with arrows for the game move and the best move](docs/img/back.png)
 
-With live play on (⚙ on any card), the puzzle goes on past the stored moves, against an engine, until it is settled:
-
-![Live play: the engine kept the puzzle going for two more moves](docs/img/live-play.png)
+Where a line ends, the card says why (a decided game, a draw, a mate Stockfish sees, or several equally good moves). A position that came up by another move order is not written twice: the card continues from the line already written, so every path reaches the end of the puzzle. When the opponent could have played several good moves, the card shows the one it showed you least before (at random among equals).
 
 | Card settings (⚙ on any card) | On a phone |
 |---|---|
@@ -122,9 +120,7 @@ These change how a card plays, per device or, with **Save for all devices**, for
 | `intro` | `lastMove` | Animate the opponent's last move, or replay the whole game (`fullGame`). |
 | `afterAnswer` | `flip` | After the puzzle: show the back, stay on the front, or flip and then grade by itself (`grade`: Good if solved, Hard with hints, Again if failed). |
 | `hints` | on | The Hint button: a text hint if the card has one, then the piece to move. |
-| `live` | off | Keep playing past the stored moves against an engine, until mate, a draw or a quiet position. |
 | `acceptNeutral` | off | Also accept normal moves: no mark, between a good move and an inaccuracy. |
-| `goodMove` | 1 | Live play: how much win rate a move may lose and still count. |
 | `timed`, `timeLimit`, `timeAffects` | off, 30 s, nothing | A clock while you think. Out of time can do nothing, fail the card, or grade a slow solve lower. |
 | `showEval` | on | The eval bar and numbers. |
 
@@ -162,7 +158,7 @@ card/      the interactive card (TypeScript), built into one media file
 - Every position is analysed by Stockfish (fixed depth), and by Lc0 too when it's on (fixed time), always with win/draw/loss output (`UCI_ShowWDL`). "Win rate" everywhere means the engine's expected score: wins + draws / 2. Evals are cached in a SQLite file, shared by threads and processes.
 - A move becomes a puzzle when it loses more than `min_loss` (1 %) of win rate against the best move. The engine's WDL treats a position about 2 pawns up or down as already decided, so mistakes there barely register: puzzles come from the moments where the result was still in play. Positions are taken ply by ply, the biggest suspected mistakes analysed deepest first. Each pick is checked with a full multi-line analysis, which grades every candidate move (`!!`, `□`, `!?`, `!`, `?!`, `?`, `??`; see [card/README.md](card/README.md)) and gives the accepted alternatives on the back of the card.
 - One note per mistake with two cards (before the mistake, and punishing it). Notes are tagged by phase, site, colour, time control, result, opening and how bad the mistake was (`knightly::…`). Optionally (off by default), your opponents' mistakes become cards too, played from their side.
-- Optionally (off by default; ⚙ on any card), cards don't stop after one move: past the stored first move and reply, a live engine keeps the position going until mate, a draw or a quiet position. On desktop that's your Stockfish/Lc0 through the add-on; on phones and AnkiWeb, a small built-in Stockfish that syncs with the cards (1.8 MB).
+- After the puzzle's first move the card plays out a solution tree built from the analysis: the good moves of both sides, branch by branch, until the game is decided, drawn, a mate is in sight or the good moves stop being clearly better than the rest. There is no engine on the card any more.
 
 The add-on bundles only pure-Python code (python-chess and the core), so one file installs on every OS. Heavier work planned for later (personal engines that need ML libraries) will run in a separate helper process with its own Python, not inside Anki.
 

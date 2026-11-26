@@ -13,7 +13,7 @@ from pathlib import Path
 
 import chess
 
-from helpers import (FIXTURES, FRENCH, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
+from helpers import (FIXTURES, FRENCH, score_for, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
                      FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
 from knightly import http, notes, openings, phases, pipeline, puzzles, similar, sources, stats
 from knightly.cache import SqliteCache, fen_key
@@ -26,7 +26,6 @@ from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MIS
 from knightly.sources import chesscom, lichess
 
 GOLDEN = FIXTURES / "generated_note.pgn"
-GOLDEN_SHORT = FIXTURES / "generated_note_short.pgn"  # the punishment in a game of its own
 
 
 def division_games() -> list[tuple[str, list[str], tuple]]:
@@ -341,13 +340,12 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(card.played.nag, BLUNDER)
         self.assertEqual([a.move for a in card.alternatives], ["g7g6", "d8e7", "d8f6"])
         self.assertEqual([a.nag for a in card.alternatives], [GOOD, GOOD, GOOD])  # three good moves, no sacrifice
-        self.assertEqual(card.alternatives[0].reply, ["h5f3"])
         self.assertIn("g6 was best", card.comment)
         self.assertIn("loses 52% win rate", card.comment)
 
     def test_build_card_a_small_loss_still_makes_a_puzzle(self):
         # The played move loses 2 %: not a good move (more than 1 % worse), so a puzzle; no NAG (normal play).
-        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"]), Line(S(500, 900, 100, 0), ["a7a6"])])}
         card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg)
         self.assertEqual((card.played.nag, round(card.loss)), (NEUTRAL, 2))
 
@@ -356,7 +354,7 @@ class SelectTest(unittest.TestCase):
         self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg))
 
     def test_build_card_min_loss(self):
-        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"]), Line(S(500, 900, 100, 0), ["a7a6"])])}
         self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), Config(min_loss=5)))
         self.assertEqual(Config(min_loss=3).min_loss_at(17), 3)
 
@@ -425,20 +423,7 @@ class NotesTest(unittest.TestCase):
         n = self._note()
         self.assertEqual(n.card_ids, {PUZZLE_FEN: 1, AFTER_NF6: 2})
         self.assertEqual(notes.card_ids(n.pgn), {PUZZLE_FEN: 1, AFTER_NF6: 2})
-        # The game's own reply is the best one, so the second puzzle is in the same game.
-        self.assertEqual(n.pgn.count("[Event"), 1)
-
-    def test_punishment_in_a_short_game_when_the_reply_differs(self):
-        g = scholar_game(moves=SCHOLAR_MOVES[:6] + ["h5h4"])  # White did not play Qxf7#
-        an = FakeAnalyser(table=PUNISH_TABLE)
-        first = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", an, Config())
-        second = build_punish(board_at(SCHOLAR_MOVES, 6), 6, "Nf6", an, Config())
-        n = notes.build_puzzle(g, SCHOLAR_SCORES, first, second, "")
-        if os.environ.get("UPDATE_GOLDEN"):
-            GOLDEN_SHORT.write_text(n.pgn + "\n")
-        self.assertEqual(n.pgn + "\n", GOLDEN_SHORT.read_text())
-        self.assertEqual(n.pgn.count("[Event"), 2)
-        self.assertEqual(notes.card_ids(n.pgn), {PUZZLE_FEN: 1, AFTER_NF6: 2})
+        self.assertEqual(n.pgn.count("[Event"), 1)  # one game: the punishment follows the mistake
 
     def test_one_puzzle_when_nothing_to_punish(self):
         first = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=PUNISH_TABLE), Config())
@@ -766,6 +751,145 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual((m.analysed, m.notes, m.finished), (6, [], False))
 
 
+def _ev(*lines, depth=20):
+    """An Eval from (uci, score) pairs, best first."""
+    return Eval(depth, [Line(sc, [mv]) for mv, sc in lines])
+
+
+def _mate(n):
+    """White's view: White mates in n (n > 0), or is mated in -n."""
+    return Score(mate=n, wdl=(1000, 0, 0) if n > 0 else (0, 0, 1000))
+
+
+class FollowTest(unittest.TestCase):
+    """Solution trees (follow.py): White solves from the start position."""
+
+    def card(self, alternatives, mate=False):
+        from knightly.model import CardSpec, Choice
+        return CardSpec(fen_key=fen_key(chess.STARTING_FEN), ply=0, played=Choice("a2a3", MISTAKE, S(0, 0, 1000, 0)),
+                        alternatives=[Choice(m, GOOD, S(0, 0, 1000, 0)) for m in alternatives], loss=10, mate=mate)
+
+    def tree(self, table, alternatives=("e2e4",), mate=False, solver=chess.WHITE, board=None, **kw):
+        from knightly import follow
+        card = self.card(alternatives, mate)
+        an = FakeAnalyser(table=table)
+        follow.follow_puzzle(board or chess.Board(), card, an, Config(), solver=solver, seen=kw.pop("seen", set()),
+                             quick_depth=5, **kw)
+        return card, an
+
+    @staticmethod
+    def key(*moves):
+        return fen_key(board_at(list(moves), len(moves)).fen())
+
+    @staticmethod
+    def moves(ch):
+        return [(c.move, c.nag) for c in ch.children]
+
+    def test_the_defender_branches_on_good_replies_and_the_solver_on_a_big_gap(self):
+        e4, e4e5, e4c5 = self.key("e2e4"), self.key("e2e4", "e7e5"), self.key("e2e4", "c7c5")
+        table = {
+            e4: _ev(("e7e5", score_for(48)), ("c7c5", score_for(48.5)), ("d7d6", score_for(51))),  # Black's view: 52, 51.5, 49
+            e4e5: _ev(("g1f3", score_for(52)), ("b1c3", score_for(51.5)), ("f1c4", score_for(46))),  # gap 6: follow
+            e4c5: _ev(("g1f3", score_for(52)), ("d2d4", score_for(51.6)), ("c2c3", score_for(48.5))),  # gap 3.5: stop
+        }
+        card, _ = self.tree(table)
+        e4node = card.alternatives[0]
+        self.assertEqual([c.move for c in e4node.children], ["e7e5", "c7c5"])  # d6 is 3 % worse: not a good reply
+        e5, c5 = e4node.children
+        self.assertEqual([c.move for c in e5.children], ["g1f3", "b1c3", "f1c4"])  # all moves of the solver, graded
+        self.assertEqual([c.nag for c in e5.children], [GOOD, GOOD, DUBIOUS])
+        self.assertEqual(c5.children, [])  # the gap to the best other move is under 5 %: the line ends
+
+    def test_decided_games_end_with_a_comment(self):
+        e4 = self.key("e2e4")
+        table = {e4: _ev(("e7e5", score_for(30)), ("c7c5", score_for(35)))}  # even Black's worst move wins for Black
+        card, _ = self.tree(table)
+        node = card.alternatives[0]
+        self.assertEqual((node.children, node.comment), ([], "The game is decided: Black is winning."))
+
+    def test_a_stockfish_mate_ends_a_line_that_is_not_a_mate_puzzle(self):
+        table = {self.key("e2e4"): _ev(("e7e5", _mate(3)), ("c7c5", _mate(3)))}
+        card, _ = self.tree(table)
+        self.assertEqual(card.alternatives[0].comment, "Mate in 3 according to Stockfish.")
+        self.assertEqual(card.alternatives[0].children, [])
+
+    def test_a_mate_puzzle_keeps_the_shortest_mate_and_the_longest_resistance(self):
+        e4, e4e5, e4c5 = self.key("e2e4"), self.key("e2e4", "e7e5"), self.key("e2e4", "c7c5")
+        table = {
+            e4: _ev(("e7e5", _mate(3)), ("c7c5", _mate(3)), ("d7d6", _mate(2))),  # Black is mated in 3, 3 or 2
+            e4e5: _ev(("g1f3", _mate(2)), ("b1c3", _mate(2)), ("f1c4", _mate(4))),  # a slower mate exists too: stop
+            e4c5: _ev(("g1f3", _mate(2)), ("f1c4", score_for(70))),  # the next best is no mate: follow
+        }
+        card, _ = self.tree(table, mate=True)
+        e5, c5 = card.alternatives[0].children
+        self.assertEqual([c.move for c in card.alternatives[0].children], ["e7e5", "c7c5"])  # not d6 (mate in 2)
+        self.assertEqual(e5.children, [])
+        self.assertEqual([c.move for c in c5.children], ["g1f3", "f1c4"])
+
+    def test_the_solver_being_mated_ends_the_line(self):
+        e4 = self.key("e2e4")
+        table = {e4: _ev(("e7e5", score_for(50)), ("c7c5", score_for(55))),
+                 self.key("e2e4", "e7e5"): _ev(("g1f3", _mate(-2)), ("b1c3", _mate(-2)))}  # White is mated either way
+        card, _ = self.tree(table, mate=True)
+        self.assertEqual(card.alternatives[0].children[0].children, [])
+
+    def test_a_transposition_is_written_once(self):
+        a = self.key("e2e4", "e7e5", "d2d4")
+        table = {
+            self.key("e2e4"): _ev(("e7e5", score_for(48)), ("d7d6", score_for(60))),
+            self.key("e2e4", "e7e5"): _ev(("d2d4", score_for(53)), ("g1f3", score_for(46))),  # gap 7
+            self.key("d2d4"): _ev(("e7e5", score_for(48)), ("d7d6", score_for(60))),
+            self.key("d2d4", "e7e5"): _ev(("e2e4", score_for(53)), ("g1f3", score_for(46))),
+            a: _ev(("e5d4", score_for(48)), ("d7d6", score_for(60))),
+        }
+        card, _ = self.tree(table, alternatives=("e2e4", "d2d4"), seen={fen_key(chess.STARTING_FEN)})
+        first = card.alternatives[0].children[0].children[0]  # e4 e5 d4: written in full
+        second = card.alternatives[1].children[0].children[0]  # d4 e5 e4: the same position
+        self.assertEqual((first.move, second.move), ("d2d4", "e2e4"))
+        self.assertTrue(first.children)
+        self.assertEqual((second.children, second.comment), ([], "Transposes to a line above."))
+
+    def test_draw_rules(self):
+        from knightly.follow import draw_reason
+        b = chess.Board()
+        for m in ["g1f3", "g8f6", "f3g1", "f6g8"] * 2:
+            b.push_uci(m)
+        self.assertEqual(draw_reason(b), "Draw by threefold repetition.")
+        self.assertEqual(draw_reason(chess.Board("4k3/8/8/8/8/8/4P3/4K3 w - - 100 80")), "Draw by the fifty-move rule.")
+        self.assertEqual(draw_reason(chess.Board("4k3/8/8/8/8/8/8/4K3 w - - 0 1")), "Draw: not enough material.")
+        self.assertEqual(draw_reason(chess.Board()), "")
+
+    def test_a_drawn_line_is_not_followed(self):
+        b = chess.Board()
+        for m in ["g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1"]:
+            b.push_uci(m)
+        card, _ = self.tree({}, alternatives=("f6g8",), solver=chess.BLACK, board=b)
+        self.assertEqual(card.alternatives[0].comment, "Draw by threefold repetition.")
+
+    def test_one_move_check_and_response(self):
+        table = {self.key("e2e4"): _ev(("e7e5", score_for(48)), ("c7c5", score_for(48.5)))}
+        card, _ = self.tree(table, one_move=True)
+        reply = card.alternatives[0].children
+        self.assertEqual([(c.move, c.children) for c in reply], [("e7e5", [])])  # the best reply only, nothing after it
+
+    def test_decided_positions_make_no_puzzle(self):
+        from knightly.select import decided
+        b = board_at(SCHOLAR_MOVES, 5)
+        lines = lambda *pcts: {m: Line(score_for(100 - p), [m]) for m, p in zip(["g7g6", "d8e7", "d8f6"], pcts)}  # noqa: E731
+        self.assertTrue(decided(b, lines(60, 55, 52)))  # Black wins whatever it plays
+        self.assertFalse(decided(b, lines(45, 40, 30)))  # loses whatever it plays
+        self.assertIsNone(decided(b, lines(60, 55, 40)))
+        self.assertIsNone(decided(b, {"g8f6": Line(WHITE_MATES, ["g8f6"]), "g7g6": Line(score_for(40), ["g7g6"])}))
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
+        self.assertIsNone(build_card(b, 5, "g8f6", FakeAnalyser(table=table), Config()))  # every move holds above 50 %
+
+    def test_a_decided_punishment_is_a_one_move_puzzle_with_a_note(self):
+        after = board_at(SCHOLAR_MOVES, 6)
+        table = {fen_key(after.fen()): _ev(("h5h4", score_for(80)), ("h5g4", score_for(75)))}  # White wins whatever
+        card = build_punish(after, 6, "Nf6", FakeAnalyser(table=table), Config())
+        self.assertEqual(card.decided, "The game is decided: White is winning.")
+
+
 class StatsTest(unittest.TestCase):
     def test_collect_counts_moves_by_side(self):
         a = game_from(SICILIAN, white=False, id="s1", end_ts=200)
@@ -850,26 +974,10 @@ class AnalyserTest(unittest.TestCase):
         self.assertEqual(an.picked, {"stockfish": 0, "lc0": 2})
         self.assertEqual(self.lc0_ms, [840, 840])  # Lc0 searches as long as Stockfish took
 
-    def test_gate_pauses_analysis(self):
-        an = self.analyser(self.SF, self.LC, use_lc0=False)
-        an.gate = threading.Event()  # cleared: paused
-        done = []
-        t = threading.Thread(target=lambda: done.append(an.evaluate(chess.Board())))
-        t.start()
-        t.join(0.6)
-        self.assertEqual(done, [])  # still waiting
-        an.gate.set()
-        t.join(5)
-        self.assertEqual(done, [self.SF])
-
-    def test_live_query_rejects_illegal_moves(self):
-        from knightly.live import query
-
-        an = self.analyser(self.SF, self.LC, use_lc0=False)
-        with self.assertRaises(ValueError):
-            query(an, chess.STARTING_FEN, 1, ["e2e5"])
-        self.assertEqual(query(an, chess.STARTING_FEN, 1),
-                         [{"uci": "e2e4", "pv": ["e2e4"], "wdl": [300, 650, 50], "cp": 40, "mate": None}])
+    def test_sf_only_skips_lc0(self):
+        an = self.analyser(self.SF, self.LC)
+        self.assertIs(an.evaluate(chess.Board(), sf_only=True), self.SF)
+        self.assertEqual(an.picked, {"stockfish": 1, "lc0": 0})
 
     def test_stockfish_alone(self):
         an = self.analyser(self.SF, self.LC, use_lc0=False)

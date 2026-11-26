@@ -31,14 +31,8 @@ export interface Config {
   gradeFailed: number;
   /** Show the "Hint" button. */
   hints: boolean;
-  /** Keep playing past the PGN with a live engine, until mate, a draw or a quiet position. */
-  live: boolean;
-  /** Live play: a move within this many win-% of the engine's best counts as correct. */
-  goodMove: number;
   /** Also accept moves that lose a little more than a good move but are no inaccuracy (no NAG). */
   acceptNeutral: boolean;
-  /** Live play: at most this many of your moves. */
-  liveMaxMoves: number;
   /** Timed puzzles: a clock runs while you think. */
   timed: boolean;
   /** Seconds for the whole puzzle. */
@@ -66,10 +60,7 @@ export const DEFAULT_CONFIG: Config = {
   gradeHinted: 2,
   gradeFailed: 1,
   hints: true,
-  live: false,
-  goodMove: 1,
   acceptNeutral: false,
-  liveMaxMoves: 10,
   timed: false,
   timeLimit: 30,
   timeAffects: 'nothing',
@@ -99,8 +90,6 @@ const RANGES: Partial<Record<keyof Config, [number, number, boolean]>> = {
   gradeSolved: [1, 4, true],
   gradeHinted: [1, 4, true],
   gradeFailed: [1, 4, true],
-  goodMove: [0.1, 20, false],
-  liveMaxMoves: [1, 30, true],
   timeLimit: [5, 600, true],
   gradeSlow: [1, 4, true],
 };
@@ -110,6 +99,9 @@ export const CONFIG_KEYS = Object.keys(DEFAULT_CONFIG) as (keyof Config)[];
 function show(v: unknown): string {
   return typeof v === 'string' ? "'" + v + "'" : JSON.stringify(v);
 }
+
+/** Settings of removed features, still in older templates and device overrides: ignored quietly. */
+const REMOVED_KEYS = ['live', 'goodMove', 'liveMaxMoves'];
 
 /** Why `v` is not a valid value for `k`, or undefined when it is. */
 function problem(k: keyof Config, v: unknown): string | undefined {
@@ -156,6 +148,7 @@ export function checkConfig(raw: unknown, base: Config = DEFAULT_CONFIG, source 
   const c = raw as Record<string, unknown>;
   Object.keys(c).forEach(key => {
     const v = c[key];
+    if (REMOVED_KEYS.indexOf(key) >= 0) return; // settings of features that are gone (live play): no warning
     if (CONFIG_KEYS.indexOf(key as keyof Config) < 0) {
       warnings.push(source + ': unknown setting "' + key + '" (ignored).');
       return;

@@ -29,7 +29,7 @@ python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards
 | `openings.py` | Names a game's opening (family), for the notes' tags |
 | `notes.py` | PGN with `[%kr N]` tags: cloze 1 the mistake, cloze 2 its punishment; the Notes field; the notes' tags (from the first puzzle) |
 | `jobs.py` | `run_update()`: the single entry point the add-on calls (pauses while `gate` is cleared) |
-| `live.py` | Answers a card's live-play questions (best lines, or specific moves only) |
+| `follow.py` | The solution tree under a puzzle's answers: both sides' good moves followed until a stop (decided, drawn, a Stockfish mate, a small gap, game over) |
 
 `data/openings.tsv` is Lichess's [chess-openings](https://github.com/lichess-org/chess-openings) table (CC0), stored as the position each named line reaches (FEN without move counters), so transpositions are recognised.
 

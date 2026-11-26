@@ -212,12 +212,13 @@ def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = (),
 
 
 def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[str] = None,
-                   ply: int = 99, lines: Optional[int] = None) -> tuple[list[Graded], dict[str, Line]]:
+                   ply: int = 99, lines: Optional[int] = None, sf_only: bool = False) -> tuple[list[Graded], dict[str, Line]]:
     """Deep multi-line analysis of `board`, graded. `extra` (e.g. the move played) is analysed too.
 
-    `lines`: how many lines to analyse instead of the configured number."""
+    `lines`: how many lines to analyse instead of the configured number. `sf_only`: Stockfish alone
+    (the analyser's `evaluate` normally lets Lc0 judge, except in mates)."""
     multipv = lines or (cfg.deep_multipv if cfg.deep_multipv > 0 else board.legal_moves.count())  # 0 = every legal move
-    ev = analyser.evaluate(board, multipv=multipv, ply=ply)
+    ev = analyser.evaluate(board, multipv=multipv, ply=ply, **({"sf_only": True} if sf_only else {}))
     by_move = {l.moves[0]: l for l in ev.lines if l.moves}
     if not by_move:
         return [], {}
@@ -236,6 +237,27 @@ def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[st
     return grade(graded, board.legal_moves.count(), cfg, material(board, board.turn)), by_move
 
 
+def decided(board: chess.Board, by_move: dict[str, Line]) -> Optional[bool]:
+    """Whether no move can change the result for the side to move: True when even the worst move still
+    scores above 50 % (it wins whatever it plays), False when even the best scores below 50 % (it loses
+    whatever it plays), None otherwise. Positions with a forced mate in any line are never decided."""
+    if not by_move or any(l.score.mate is not None for l in by_move.values()):
+        return None
+    white = board.turn == chess.WHITE
+    pcts = [l.score.win_pct(white) for l in by_move.values()]
+    if min(pcts) > 50:
+        return True
+    if max(pcts) < 50:
+        return False
+    return None
+
+
+def decided_text(board: chess.Board, verdict: bool) -> str:
+    """'The game is decided: White is winning.' for a `decided` verdict."""
+    winner = board.turn if verdict else not board.turn
+    return f"The game is decided: {chess.COLOR_NAMES[winner].capitalize()} is winning."
+
+
 def _choices(graded: list[Graded], by_move: dict[str, Line], cfg: Config,
              played: Optional[str] = None) -> tuple[Optional[Choice], list[Choice]]:
     """The graded moves as the card's choices: (the played move's, the others best first)."""
@@ -244,8 +266,6 @@ def _choices(graded: list[Graded], by_move: dict[str, Line], cfg: Config,
     for g in sorted(graded, key=lambda g: g.loss):
         line = by_move[g.move]
         ch = Choice(move=g.move, nag=g.nag, score=line.score)
-        if g.nag in ACCEPTED:
-            ch.reply = line.moves[1 : cfg.line_plies]
         if g.move == played:
             played_choice = ch
         else:
@@ -259,7 +279,8 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
 
     None when the position isn't a fair puzzle: only one legal move, or the deep look says the
     played move wasn't a mistake (it lost no more than `min_loss`, default `cfg.min_loss_at(ply)`,
-    or it counts as a correct answer), or no other move is a correct answer. `opponent` is the
+    or it counts as a correct answer), or no other move is a correct answer, or no move can change the
+    result (`decided`). `opponent` is the
     name of the player who made the move when it wasn't the user (an opponent-mistake card).
     `tag_motifs=False` skips the motif tagging (when only asking whether the position makes a card).
     """
@@ -267,6 +288,8 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         return None
     graded, by_move = grade_position(board, analyser, cfg, played, ply)
     if not graded:
+        return None
+    if decided(board, by_move) is not None:  # no move can change the result: nothing to learn here
         return None
     g_played = next(g for g in graded if g.move == played)
     threshold = cfg.min_loss_at(ply) if min_loss is None else min_loss
@@ -297,7 +320,13 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         comment=comment,
         mine=not opponent,
         motifs=found,
+        mate=choices[0].nag in ACCEPTED and _mates(graded, choices[0].move),
     )
+
+
+def _mates(graded: list[Graded], move: str) -> bool:
+    g = next((g for g in graded if g.move == move), None)
+    return g is not None and g.mate is not None and g.mate > 0
 
 
 def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: Config,
@@ -316,6 +345,7 @@ def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: C
     main, others = _choices(graded, by_move, cfg, best)
     assert main is not None
     best_san = board.san(chess.Move.from_uci(best))
+    verdict = decided(board, by_move)
     return CardSpec(
         fen_key=fen_key(board.fen()),
         ply=ply,
@@ -324,4 +354,6 @@ def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: C
         loss=0.0,
         comment=f"{played_san} is punished by {best_san}.",
         mine=mine,
+        mate=_mates(graded, best),
+        decided=decided_text(board, verdict) if verdict is not None else "",
     )

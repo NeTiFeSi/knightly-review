@@ -1,8 +1,6 @@
 // Bundle entry. Exposed as the global `KnightlyReview`; the templates call mount().
 import { App, renderError } from './app';
 import { checkConfig, configDiff, DEFAULT_CONFIG, readCard } from './cardRef';
-import { liveEngine } from './engine';
-import { wasmEngine } from './wasm';
 import { addonAvailable, addonHello, isDesktop, loadOverrides, saveOverrides, storageWorks } from './settings';
 import { SettingsPanel } from './settingsPanel';
 import css from './styles.css';
@@ -89,7 +87,6 @@ export function mount(opts?: { resumed?: boolean }): void {
     const cfg = loadConfig();
     current = App.create(root, card, cfg.config, {
       warnings: cfg.warnings,
-      engine: card.side === 'front' && cfg.config.live ? liveEngine(addonHello, wasmEngine) : undefined,
       resumed: !!(opts && opts.resumed),
       elapsed: carried,
       openSettings: () => openSettings(root, cfg),
