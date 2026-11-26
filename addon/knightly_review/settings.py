@@ -28,6 +28,13 @@ def _manager():
 def load() -> dict[str, Any]:
     defaults = json.loads((ADDON_DIR / "config.json").read_text())
     cfg = {**defaults, **(_manager().getConfig(ADDON) or {})}
+    if cfg.get("config_version", 1) < defaults.get("config_version", 1):
+        # Version 2: one way of making puzzles (ply by ply). The old grouping settings are gone, and
+        # `min_loss` means something else now (a move losing more than this is a puzzle).
+        cfg.pop("note_grouping", None)
+        cfg.pop("opening_min_loss", None)
+        cfg["min_loss"] = defaults["min_loss"]
+        cfg["config_version"] = defaults["config_version"]
     if cfg.get("engine_path") and not cfg.get("stockfish_path"):  # settings from before Lc0 support
         cfg["stockfish_path"] = cfg["engine_path"]
     return cfg

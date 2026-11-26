@@ -100,20 +100,18 @@ There are two places for settings. **Tools → Knightly Review → Settings…**
 | Deck | Knightly Review | Where the new cards go. |
 | New cards per update | 10 | An update stops after this many new cards. |
 | Analysis per update | 10 min | …or after this much engine time (0 = until the cards are found). The next update carries on from there. |
-| After the update | stop | **Keep analysing** deepens positions and confirms candidates in the background, so the next update adds cards right away. **Keep adding cards** goes on with no per-update limit. Both run the engine at full load (heat, fan, battery). |
-| Cards | one note per game | How cards are grouped, see below. |
-| By opening, card moves losing over | 2 % | By-opening mode: a move losing more than this becomes a card. By default every `?!`, `?` and `??`. |
+| After the update | stop | **Keep analysing** keeps analysing, ply by ply, in the background, so the next update adds puzzles right away. **Keep adding cards** goes on with no per-update limit. Both run the engine at full load (heat, fan, battery). |
 | Opponents' mistakes | off | Also make cards from your opponents' mistakes, played from their side. |
 | Update when Anki starts / every | on / 6 h | Automatic updates while Anki is open. |
 | Good move: within | 2 % | A move this close to the best (in win rate) counts as a correct answer. |
 
-Not in the window, but in the add-on's config (**Tools → Add-ons → Knightly Review → Config**): `time_classes` (which time controls to fetch), `rated_only`, and `min_loss` (default 10 %: in the per-game modes, a move you played must lose at least this much to become a card). See [addon/knightly_review/config.md](addon/knightly_review/config.md) for every key.
+Not in the window, but in the add-on's config (**Tools → Add-ons → Knightly Review → Config**): `time_classes` (which time controls to fetch), `rated_only`, and `min_loss` (default 1 %: a move you played must lose more than this, in win rate, to become a puzzle). See [addon/knightly_review/config.md](addon/knightly_review/config.md) for every key.
 
-**Cards** (how they are grouped and ordered):
-- **One note per game, newest first** (default): one note per game and phase (opening, middlegame, endgame, as Lichess splits them). Every move that loses at least `min_loss` becomes a card.
-- **One note per game, biggest mistakes first:** the same notes, but mistakes from all games are ranked together: the win rate lost, weighted by the result (your move in a game you didn't win counts most), and more for positions you reach again and again.
-- **By opening and move:** one note per opening, your colour and move number, e.g. *Sicilian Defense (Black), move 5…*. Openings that cost you the most points come first (4 per loss, 2 per draw, 1 per win), gone through move by move from the start. The new cards are put at the front of Anki's new-card queue in that order.
-- **By tactical motif:** one note per motif of the best move (fork, pin, skewer, back-rank mate, …), with puzzles from any game, up to 10 cards a note.
+**How puzzles are made:** one way, ply by ply. For ply 0, 1, 2, … (half-moves played), your positions first and then, with *Opponents' mistakes*, your opponents' (each position once, however many games reached it). Every move of each position is searched at a low depth; the positions with the biggest win-rate loss for a move you played are searched deeper, in two or three steps up to *Stockfish depth*, until each is a confirmed puzzle (the played move is more than `min_loss` worse than the best) or ruled out. The next ply starts when none is left.
+
+- **One note per mistake, two cards.** Card 1 starts at the position before the mistake: find the right move. Card 2 starts at the position after it: find the move that punishes it. The note's tags describe the first puzzle only; the second is a backup that explains why the move was bad.
+- **Moves played more than once** get a line in the note's *Notes* field: how many times you and your opponents played them from that position, and the share of all the games that reached it. It is refreshed on every update as games are added.
+- **Similar positions** (same side to move, at most 2 squares different) don't get a note of their own. The first puzzle's note gets a comment for each correct answer instead, e.g. *"g6 would also be a good move if the white bishop on c4 was on b5"* or *"Nf6 would still be a bad move if …"*.
 
 ### Card settings (⚙ on a card)
 
@@ -150,7 +148,7 @@ Every note is tagged so you can search the browser or build filtered decks, for 
 | `knightly::motif::<motif>` | a tactical motif of the best move, e.g. `fork`, `pin`, `back-rank-mate`, `mate-in-2` |
 | `knightly::opponent` | the card comes from an opponent's mistake |
 
-Each note also has one **key tag** that lets the next update find it again: `knightly::game::<site>-<id>::<phase>`, `knightly::by-opening::<colour>-<opening>::ply-<n>` or `knightly::by-motif::<motif>::n-<number>`. Leave these alone, or the next update makes the note again. A note with several cards or games has every tag that any of them has.
+Each note also has one **key tag** that lets the next update find it again: `knightly::puzzle::<ply>-<position hash>`. Leave it alone, or the next update makes the note again. Notes made by earlier versions (one per game, opening or motif) are not touched or deleted; their positions are not offered again.
 
 ## How it works
 
@@ -162,8 +160,8 @@ card/      the interactive card (TypeScript), built into one media file
 
 - Games come from the Lichess API (incremental, one request at a time) and the Chess.com archive API (each finished month downloaded once; the current month re-checked with ETags).
 - Every position is analysed by Stockfish (fixed depth), and by Lc0 too when it's on (fixed time), always with win/draw/loss output (`UCI_ShowWDL`). "Win rate" everywhere means the engine's expected score: wins + draws / 2. Evals are cached in a SQLite file, shared by threads and processes.
-- A move becomes a card when it loses at least 10 % win rate. This is deliberate: the engine's WDL treats a position about 2 pawns up or down as already decided, so mistakes there barely register. Cards come from the moments where the result was still in play. Mistakes in games you didn't win, and positions you reach again and again, rank first. Each pick is checked again with a deeper multi-line analysis, which grades every candidate move (`!!`, `□`, `!?`, `!`, `?!`, `?`, `??`; see [card/README.md](card/README.md)) and gives the accepted alternatives on the back of the card.
-- One note per game and phase (opening, middlegame, endgame, split as Lichess does), one card per mistake. Notes are tagged by phase, site, colour, time control, result, opening and how bad the mistake was (`knightly::…`). Card numbers stay stable when a game gets more cards later, so review history is kept. Optionally (off by default), your opponents' mistakes become cards too, played from their side.
+- A move becomes a puzzle when it loses more than `min_loss` (1 %) of win rate against the best move. The engine's WDL treats a position about 2 pawns up or down as already decided, so mistakes there barely register: puzzles come from the moments where the result was still in play. Positions are taken ply by ply, the biggest suspected mistakes analysed deepest first. Each pick is checked with a full multi-line analysis, which grades every candidate move (`!!`, `□`, `!?`, `!`, `?!`, `?`, `??`; see [card/README.md](card/README.md)) and gives the accepted alternatives on the back of the card.
+- One note per mistake with two cards (before the mistake, and punishing it). Notes are tagged by phase, site, colour, time control, result, opening and how bad the mistake was (`knightly::…`). Optionally (off by default), your opponents' mistakes become cards too, played from their side.
 - Optionally (off by default; ⚙ on any card), cards don't stop after one move: past the stored first move and reply, a live engine keeps the position going until mate, a draw or a quiet position. On desktop that's your Stockfish/Lc0 through the add-on; on phones and AnkiWeb, a small built-in Stockfish that syncs with the cards (1.8 MB).
 
 The add-on bundles only pure-Python code (python-chess and the core), so one file installs on every OS. Heavier work planned for later (personal engines that need ML libraries) will run in a separate helper process with its own Python, not inside Anki.

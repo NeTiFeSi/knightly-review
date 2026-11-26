@@ -3,7 +3,7 @@
 The long part (download + engine analysis) runs in a plain thread with no
 collection access, so reviewing stays responsive and the job can be cancelled
 when the profile closes. Each note is written on the main thread as soon as its card is
-built (kc.RunWriter); when the run ends, the study order is fixed and the writes become one undo step.
+built (kc.RunWriter); when the run ends, the writes become one undo step.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from aqt.utils import showWarning, tooltip
 from . import collection as kc
 from . import settings
 from .vendor.knightly.cache import SqliteCache
-from .vendor.knightly.jobs import RemakeResult, UpdateResult, remake_notes, run_update
+from .vendor.knightly.jobs import UpdateResult, run_update
 
 Listener = Callable[[str, int, int, str], None]
 
@@ -111,10 +111,6 @@ class Updater:
             if manual:
                 showWarning(f"Knightly Review could not prepare the collection:\n{e}")
             return False
-        if not _round and kc.remake_due(mw.col):
-            # The cards were made by an older version: bring them up to date before adding new ones.
-            self.log("The cards come from an older version of Knightly Review.")
-            return self.remake(then_update=manual)
         core = settings.core_config(cfg)
         deck = cfg.get("deck") or kc.MODEL
         if not _round:
@@ -172,83 +168,6 @@ class Updater:
         self.thread.start()
         return True
 
-    def remake(self, then_update: Optional[bool] = None) -> bool:
-        """Rebuild the cards already in the collection with the current code (same cloze numbers, so the
-        scheduling stays). A card that would no longer be made is suspended and its note tagged.
-        `then_update`: None for a remake on its own; otherwise an update (manual if True) follows it.
-        Returns False if an update is running or setup is incomplete."""
-        if self.running or mw.col is None:
-            return False
-        cfg = settings.load()
-        if not settings.configured(cfg):
-            if then_update is None:
-                from .ui import open_settings
-
-                open_settings(first_run=not cfg.get("setup_done"))
-            return False
-        try:
-            kc.ensure_installed(mw.col)
-            existing = kc.existing_notes(mw.col)
-        except Exception as e:
-            showWarning(f"Knightly Review could not prepare the collection:\n{e}")
-            return False
-        core = settings.core_config(cfg)
-        self.stopped = self.keeping = False
-        self.cancel = threading.Event()
-        cancel = self.cancel
-        self.positions, self._logged = (0, 0, ""), ""
-        self.log("── Remake the existing cards ──")
-        self._emit("start", 0, 0, f"Remaking the cards of {len(existing)} notes…", force=True)
-
-        def work() -> None:
-            cache = SqliteCache(settings.CACHE_PATH)
-            try:
-                res = remake_notes(core, cache, existing, progress=self._emit, cancel=cancel, gate=self.gate)
-                err = None
-            except Exception as e:
-                res, err = None, (e, traceback.format_exc())
-            finally:
-                cache.close()
-            mw.taskman.run_on_main(lambda: self._finish_remake(res, err, then_update))
-
-        self.thread = threading.Thread(target=work, name="knightly-remake", daemon=True)
-        self.thread.start()
-        return True
-
-    def _finish_remake(self, res: Optional[RemakeResult], err, then_update: Optional[bool] = None) -> None:
-        if err is not None or res is None or mw.col is None:
-            e, tb = err or (RuntimeError("the collection is closed"), "")
-            print(tb)
-            self._emit("error", 0, 0, f"Remake failed: {e}", force=True)
-            if then_update is not False:
-                showWarning(f"Knightly Review remake failed:\n{e}")
-            return
-        summary = (f"{res.remade} of {res.cards} cards rebuilt in {len(res.pgns)} notes, "
-                   f"{sum(len(v) for v in res.deprecated.values())} suspended as deprecated.")
-        if res.warnings:
-            summary += " Warnings: " + "; ".join(res.warnings[:5]) + (" …" if len(res.warnings) > 5 else "")
-        if res.cancelled:  # nothing was written: the run is all-or-nothing, so a cancel changes nothing
-            self._emit("done", 0, 0, "Cancelled, no card was changed.", force=True)
-            return
-
-        def done(_changes) -> None:
-            if mw.col is not None:
-                kc.mark_remade(mw.col)
-            self._emit("done", 1, 1, summary, force=True)
-            if then_update is None:
-                tooltip("Knightly Review: " + summary, period=5000)
-            else:  # the update that found the cards outdated goes on now
-                QTimer.singleShot(300, lambda: self.start(manual=then_update))  # once the thread has ended
-
-        def failed(e: Exception) -> None:
-            self._emit("error", 0, 0, f"Could not write the remade cards: {e}", force=True)
-
-        if not res.pgns and not res.deprecated:
-            done(None)
-            return
-        CollectionOp(parent=mw, op=lambda col: kc.apply_remake(col, res.pgns, res.deprecated)).success(
-            done).failure(failed).run_in_background()
-
     def stop(self, wait: float = 0) -> None:
         self.stopped = True
         if not self.running:  # between two rounds: nothing to cancel, just end the session
@@ -290,17 +209,16 @@ class Updater:
 
     def _finish(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str = "off",
                 round_: str = "", writer: Optional[kc.RunWriter] = None) -> None:
-        """The run is over: fix the study order, merge what it wrote into one undo step, then report."""
-        order = res.order if res is not None and not res.cancelled else []
+        """The run is over: merge what it wrote into one undo step, then report."""
 
         def failed(e: Exception) -> None:
             self.keeping = False
             self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
 
-        if writer is None or (not writer.written and not order) or mw.col is None:
+        if writer is None or not writer.written or mw.col is None:
             self._report(res, err, deck, manual, mode, round_)
             return
-        CollectionOp(parent=mw, op=lambda col: writer.finish(order)).success(
+        CollectionOp(parent=mw, op=lambda col: writer.finish()).success(
             lambda _changes: self._report(res, err, deck, manual, mode, round_)).failure(failed).run_in_background()
 
     def _report(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str, round_: str) -> None:
@@ -321,7 +239,7 @@ class Updater:
         hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
         self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
         if not round_:
-            if res.notes or (manual and res.order):
+            if res.notes:
                 tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
             elif manual or res.warnings:
                 tooltip("Knightly Review: " + summary, period=5000)

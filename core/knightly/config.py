@@ -38,20 +38,9 @@ class Config:
     # everything is at full depth. Used by the add-on's runner, not by one run_update.
     keep_running: str = "off"
     keep_running_hours: float = 0
-    # How cards are grouped into notes and which come first:
-    # "game": one note per game, games newest first, every move losing `min_loss` or more.
-    # "ranked": one note per game; mistakes from all games ranked together by
-    #   loss × result weight × how often the position recurs (the original ordering).
-    # "opening": one note per opening family + your colour + ply. Openings that cost the most
-    #   points (4 per loss, 2 per draw, 1 per win) first, then ply by ply from the first move,
-    #   every move losing more than `opening_min_loss`.
-    # "motif": one note per tactical motif (fork, pin, back-rank mate, …) of the best move, any game,
-    #   biggest mistakes first, up to 10 cards a note.
-    note_grouping: str = "game"
-    opening_min_loss: float = 5.0  # opening mode: any inaccuracy or worse (?!, ?, ??)
     # Judging moves. All percentages are points of the engine's expected score (WDL: wins + draws / 2).
-    min_loss: float = 10.0  # a played move must lose at least this much to become a card
-    include_opponent: bool = False  # also make cards from the opponent's mistakes (puzzle from their side)
+    min_loss: float = 1.0  # a played move must lose more than this to become a puzzle (see `min_loss_at`)
+    include_opponent: bool = False  # also make puzzles from the opponent's mistakes (after ours, at each ply)
     good_move: float = 1.0  # a "good move" is at most this far below the best move
     inaccuracy: float = 5.0  # a move losing this much or more is an inaccuracy (?!); between "good" and this is normal play: no NAG, no puzzle
     sacrifice_points: int = 2  # material (1/3/3/5/9) given up against the alternative that keeps the most
@@ -68,6 +57,12 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
+
+    def min_loss_at(self, ply: int) -> float:
+        """How much win rate a move played at `ply` (half-moves already played) must lose to become a puzzle.
+
+        One value for every ply for now; this is where per-ply bands (1 % up to ply 10, 5 % up to 30…) go."""
+        return self.min_loss
 
     def engine_threads(self) -> int:
         return self.threads if self.threads > 0 else _half_cores()

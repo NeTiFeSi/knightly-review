@@ -21,12 +21,13 @@ python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards
 | `cache.py` | SQLite (WAL) cache: games, evals, HTTP validators, cursors. Safe across threads and processes |
 | `engine/discover.py`, `engine/install.py` | Find Stockfish and Lc0 (no other engines are supported); package-manager commands; official Stockfish download |
 | `engine/analyse.py` | Stockfish (fixed depth), then optional Lc0 for as long as Stockfish took, always with WDL; Lc0's answer is used except in mate positions; cached per engine |
-| `deepen.py` | Analysis by increasing depth: every position at depth 1 (most-seen first), then possible mistakes deeper one depth at a time, then the full setup that makes the card; the rest is deepened when no candidates are left. Stops at enough cards or the time budget |
-| `select.py` | Win-rate loss (engine WDL); which moves become cards, in which order (game by game, or by opening and ply); good-move and sacrifice tests, NAGs |
-| `motifs.py`, `cook.py`, `cookutil.py` | Tactical motifs of a puzzle (Lichess puzzle themes: fork, pin, back rank mate, mate in N, …), tagged with lichess-puzzler's `cook.py` (ported, AGPL) from the best move and the engine's line; the main motif picks the note in `note_grouping="motif"` |
+| `pipeline.py` | The one way puzzles are made: ply by ply, every move of every position at a low depth, the biggest suspected mistakes promoted through 2–3 depth steps to the configured one, then confirmed (`select.build_card`) or ruled out; one note per mistake; similar positions and repeated moves update an existing note instead |
+| `stats.py`, `similar.py`, `puzzles.py` | How often each move was played at a position and ply; "very similar" positions (same side to move, ≤2 squares differ) and the comments they add; the puzzle records kept in the cache (id = position + ply) |
+| `select.py` | Win-rate loss (engine WDL); whether a position is a puzzle (`build_card`) and its punishment (`build_punish`); good-move and sacrifice tests, NAGs |
+| `motifs.py`, `cook.py`, `cookutil.py` | Tactical motifs of a puzzle (Lichess puzzle themes: fork, pin, back rank mate, mate in N, …), tagged with lichess-puzzler's `cook.py` (ported, AGPL) from the best move and the engine's line |
 | `phases.py` | Opening, middlegame or endgame: a port of Lichess's game divider (scalachess `Divider`) |
-| `openings.py` | Names a game's opening (family) and ranks openings by points lost (4 per loss, 2 per draw, 1 per win), per colour |
-| `notes.py` | PGN with `[%kr N]` tags and stable card numbers; one note per game and phase, or per opening and ply; the notes' tags (one game per card) |
+| `openings.py` | Names a game's opening (family), for the notes' tags |
+| `notes.py` | PGN with `[%kr N]` tags: cloze 1 the mistake, cloze 2 its punishment; the Notes field; the notes' tags (from the first puzzle) |
 | `jobs.py` | `run_update()`: the single entry point the add-on calls (pauses while `gate` is cleared) |
 | `live.py` | Answers a card's live-play questions (best lines, or specific moves only) |
 

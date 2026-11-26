@@ -1,5 +1,5 @@
 // Contract test: a note written by the Python generator (core/knightly/notes.py) must
-// work as a puzzle here. The fixture is the core's golden file; regenerate it with
+// work as a puzzle here (both of its puzzles). The fixture is the core's golden file; regenerate it with
 // `UPDATE_GOLDEN=1 python -m unittest discover -s tests` in core/.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -16,7 +16,14 @@ describe('generated note', () => {
     const gs = parseGames(PGN);
     expect(gs).toHaveLength(1);
     expect(findPuzzle(gs, 1)).toBeDefined();
-    expect(findPuzzle(gs, 2)).toBeUndefined();
+    expect(findPuzzle(gs, 2)).toBeDefined();
+    expect(findPuzzle(gs, 3)).toBeUndefined();
+  });
+
+  it('puzzle 2 (the punishment) is found in the same game and is solved by Qxf7#', () => {
+    const r = new PuzzleRun(findPuzzle(parseGames(PGN), 2)!.position, DEFAULT_ACCEPT);
+    expect(r.userColor).toBe('white');
+    expect(r.play(mv(r.cur, 'h5f7')).kind).toBe('solved');
   });
 
   it('accepts the best move and plays the reply', () => {
@@ -40,23 +47,21 @@ describe('generated note', () => {
   });
 });
 
-// An opening+ply note: one game per card, several games in one PGN field.
-const OPENING = readFileSync(new URL('../../core/tests/fixtures/generated_opening_note.pgn', import.meta.url), 'utf8');
+// The punishment is not the game's own reply: it sits in a short game of its own.
+const SHORT = readFileSync(new URL('../../core/tests/fixtures/generated_note_short.pgn', import.meta.url), 'utf8');
 
-describe('generated opening note', () => {
-  it('finds each card in its own game', () => {
-    const gs = parseGames(OPENING);
+describe('generated note with the punishment in its own game', () => {
+  it('finds each puzzle in its own game', () => {
+    const gs = parseGames(SHORT);
     expect(gs).toHaveLength(2);
     expect(findPuzzle(gs, 1)).toBeDefined();
     expect(findPuzzle(gs, 2)).toBeDefined();
     expect(findPuzzle(gs, 3)).toBeUndefined();
   });
 
-  it('plays card 2 from the second game', () => {
-    const r = new PuzzleRun(findPuzzle(parseGames(OPENING), 2)!.position, DEFAULT_ACCEPT);
-    expect(r.userColor).toBe('black');
-    expect(r.play(mv(r.cur, 'f8b4')).kind).toBe('solved');
-    const again = new PuzzleRun(findPuzzle(parseGames(OPENING), 2)!.position, DEFAULT_ACCEPT);
-    expect(again.play(mv(again.cur, 'g8f6'))).toMatchObject({ kind: 'failed', reason: 'rejected' });
+  it('plays puzzle 2 as the punisher', () => {
+    const r = new PuzzleRun(findPuzzle(parseGames(SHORT), 2)!.position, DEFAULT_ACCEPT);
+    expect(r.userColor).toBe('white');
+    expect(r.play(mv(r.cur, 'h5f7')).kind).toBe('solved');
   });
 });

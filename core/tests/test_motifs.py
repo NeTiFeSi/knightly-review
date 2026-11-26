@@ -2,9 +2,7 @@ import unittest
 
 import chess
 
-from knightly import motifs, notes
-from knightly.jobs import _motif_note
-from knightly.select import MOTIF_NOTE_CARDS, motif_note_key, parse_motif_note_key
+from knightly import motifs
 
 
 def found(fen, previous, *line, **kw):
@@ -37,24 +35,6 @@ class MotifTest(unittest.TestCase):
     def test_slugs(self):
         self.assertEqual([motifs.slug(t) for t in ("backRankMate", "mateIn2", "xRayAttack", "fork")],
                          ["back-rank-mate", "mate-in-2", "x-ray-attack", "fork"])
-
-
-class MotifNoteTest(unittest.TestCase):
-    def test_keys(self):
-        self.assertEqual(parse_motif_note_key(motif_note_key("fork", 3)), ("fork", 3))
-        self.assertIsNone(parse_motif_note_key("opening:black:x:3"))
-        for key in ("motif:fork:1", "motif:back-rank-mate:12", "motif:mate-in-2:1"):
-            self.assertEqual(notes.key_from_tags(["knightly", notes.note_key_tag(key)]), key)
-        self.assertEqual(notes.note_key_tag("motif:fork:2"), "knightly::by-motif::fork::n-002")
-
-    def test_note_choice(self):
-        full = {motif_note_key("fork", 1): {str(i): i for i in range(MOTIF_NOTE_CARDS)}}
-        existing = {"motif:fork:1": "", "motif:pin:1": ""}
-        self.assertEqual(_motif_note("fork", existing, full, {}), "motif:fork:2")
-        self.assertEqual(_motif_note("pin", existing, full, {}), "motif:pin:1")
-        self.assertEqual(_motif_note("skewer", existing, full, {}), "motif:skewer:1")
-        filling = {"motif:pin:1": [None] * MOTIF_NOTE_CARDS}
-        self.assertEqual(_motif_note("pin", existing, {}, filling), "motif:pin:2")
 
 
 if __name__ == "__main__":

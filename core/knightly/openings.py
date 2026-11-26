@@ -1,4 +1,4 @@
-"""Name a game's opening, and rank openings by how many points they cost.
+"""Name a game's opening (used for a puzzle's tags).
 
 The table is Lichess's chess-openings (CC0), stored as the position each named line
 reaches, so transpositions are recognised too. A game's opening is the last position
@@ -8,7 +8,6 @@ along its moves that the table names.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
@@ -21,8 +20,6 @@ from .model import Game
 TABLE = Path(__file__).resolve().parent / "data" / "openings.tsv"
 OTHER = "Other"
 MAX_BOOK_PLIES = 40  # the table's longest lines are shorter than this
-# Points per game for ranking: a loss weighs 4, a draw 2, a win 1.
-RESULT_WEIGHT = {0.0: 4, 0.5: 2, 1.0: 1}
 
 
 @lru_cache(maxsize=1)
@@ -62,32 +59,3 @@ def slug(text: str) -> str:
 
 def color(game: Game) -> str:
     return "white" if game.user_is_white else "black"
-
-
-@dataclass
-class Group:
-    """The user's games in one opening family with one colour."""
-
-    color: str  # "white" | "black"
-    family: str
-    games: list[Game] = field(default_factory=list)  # newest first
-    importance: int = 0  # 4 per loss, 2 per draw, 1 per win
-
-    @property
-    def slug(self) -> str:
-        return slug(self.family)
-
-    @property
-    def label(self) -> str:
-        return f"{self.family} ({self.color.capitalize()})"
-
-
-def rank(games: Iterable[Game]) -> list[Group]:
-    """Groups by (colour, family), most important first; ties by number of games, then name."""
-    groups: dict[tuple[str, str], Group] = {}
-    for g in sorted(games, key=lambda g: g.end_ts, reverse=True):
-        c, fam = color(g), family(classify(g.moves)[1])
-        grp = groups.setdefault((c, fam), Group(c, fam))
-        grp.games.append(g)
-        grp.importance += RESULT_WEIGHT.get(g.user_result(), 2)
-    return sorted(groups.values(), key=lambda gr: (-gr.importance, -len(gr.games), gr.family, gr.color))

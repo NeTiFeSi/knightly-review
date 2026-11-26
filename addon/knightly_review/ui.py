@@ -373,32 +373,6 @@ class SettingsDialog(QDialog):
         self.keep_hours.setSpecialValueText("until stopped or everything is analysed")
         self.keep_hours.setValue(float(self.cfg.get("keep_running_hours", 0)))
         wf.addRow("For at most:", self.keep_hours)
-        self.grouping = QComboBox()
-        self.grouping.addItem("One note per game, newest games first", "game")
-        self.grouping.addItem("One note per game, biggest mistakes first (all games)", "ranked")
-        self.grouping.addItem("By opening and move, costliest openings first", "opening")
-        self.grouping.addItem("By tactical motif (fork, pin, …), biggest mistakes first", "motif")
-        self.grouping.setCurrentIndex(max(0, self.grouping.findData(self.cfg.get("note_grouping", "game"))))
-        self.grouping.setToolTip(
-            "Biggest mistakes first: mistakes from all games ranked by win rate lost, more for games you\n"
-            "didn't win and for positions you keep reaching.\n"
-            "By opening: one note per opening (and your colour) and move number. Openings where you lost\n"
-            "the most points (4 per loss, 2 per draw, 1 per win) come first, from the first move on, and\n"
-            "new cards are studied in that order.\n"
-            "By motif: one note per tactic of the best move (fork, pin, skewer, back-rank mate, mate in N,\n"
-            "promotion, …), up to 10 cards each, from any game. Biggest mistakes first.")
-        wf.addRow("Cards:", self.grouping)
-        self.opening_loss = QDoubleSpinBox()
-        self.opening_loss.setRange(0.1, 50)
-        self.opening_loss.setSingleStep(0.5)
-        self.opening_loss.setSuffix(" %")
-        self.opening_loss.setValue(float(self.cfg.get("opening_min_loss", 5.0)))
-        self.opening_loss.setToolTip("By opening: a move you played becomes a card when it loses more than this\n"
-                                     "(in win rate). The default, 5 %, matches \"inaccuracy\": every ?!, ? and ??.")
-        wf.addRow("By opening, card moves losing over:", self.opening_loss)
-        self.grouping.currentIndexChanged.connect(
-            lambda _i: self.opening_loss.setEnabled(self.grouping.currentData() == "opening"))
-        self.opening_loss.setEnabled(self.grouping.currentData() == "opening")
         self.opponent = QCheckBox("Also make cards from my opponents' mistakes (played from their side)")
         self.opponent.setChecked(bool(self.cfg.get("include_opponent", False)))
         wf.addRow("", self.opponent)
@@ -549,8 +523,6 @@ class SettingsDialog(QDialog):
             keep_running=keep,
             keep_running_hours=round(self.keep_hours.value(), 1),
             include_opponent=self.opponent.isChecked(),
-            note_grouping=self.grouping.currentData() or "game",
-            opening_min_loss=round(self.opening_loss.value(), 2),
             update_on_startup=self.on_start.isChecked(),
             update_every_hours=self.every.value(),
             threads=self.threads.value(),
@@ -694,26 +666,13 @@ def start_update() -> None:
         show_progress()
 
 
-def start_remake() -> None:
-    if updater.running:
-        show_progress()
-        return
-    if not askUser("Rebuild every card Knightly Review made earlier with the current version?\n\n"
-                   "Your scheduling is kept. A card that would not be made as a puzzle any more is "
-                   "suspended (not deleted) and its note gets the tag knightly::deprecated. "
-                   "You can undo this from Edit → Undo.", parent=mw, title="Knightly Review"):
-        return
-    if updater.remake():
-        show_progress()
-
-
 def open_settings(first_run: bool = False) -> None:
     SettingsDialog(mw, first_run=first_run).exec()
 
 
 def setup_menu() -> None:
     menu = mw.form.menuTools.addMenu("Knightly Review")
-    for label, fn in (("Update now", start_update), ("Remake existing cards…", start_remake),
+    for label, fn in (("Update now", start_update),
                       ("Show update progress", show_progress), ("Settings…", open_settings)):
         a = menu.addAction(label)
         a.triggered.connect(lambda _=False, f=fn: f())

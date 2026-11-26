@@ -12,4 +12,6 @@
 { [%eval #1] [%kr 1] Nf6 loses 52% win rate. g6 was best. } ( 3... g6 $1
 { [%eval -0.30] } 4. Qf3 { [%eval -0.30] } ) ( 3... Qe7 $1 { [%eval -0.20] } 4.
 Nc3 { [%eval -0.20] } ) ( 3... Qf6 $1 { [%eval -0.10] } 4. Nc3
-{ [%eval -0.10] } ) 4. Qxf7# 1-0
+{ [%eval -0.10] } ) 4. Qxf7# $8
+{ [%eval #1] [%kr 2] Nf6 is punished by Qxf7#. } ( 4. Qh4 $2 { [%eval 3.00] } )
+1-0

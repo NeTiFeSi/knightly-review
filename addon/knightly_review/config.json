@@ -22,11 +22,10 @@
   "max_new_cards": 10,
   "keep_running": "off",
   "keep_running_hours": 0,
-  "note_grouping": "game",
-  "opening_min_loss": 5.0,
   "include_opponent": false,
-  "min_loss": 10.0,
+  "min_loss": 1.0,
   "good_move": 1.0,
   "inaccuracy": 5.0,
-  "setup_done": false
+  "setup_done": false,
+  "config_version": 2
 }

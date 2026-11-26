@@ -1,7 +1,8 @@
-"""Write a game and its cards as a note in the Knightly Review PGN contract (see card/README.md)."""
+"""Write a puzzle (the mistake and its punishment) as a note in the Knightly Review PGN contract (see card/README.md)."""
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import io
 import re
@@ -16,60 +17,31 @@ from .cache import fen_key
 from .engine.analyse import MATED
 from .model import CardSpec, Game, NoteSpec, Score
 from .config import Config
-from .select import BLUNDER, DUBIOUS, MISTAKE, game_note_key, parse_game_note_key, parse_motif_note_key, quick_nag
+from .puzzles import parse_key, puzzle_key
+from .select import BLUNDER, DUBIOUS, MISTAKE, quick_nag
 
 KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
-# Bump when a change in how cards are made (grading, alternatives, comments, motifs) should reach the cards
-# already in the collection: the add-on then remakes them before it adds new ones.
-GENERATOR_VERSION = 3  # 2: ?!, ?, ?? on every move; 3: also !!, □, !? (graded with 3 lines)
-DEPRECATED_TAG = f"{NOTE_TAG}::deprecated"  # on notes with a card that is no longer a puzzle (suspended)
-
-
-GAME_TAG = f"{NOTE_TAG}::game::"
-OPENING_TAG = f"{NOTE_TAG}::by-opening::"
-MOTIF_TAG = f"{NOTE_TAG}::by-motif::"
-_GAME_TAG_RE = re.compile(re.escape(GAME_TAG) + r"([a-z]+)-(.+)::(" + "|".join(phases.PHASES) + ")$", re.I)
-_OPENING_TAG_RE = re.compile(re.escape(OPENING_TAG) + r"(white|black)-([a-z0-9-]+)::ply-(\d+)$", re.I)
-_MOTIF_TAG_RE = re.compile(re.escape(MOTIF_TAG) + r"([a-z0-9-]+)::n-(\d+)$", re.I)
+PUZZLE_TAG = f"{NOTE_TAG}::puzzle::"
+_PUZZLE_TAG_RE = re.compile(re.escape(PUZZLE_TAG) + r"(\d+)-([0-9a-f]+)$", re.I)
 SEVERITY = {BLUNDER: "blunder", MISTAKE: "mistake", DUBIOUS: "inaccuracy"}
 RESULT = {1.0: "win", 0.5: "draw", 0.0: "loss"}
 
 
 def note_key_tag(key: str) -> str:
-    """Anki tag that finds a note again.
-
-    A game's note for one phase (key lichess:abcd1234:endgame): knightly::game::lichess-abcd1234::endgame.
-    An opening note (key opening:black:sicilian-defense:10): knightly::by-opening::black-sicilian-defense::ply-010.
-    A motif note (key motif:fork:2): knightly::by-motif::fork::n-002.
-    """
-    if key.startswith("opening:"):
-        _, color, slug, ply = key.split(":")
-        return f"{OPENING_TAG}{color}-{slug}::ply-{int(ply):03d}"
-    if key.startswith("motif:"):
-        parsed_motif = parse_motif_note_key(key)
-        if parsed_motif is None:
-            raise ValueError(f"not a note key: {key}")
-        return f"{MOTIF_TAG}{parsed_motif[0]}::n-{parsed_motif[1]:03d}"
-    parsed = parse_game_note_key(key)
+    """Anki tag that finds a note again: key puzzle:12:ab12cd34ef56 → knightly::puzzle::012-ab12cd34ef56."""
+    parsed = parse_key(key)
     if parsed is None:
         raise ValueError(f"not a note key: {key}")
-    game_key, phase = parsed
-    return f"{GAME_TAG}{re.sub(r'[^A-Za-z0-9_-]', '-', game_key.replace(':', '-'))}::{phase}"
+    return f"{PUZZLE_TAG}{parsed[0]:03d}-{parsed[1]}"
 
 
 def key_from_tags(tags: list[str]) -> Optional[str]:
-    """The note key that `note_key_tag` made, from a note's tags (None for notes from before phases)."""
+    """The note key that `note_key_tag` made, from a note's tags (None for a note that is not a puzzle note)."""
     for t in tags:
-        m = _GAME_TAG_RE.match(t)
+        m = _PUZZLE_TAG_RE.match(t)
         if m:
-            return game_note_key(f"{m[1].lower()}:{m[2]}", m[3].lower())
-        m = _OPENING_TAG_RE.match(t)
-        if m:
-            return f"opening:{m[1].lower()}:{m[2].lower()}:{int(m[3])}"
-        m = _MOTIF_TAG_RE.match(t)
-        if m:
-            return f"motif:{m[1].lower()}:{int(m[2])}"
+            return f"puzzle:{int(m[1])}:{m[2].lower()}"
     return None
 
 
@@ -106,18 +78,6 @@ def _eval(s: Optional[Score]) -> str:
 
 def _join(*parts: str) -> str:
     return " ".join(p for p in parts if p)
-
-
-def _assign_ids(cards: list[CardSpec], existing_ids: Optional[dict[str, int]]) -> tuple[dict[str, int], int]:
-    """Cloze number per position: existing ones kept, new ones numbered on in ply order."""
-    ids = dict(existing_ids or {})
-    nxt = max(ids.values(), default=0) + 1
-    for c in sorted(cards, key=lambda c: c.ply):
-        if c.fen_key not in ids:
-            ids[c.fen_key] = nxt
-            nxt += 1
-    new_cards = sum(1 for c in cards if c.fen_key not in (existing_ids or {}))
-    return ids, new_cards
 
 
 def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardSpec, number: int,
@@ -215,114 +175,55 @@ def _clozes(ids: dict[str, int], cards: list[CardSpec]) -> str:
     return " ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in numbers)
 
 
-def build(
+def puzzle_head(game: Game, card: CardSpec) -> str:
+    """First line of a puzzle's Notes field: the phase and the game it comes from."""
+    return " · ".join(p for p in (card_phase(game, card).capitalize(), _game_link(game)) if p)
+
+
+def puzzle_notes(head: str, stats: list[str], links: list[str]) -> str:
+    """The Notes field: `head`, then how often the moves were played (see stats.lines), then the comments
+    from similar positions."""
+    out = [head] if head else []
+    if stats:
+        out += ["<b>Played before</b>"] + [html.escape(x) for x in stats]
+    if links:
+        out += ["<b>Similar positions</b>"] + [html.escape(x) for x in links]
+    return "<br>".join(out)
+
+
+def build_puzzle(
     game: Game,
     scores: list[Optional[Score]],
-    cards: list[CardSpec],
-    existing_ids: Optional[dict[str, int]] = None,
+    first: CardSpec,
+    second: Optional[CardSpec],
+    notes: str,
     inaccuracy: float = Config.inaccuracy,
     nags: Optional[dict[int, int]] = None,
 ) -> NoteSpec:
-    """The note for one phase of `game`, with `cards` (all in that phase) tagged.
+    """The note of one mistake: cloze 1 is the position before it, cloze 2 (when there is one) the position
+    after it, where the best reply punishes it. Tags describe the first puzzle only.
 
-    Positions already in `existing_ids` keep their number.
+    `first.ply` is the ply of the mistake in `game`. When the game's own reply is not the best one, the
+    second puzzle sits in a short extra game (the moves up to the mistake, then the best reply).
     """
-    found = {card_phase(game, c) for c in cards}
-    if len(found) != 1:
-        raise ValueError(f"{game.key}: a note needs cards from one phase, got {sorted(found)}")
-    phase = found.pop()
-    ids, new_cards = _assign_ids(cards, existing_ids)
-    key = game_note_key(game.key, phase)
+    key = puzzle_key(first.fen_key, first.ply)
+    ids = {first.fen_key: 1}
+    cards = [first]
+    parts = []
+    in_game = second is not None and second.ply < len(game.moves) and game.moves[second.ply] == second.played.move
+    if second is not None:
+        ids[second.fen_key] = 2
+        cards.append(second)
+    parts.append(_game_pgn(game, scores, [c for c in cards if c is not second or in_game], ids, inaccuracy, nags).strip())
+    if second is not None and not in_game:
+        short = dataclasses.replace(game, moves=game.moves[: second.ply] + [second.played.move])
+        parts.append(_game_pgn(short, scores[: second.ply + 2], [second], ids, inaccuracy).strip())
     return NoteSpec(
         key=key,
-        pgn=_game_pgn(game, scores, cards, ids, inaccuracy, nags),
+        pgn="\n\n".join(parts),
         cards=_clozes(ids, cards),
-        notes=" · ".join(p for p in (phase.capitalize(), _game_link(game)) if p),
-        tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, c) for c in cards]),
+        notes=notes,
+        tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, first)]),
         card_ids=ids,
-        new_cards=new_cards,
-    )
-
-
-def move_label(ply: int) -> str:
-    """Ply index 9 → 'move 5…' (Black's 5th move); 8 → 'move 5'."""
-    return f"move {ply // 2 + 1}" + ("…" if ply % 2 else "")
-
-
-def _links_from_pgn(pgn: str) -> list[str]:
-    out = []
-    f = io.StringIO(pgn)
-    while (h := chess.pgn.read_headers(f)) is not None:
-        site = h.get("Site", "?")
-        if site and site != "?":
-            date = h.get("Date", "????.??.??").replace(".", "-")
-            out.append(f'<a href="{html.escape(site)}">{html.escape(h.get("White", "?"))} – '
-                       f'{html.escape(h.get("Black", "?"))}</a>, {date}')
-    return out
-
-
-def build_opening(
-    key: str,
-    label: str,
-    ply: int,
-    entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
-    existing_pgn: str = "",
-    inaccuracy: float = Config.inaccuracy,
-    nags: Optional[dict[str, dict[int, int]]] = None,
-) -> NoteSpec:
-    """The note for one opening and ply: one game per card, each with its card tagged.
-
-    `key` is the note key (see select.opening_note_key), `label` e.g. "Sicilian Defense (Black)".
-    The games already in the note (`existing_pgn`) are kept as they are, with their
-    numbers; the new games follow.
-    """
-    head = f"{html.escape(label)}, {move_label(ply)} (ply {ply + 1})"
-    return _build_grouped(key, head, entries, existing_pgn, inaccuracy, nags)
-
-
-def motif_label(motif: str) -> str:
-    """'back-rank-mate' → 'Back rank mate'; 'mate-in-2' → 'Mate in 2'."""
-    return motif.replace("-", " ").capitalize()
-
-
-def build_motif(
-    key: str,
-    entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
-    existing_pgn: str = "",
-    inaccuracy: float = Config.inaccuracy,
-    nags: Optional[dict[str, dict[int, int]]] = None,
-) -> NoteSpec:
-    """The note for one motif (see select.motif_note_key): one game per card, games added over time."""
-    parsed = parse_motif_note_key(key)
-    if parsed is None:
-        raise ValueError(f"not a motif note key: {key}")
-    head = f"{motif_label(parsed[0])} (set {parsed[1]})"
-    return _build_grouped(key, head, entries, existing_pgn, inaccuracy, nags)
-
-
-def _build_grouped(
-    key: str,
-    head: str,
-    entries: list[tuple[Game, list[Optional[Score]], CardSpec]],
-    existing_pgn: str,
-    inaccuracy: float = Config.inaccuracy,
-    nags: Optional[dict[str, dict[int, int]]] = None,
-) -> NoteSpec:
-    """A note of one game per card (opening and motif notes). `head` is the first line of its notes."""
-    old_ids = card_ids(existing_pgn) if existing_pgn else {}
-    cards = [c for _, _, c in entries]
-    ids, new_cards = _assign_ids(cards, old_ids)
-    entries = sorted(entries, key=lambda e: ids[e[2].fen_key])
-    parts = [existing_pgn.strip()] if existing_pgn.strip() else []
-    parts += [_game_pgn(g, s, [c], ids, inaccuracy, (nags or {}).get(g.key)).strip() for g, s, c in entries]
-    pgn = "\n\n".join(parts)
-    numbers = sorted(set(ids.values()))
-    return NoteSpec(
-        key=key,
-        pgn=pgn,
-        cards=" ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in numbers),
-        notes="<br>".join([head] + _links_from_pgn(pgn)),
-        tags=[NOTE_TAG, note_key_tag(key)] + _tags([(g, c) for g, _, c in entries]),
-        card_ids=ids,
-        new_cards=new_cards,
+        new_cards=len(cards),
     )

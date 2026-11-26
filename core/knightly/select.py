@@ -1,4 +1,4 @@
-"""Which mistakes deserve a card, and how every candidate move on the card is graded.
+"""Whether a position is a puzzle, and how every candidate move on its card is graded.
 
 All judgements use the engine's own win/draw/loss estimate (WDL), as expected
 score in percent: wins + draws / 2. A move's *loss* is how far its expected
@@ -8,7 +8,8 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 
 - A **good move** loses at most `cfg.good_move` points. A move that loses
   more but less than `cfg.inaccuracy` is normal play: no NAG (0). It isn't an
-  accepted answer by default, but it is never a mistake, so it makes no puzzle.
+  accepted answer by default; played at a puzzle position it still makes the puzzle (it lost
+  more than `cfg.min_loss`).
 - A **sacrifice** gives up material in the short term while an alternative
   keeps more: `cfg.sacrifice_plies` plies down the engine's line (followed
   further while captures or checks are still going on, or a recapture that was
@@ -37,15 +38,14 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterable, Optional
 
 import chess
 
-from . import motifs as motifs_mod, phases
+from . import motifs as motifs_mod
 from .cache import fen_key
 from .config import Config
-from .model import Candidate, CardSpec, Choice, Game, Line, Score
-from .openings import Group
+from .model import CardSpec, Choice, Game, Line
 
 NEUTRAL = 0  # no NAG
 GOOD, MISTAKE, BRILLIANT, BLUNDER, INTERESTING, DUBIOUS, SINGULAR = 1, 2, 3, 4, 5, 6, 8
@@ -211,159 +211,6 @@ def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = (),
     return out
 
 
-def move_losses(game: Game, scores: list[Optional[Score]], cfg: Config) -> Iterator[Candidate]:
-    """Every scored move of `game` with its quick-pass loss, in ply order.
-
-    Only the user's moves, unless `cfg.include_opponent`. `note` is left empty.
-    """
-    board = chess.Board()
-    user = chess.WHITE if game.user_is_white else chess.BLACK
-    division = phases.divide(game.moves)
-    for ply, u in enumerate(game.moves):
-        mine = board.turn == user
-        if mine or cfg.include_opponent:
-            before = scores[ply] if ply < len(scores) else None
-            after = scores[ply + 1] if ply + 1 < len(scores) else None
-            if before is not None and after is not None:
-                white = board.turn == chess.WHITE
-                yield Candidate(
-                    game_key=game.key,
-                    ply=ply,
-                    fen_key=fen_key(board.fen()),
-                    played=u,
-                    loss=before.win_pct(white) - after.win_pct(white),
-                    phase=phases.phase_at(division, ply),
-                    mine=mine,
-                )
-        board.push_uci(u)
-
-
-def find_candidates(
-    analysed: Iterable[tuple[Game, list[Optional[Score]]]],
-    cfg: Config,
-    exclude: set[str] = frozenset(),
-) -> list[Candidate]:
-    """One note per game and phase: moves that lost at least `cfg.min_loss` points, game by game.
-
-    Games newest first, each game's moves in order. A position is offered once (from
-    the newest game that reached it) and never if it is in `exclude` (already on a card).
-    """
-    seen = set(exclude)
-    out = []
-    for game, scores in sorted(analysed, key=lambda gs: gs[0].end_ts, reverse=True):
-        for c in move_losses(game, scores, cfg):
-            if c.loss >= cfg.min_loss and c.fen_key not in seen:
-                seen.add(c.fen_key)
-                c.note = game_note_key(game.key, c.phase)
-                out.append(c)
-    return out
-
-
-def ranked_candidates(
-    analysed: Iterable[tuple[Game, list[Optional[Score]]]],
-    cfg: Config,
-    exclude: set[str] = frozenset(),
-) -> list[Candidate]:
-    """One note per game and phase, mistakes from all games ranked together (the original ordering).
-
-    Moves losing at least `cfg.min_loss` points, one per position, best first by
-    score = loss × weight × (1 + 0.5 × (recurrences − 1)), where weight is 1.0 for your
-    moves in games you didn't win, 0.6 in games you won, and 0.8 for the opponent's
-    mistakes (`cfg.include_opponent`); recurrences counts the games that reached the position.
-    """
-    seen_count: dict[str, int] = {}
-    found: dict[str, Candidate] = {}
-    for game, scores in analysed:
-        my_weight = 1.0 if game.user_result() < 1 else 0.6  # mistakes that cost points matter most
-        for c in move_losses(game, scores, cfg):
-            seen_count[c.fen_key] = seen_count.get(c.fen_key, 0) + 1
-            if c.loss >= cfg.min_loss and c.fen_key not in exclude:
-                c.score = c.loss * (my_weight if c.mine else 0.8)
-                c.note = game_note_key(game.key, c.phase)
-                if c.fen_key not in found or c.score > found[c.fen_key].score:
-                    found[c.fen_key] = c
-    out = []
-    for c in found.values():
-        c.recurrences = seen_count.get(c.fen_key, 1)
-        c.score *= 1 + 0.5 * (c.recurrences - 1)
-        out.append(c)
-    out.sort(key=lambda c: c.score, reverse=True)
-    return out
-
-
-def game_note_key(game_key: str, phase: str) -> str:
-    """'lichess:abcd1234' + 'endgame' → 'lichess:abcd1234:endgame'."""
-    return f"{game_key}:{phase}"
-
-
-def parse_game_note_key(key: str) -> Optional[tuple[str, str]]:
-    """(game key, phase) of a game note key, or None for another key."""
-    game_key, _, phase = key.rpartition(":")
-    if phase not in phases.PHASES or ":" not in game_key or key.startswith("opening:"):
-        return None
-    return game_key, phase
-
-
-MOTIF_NOTE_CARDS = 10  # a motif note holds this many cards; the next one starts a new note
-
-
-def motif_note_key(motif: str, n: int) -> str:
-    """'fork', 3 → 'motif:fork:3'."""
-    return f"motif:{motif}:{n}"
-
-
-def parse_motif_note_key(key: str) -> Optional[tuple[str, int]]:
-    """(motif, number) of a motif note key, or None for another key."""
-    parts = key.split(":")
-    if len(parts) != 3 or parts[0] != "motif" or not parts[2].isdigit():
-        return None
-    return parts[1], int(parts[2])
-
-
-def opening_note_key(group: Group, ply: int) -> str:
-    return f"opening:{group.color}:{group.slug}:{ply + 1}"
-
-
-def parse_opening_note_key(key: str) -> Optional[tuple[str, str, int]]:
-    """(colour, family slug, ply index) of an opening note key, or None for a game key."""
-    parts = key.split(":")
-    if len(parts) != 4 or parts[0] != "opening" or not parts[3].isdigit():
-        return None
-    return parts[1], parts[2], int(parts[3]) - 1
-
-
-def opening_candidates(
-    groups: list[Group],
-    analysed: dict[str, list[Optional[Score]]],
-    cfg: Config,
-    exclude: set[str] = frozenset(),
-) -> list[Candidate]:
-    """One note per opening and ply: moves losing more than `cfg.opening_min_loss` points.
-
-    Groups in the given order (most important first), then ply from the first move on,
-    then the group's games newest first. `analysed` maps game key → quick-pass scores;
-    games without them are skipped. A position is offered once, never if in `exclude`.
-    """
-    seen = set(exclude)
-    out = []
-    for grp in groups:
-        by_ply: dict[int, list[Candidate]] = {}
-        for g in grp.games:  # newest first
-            scores = analysed.get(g.key)
-            if scores is None:
-                continue
-            for c in move_losses(g, scores, cfg):
-                if c.loss > cfg.opening_min_loss:
-                    by_ply.setdefault(c.ply, []).append(c)
-        for ply in sorted(by_ply):
-            for c in by_ply[ply]:
-                if c.fen_key not in seen:
-                    seen.add(c.fen_key)
-                    c.note = opening_note_key(grp, ply)
-                    out.append(c)
-    return out
-
-
 def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[str] = None,
                    ply: int = 99, lines: Optional[int] = None) -> tuple[list[Graded], dict[str, Line]]:
     """Deep multi-line analysis of `board`, graded. `extra` (e.g. the move played) is analysed too.
@@ -389,27 +236,10 @@ def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[st
     return grade(graded, board.legal_moves.count(), cfg, material(board, board.turn)), by_move
 
 
-def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
-               opponent: str = "", min_loss: Optional[float] = None, tag_motifs: bool = True) -> Optional[CardSpec]:
-    """Deep-analyse the puzzle position and grade its candidate moves.
-
-    None when the position isn't a fair puzzle: only one legal move, or the deep
-    look says the played move wasn't a real mistake (it lost less than half of
-    `min_loss`, default `cfg.min_loss`, or it counts as a correct answer). `opponent`
-    is the name of the player who made the move when it wasn't the user (an
-    opponent-mistake card). `tag_motifs=False` skips the motif tagging (when only
-    asking whether the position makes a card).
-    """
-    if board.legal_moves.count() < 2:
-        return None
-    graded, by_move = grade_position(board, analyser, cfg, played, ply)
-    if not graded:
-        return None
-    g_played = next(g for g in graded if g.move == played)
-    threshold = cfg.min_loss if min_loss is None else min_loss
-    if g_played.loss < threshold / 2 or g_played.nag in ACCEPTED or g_played.nag == NEUTRAL:  # the quick pass overstated it
-        return None
-    choices: list[Choice] = []
+def _choices(graded: list[Graded], by_move: dict[str, Line], cfg: Config,
+             played: Optional[str] = None) -> tuple[Optional[Choice], list[Choice]]:
+    """The graded moves as the card's choices: (the played move's, the others best first)."""
+    others: list[Choice] = []
     played_choice = None
     for g in sorted(graded, key=lambda g: g.loss):
         line = by_move[g.move]
@@ -419,7 +249,30 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         if g.move == played:
             played_choice = ch
         else:
-            choices.append(ch)
+            others.append(ch)
+    return played_choice, others
+
+
+def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
+               opponent: str = "", min_loss: Optional[float] = None, tag_motifs: bool = True) -> Optional[CardSpec]:
+    """Deep-analyse the puzzle position and grade its candidate moves.
+
+    None when the position isn't a fair puzzle: only one legal move, or the deep look says the
+    played move wasn't a mistake (it lost no more than `min_loss`, default `cfg.min_loss_at(ply)`,
+    or it counts as a correct answer), or no other move is a correct answer. `opponent` is the
+    name of the player who made the move when it wasn't the user (an opponent-mistake card).
+    `tag_motifs=False` skips the motif tagging (when only asking whether the position makes a card).
+    """
+    if board.legal_moves.count() < 2:
+        return None
+    graded, by_move = grade_position(board, analyser, cfg, played, ply)
+    if not graded:
+        return None
+    g_played = next(g for g in graded if g.move == played)
+    threshold = cfg.min_loss_at(ply) if min_loss is None else min_loss
+    if g_played.loss <= threshold or g_played.nag in ACCEPTED:
+        return None
+    played_choice, choices = _choices(graded, by_move, cfg, played)
     assert played_choice is not None
     if not any(c.nag in ACCEPTED for c in choices):
         return None
@@ -444,4 +297,31 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
         comment=comment,
         mine=not opponent,
         motifs=found,
+    )
+
+
+def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: Config,
+                 mine: bool = True) -> Optional[CardSpec]:
+    """The second puzzle of a mistake: `board` is the position after the bad move (`ply` half-moves played),
+    and the answer is the best reply. The card's main move is that reply, the other moves are graded as usual.
+
+    None when the game is over there or the reply is forced (nothing to find).
+    """
+    if board.is_game_over() or board.legal_moves.count() < 2:
+        return None
+    graded, by_move = grade_position(board, analyser, cfg, None, ply)
+    if not graded:
+        return None
+    best = min(graded, key=lambda g: g.loss).move
+    main, others = _choices(graded, by_move, cfg, best)
+    assert main is not None
+    best_san = board.san(chess.Move.from_uci(best))
+    return CardSpec(
+        fen_key=fen_key(board.fen()),
+        ply=ply,
+        played=main,
+        alternatives=others,
+        loss=0.0,
+        comment=f"{played_san} is punished by {best_san}.",
+        mine=mine,
     )
