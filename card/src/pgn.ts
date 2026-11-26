@@ -216,7 +216,12 @@ export function visibleChildren(node: KNode, o: ViewOptions): KNode[] {
   return node.children.slice();
 }
 
-/** Hide NAG + comment of a tagged move (it would hint at a card's answer). */
+/** Hide the NAG of a tagged move that belongs to another card (the front shows them all). */
+export function nagHidden(node: KNode, o: ViewOptions): boolean {
+  return o.side === 'back' && o.tagged.has(node) && node !== o.puzzle.gameMove;
+}
+
+/** Hide the comment (and eval, arrows) of a tagged move: it would hint at a card's answer. */
 export function annotationsHidden(node: KNode, o: ViewOptions): boolean {
   if (!o.tagged.has(node)) return false;
   return o.side === 'front' || node !== o.puzzle.gameMove;

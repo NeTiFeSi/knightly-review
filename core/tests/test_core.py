@@ -13,20 +13,20 @@ from pathlib import Path
 
 import chess
 
-from helpers import (FIXTURES, FRENCH, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, FakeAnalyser,
+from helpers import (FIXTURES, FRENCH, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
                      FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
-from knightly import deepen, http, notes, openings, phases, sources
+from knightly import http, notes, openings, phases, pipeline, puzzles, similar, sources, stats
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
-from knightly.jobs import opening_order, remake_notes, run_update
+from knightly.jobs import run_update
 from knightly.model import Eval, Game, Line, NoWdl, Score
 from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, NEUTRAL, SINGULAR, Graded, build_card,
-                             find_candidates, game_note_key, grade, line_material, opening_candidates,
-                             opening_note_key, parse_game_note_key, parse_opening_note_key, ranked_candidates)
+                             build_punish, grade, line_material)
 from knightly.sources import chesscom, lichess
 
 GOLDEN = FIXTURES / "generated_note.pgn"
+GOLDEN_SHORT = FIXTURES / "generated_note_short.pgn"  # the punishment in a game of its own
 
 
 def division_games() -> list[tuple[str, list[str], tuple]]:
@@ -336,68 +336,6 @@ class SelectTest(unittest.TestCase):
         line = ["f3e5", "c6e5", "d2d4", "c7c6", "b5e2", "c5d6", "d4e5", "d6e5"]
         self.assertEqual(line_material(b, line, 4), -2)
 
-    def test_find_candidates(self):
-        g = scholar_game()
-        cands = find_candidates([(g, SCHOLAR_SCORES)], self.cfg)
-        self.assertEqual([(c.ply, c.played) for c in cands], [(5, "g8f6")])
-        self.assertEqual(cands[0].fen_key, PUZZLE_FEN)
-        self.assertAlmostEqual(cands[0].loss, 52.5)
-        self.assertEqual(cands[0].phase, "opening")
-        self.assertEqual(find_candidates([(g, SCHOLAR_SCORES)], self.cfg, exclude={PUZZLE_FEN}), [])
-
-    def test_opponent_mistakes_are_optional(self):
-        g = scholar_game()
-        scores = list(SCHOLAR_SCORES)
-        scores[3:6] = [S(-200, 0, 600, 400)] * 3  # 2. Qh5 (White, the opponent) drops White to 30 %
-        self.assertEqual([c.played for c in find_candidates([(g, scores)], self.cfg)], ["g8f6"])
-        both = find_candidates([(g, scores)], Config(include_opponent=True))
-        self.assertEqual(sorted((c.played, c.mine) for c in both), [("d1h5", False), ("g8f6", True)])
-
-    def test_opponent_card_comment_and_tag(self):
-        table = {fen_key(board_at(SCHOLAR_MOVES, 2).fen()): Eval(20, [
-            Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])])}
-        card = build_card(board_at(SCHOLAR_MOVES, 2), 2, "d1h5", FakeAnalyser(table=table), self.cfg, "Opponent")
-        self.assertFalse(card.mine)
-        self.assertTrue(card.comment.startswith("Opponent played Qh5 here, losing 22% win rate."))
-        note = notes.build(scholar_game(), SCHOLAR_SCORES, [card])
-        self.assertIn("knightly::opponent", note.tags)
-
-    def test_game_by_game_newest_first(self):
-        old = game_from(SICILIAN, white=False, id="old", end_ts=100)
-        new = game_from(FRENCH, white=False, id="new", end_ts=200)
-        analysed = [(old, scores_with({3: 15, 5: 30}, len(SICILIAN))), (new, scores_with({1: 12, 3: 11}, len(FRENCH)))]
-        cands = find_candidates(analysed, self.cfg)
-        # Every qualifying move of the newest game first, in ply order, then the older game's.
-        self.assertEqual([(c.game_key, c.ply) for c in cands],
-                         [("lichess:new", 1), ("lichess:new", 3), ("lichess:old", 3), ("lichess:old", 5)])
-        self.assertEqual({c.note for c in cands}, {"lichess:new:opening", "lichess:old:opening"})
-
-    def test_ranked_mode_weights(self):
-        g = scholar_game()
-        scores = list(SCHOLAR_SCORES)
-        scores[3:6] = [S(-200, 0, 600, 400)] * 3  # 2. Qh5 (White, the opponent) drops White to 30 %
-        both = ranked_candidates([(g, scores)], Config(include_opponent=True))
-        self.assertEqual(sorted((c.played, c.mine) for c in both), [("d1h5", False), ("g8f6", True)])
-        opp = next(c for c in both if not c.mine)
-        self.assertAlmostEqual(opp.score, opp.loss * 0.8)  # own mistakes rank first at equal loss
-        self.assertEqual(both[0].note, g.key + ":opening")
-        self.assertEqual(ranked_candidates([(g, SCHOLAR_SCORES)], self.cfg, exclude={PUZZLE_FEN}), [])
-
-    def test_ranked_mode_recurring_positions_rank_higher(self):
-        a = scholar_game()
-        b = scholar_game(id="test0002")
-        one = ranked_candidates([(a, SCHOLAR_SCORES)], self.cfg)[0]
-        two = ranked_candidates([(a, SCHOLAR_SCORES), (b, SCHOLAR_SCORES)], self.cfg)
-        self.assertEqual(len(two), 1)
-        self.assertEqual(two[0].recurrences, 2)
-        self.assertGreater(two[0].score, one.score)
-
-    def test_same_position_offered_once_from_newest_game(self):
-        a = scholar_game(end_ts=100)
-        b = scholar_game(id="test0002", end_ts=200)
-        two = find_candidates([(a, SCHOLAR_SCORES), (b, SCHOLAR_SCORES)], self.cfg)
-        self.assertEqual([c.game_key for c in two], ["lichess:test0002"])
-
     def test_build_card(self):
         card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), self.cfg)
         self.assertEqual(card.played.nag, BLUNDER)
@@ -407,14 +345,30 @@ class SelectTest(unittest.TestCase):
         self.assertIn("g6 was best", card.comment)
         self.assertIn("loses 52% win rate", card.comment)
 
-    def test_build_card_neutral_move_makes_no_puzzle(self):
-        # The played move loses 3 %: normal play (no NAG), not a mistake.
+    def test_build_card_a_small_loss_still_makes_a_puzzle(self):
+        # The played move loses 2 %: not a good move (more than 1 % worse), so a puzzle; no NAG (normal play).
         table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
-        self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg, min_loss=1))
+        card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg)
+        self.assertEqual((card.played.nag, round(card.loss)), (NEUTRAL, 2))
 
-    def test_build_card_drops_false_alarm(self):
-        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
+    def test_build_card_a_good_move_is_no_puzzle(self):
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-29, 55, 850, 95), ["g8f6"])])}
         self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg))
+
+    def test_build_card_min_loss(self):
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
+        self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), Config(min_loss=5)))
+        self.assertEqual(Config(min_loss=3).min_loss_at(17), 3)
+
+    def test_build_punish(self):
+        after = board_at(SCHOLAR_MOVES, 6)  # Black's Nf6?? allows Qxf7#
+        table = {fen_key(after.fen()): Eval(20, [Line(WHITE_MATES, ["h5f7"]), Line(S(300, 700, 300, 0), ["h5h4"])])}
+        card = build_punish(after, 6, "Nf6", FakeAnalyser(table=table), self.cfg)
+        self.assertEqual((card.played.move, card.ply, card.fen_key), ("h5f7", 6, fen_key(after.fen())))
+        self.assertEqual(card.comment, "Nf6 is punished by Qxf7#.")
+        self.assertEqual([a.move for a in card.alternatives], ["h5h4"])
+        mated = board_at(SCHOLAR_MOVES, 7)
+        self.assertIsNone(build_punish(mated, 7, "Qxf7#", FakeAnalyser(), self.cfg))  # the game is over
 
 
 class PhasesTest(unittest.TestCase):
@@ -436,11 +390,19 @@ class PhasesTest(unittest.TestCase):
         self.assertEqual(phases.phase_at((None, 1), 1), "endgame")
 
 
+AFTER_NF6 = fen_key(board_at(SCHOLAR_MOVES, 6).fen())
+# Black's Nf6?? is punished by Qxf7#; the other moves are not.
+PUNISH_TABLE = {PUZZLE_FEN: __import__("helpers").PUZZLE_EVAL,
+                AFTER_NF6: Eval(20, [Line(WHITE_MATES, ["h5f7"]), Line(S(300, 700, 300, 0), ["h5h4"])])}
+
+
 class NotesTest(unittest.TestCase):
-    def _note(self, existing=None):
+    def _note(self, notes_text="Opening"):
         g = scholar_game()
-        card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), Config())
-        return notes.build(g, SCHOLAR_SCORES, [card], existing)
+        an = FakeAnalyser(table=PUNISH_TABLE)
+        first = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", an, Config())
+        second = build_punish(board_at(SCHOLAR_MOVES, 6), 6, "Nf6", an, Config())
+        return notes.build_puzzle(g, SCHOLAR_SCORES, first, second, notes_text)
 
     def test_golden_pgn(self):
         """The card UI's tests parse this file too (card/test/generated.test.ts)."""
@@ -448,21 +410,63 @@ class NotesTest(unittest.TestCase):
         if os.environ.get("UPDATE_GOLDEN"):
             GOLDEN.write_text(n.pgn + "\n")
         self.assertEqual(n.pgn + "\n", GOLDEN.read_text())
-        self.assertEqual(n.cards, "{{c1::1::1}}")
-        self.assertEqual(n.key, "lichess:test0001:opening")
-        self.assertTrue(n.notes.startswith("Opening · <a href"))
-        self.assertEqual(n.tags, ["knightly", "knightly::game::lichess-test0001::opening", "knightly::color::black", "knightly::motif::other",
+        self.assertEqual(n.cards, "{{c1::1::1}} {{c2::2::2}}")
+        self.assertEqual(n.key, puzzles.puzzle_key(PUZZLE_FEN, 5))
+        self.assertEqual(n.new_cards, 2)
+        # The tags describe the first puzzle only.
+        self.assertEqual(n.tags, ["knightly", notes.note_key_tag(n.key), "knightly::color::black", "knightly::motif::other",
                                   "knightly::opening::king-s-pawn-game", "knightly::phase::opening", "knightly::rated",
                                   "knightly::result::loss", "knightly::severity::blunder", "knightly::site::lichess",
                                   "knightly::time::blitz"])
         self.assertNotIn("#0", n.pgn)
         self.assertNotIn("100.00", n.pgn)
 
-    def test_ids_are_stable(self):
-        n = self._note(existing={"other-position": 1, PUZZLE_FEN: 4})
-        self.assertEqual(n.cards, "{{c4::4::4}}")
-        self.assertEqual(notes.card_ids(n.pgn), {PUZZLE_FEN: 4})
-        self.assertEqual(n.new_cards, 0)
+    def test_two_puzzles_one_note(self):
+        n = self._note()
+        self.assertEqual(n.card_ids, {PUZZLE_FEN: 1, AFTER_NF6: 2})
+        self.assertEqual(notes.card_ids(n.pgn), {PUZZLE_FEN: 1, AFTER_NF6: 2})
+        # The game's own reply is the best one, so the second puzzle is in the same game.
+        self.assertEqual(n.pgn.count("[Event"), 1)
+
+    def test_punishment_in_a_short_game_when_the_reply_differs(self):
+        g = scholar_game(moves=SCHOLAR_MOVES[:6] + ["h5h4"])  # White did not play Qxf7#
+        an = FakeAnalyser(table=PUNISH_TABLE)
+        first = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", an, Config())
+        second = build_punish(board_at(SCHOLAR_MOVES, 6), 6, "Nf6", an, Config())
+        n = notes.build_puzzle(g, SCHOLAR_SCORES, first, second, "")
+        if os.environ.get("UPDATE_GOLDEN"):
+            GOLDEN_SHORT.write_text(n.pgn + "\n")
+        self.assertEqual(n.pgn + "\n", GOLDEN_SHORT.read_text())
+        self.assertEqual(n.pgn.count("[Event"), 2)
+        self.assertEqual(notes.card_ids(n.pgn), {PUZZLE_FEN: 1, AFTER_NF6: 2})
+
+    def test_one_puzzle_when_nothing_to_punish(self):
+        first = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=PUNISH_TABLE), Config())
+        n = notes.build_puzzle(scholar_game(), SCHOLAR_SCORES, first, None, "")
+        self.assertEqual((n.cards, n.new_cards), ("{{c1::1::1}}", 1))
+
+    def test_opponent_card_comment_and_tag(self):
+        table = {fen_key(board_at(SCHOLAR_MOVES, 2).fen()): Eval(20, [
+            Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])])}
+        card = build_card(board_at(SCHOLAR_MOVES, 2), 2, "d1h5", FakeAnalyser(table=table), Config(), "Opponent")
+        self.assertFalse(card.mine)
+        self.assertTrue(card.comment.startswith("Opponent played Qh5 here, losing 22% win rate."))
+        self.assertIn("knightly::opponent", notes.build_puzzle(scholar_game(), SCHOLAR_SCORES, card, None, "").tags)
+
+    def test_key_and_tag_roundtrip(self):
+        key = puzzles.puzzle_key(PUZZLE_FEN, 5)
+        tag = notes.note_key_tag(key)
+        self.assertTrue(tag.startswith("knightly::puzzle::005-"))
+        self.assertEqual(notes.key_from_tags(["x", tag]), key)
+        self.assertIsNone(notes.key_from_tags(["knightly", "knightly::game::lichess-1::opening"]))
+        self.assertEqual(puzzles.parse_key(key)[0], 5)
+        self.assertIsNone(puzzles.parse_key("lichess:abcd:opening"))
+
+    def test_notes_field(self):
+        text = notes.puzzle_notes("Opening", ["Nf3: played 3 times"], ["Bd3 would also be a good move if x."])
+        self.assertEqual(text, "Opening<br><b>Played before</b><br>Nf3: played 3 times<br><b>Similar positions</b>"
+                               "<br>Bd3 would also be a good move if x.")
+        self.assertEqual(notes.puzzle_notes("Opening", [], []), "Opening")
 
     def test_field_roundtrip(self):
         pgn = self._note().pgn
@@ -478,153 +482,136 @@ class OpeningsTest(unittest.TestCase):
         self.assertEqual(openings.classify(["g1f3", "c7c5", "e2e4"])[1], "Sicilian Defense")
         self.assertEqual(openings.classify([]), ("", "Other"))
 
-    def test_rank_weights_results_and_splits_colour(self):
-        games = [
-            game_from(SICILIAN, white=False, id="s1", result="1-0"),  # loss: 4
-            game_from(FRENCH, white=False, id="f1", result="0-1"),  # win: 1
-            game_from(FRENCH, white=False, id="f2", result="1/2-1/2"),  # draw: 2
-            game_from(SICILIAN, white=True, id="s2", result="1-0"),  # a win as White: its own group
-        ]
-        ranked = openings.rank(games)
-        self.assertEqual([(g.label, g.importance) for g in ranked],
-                         [("Sicilian Defense (Black)", 4), ("French Defense (Black)", 3), ("Sicilian Defense (White)", 1)])
 
-    def test_opening_candidates_order(self):
-        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=100)
-        fr_old = game_from(FRENCH, white=False, id="f1", result="1/2-1/2", end_ts=50)
-        fr_new = game_from(FRENCH + ["b1c3"], white=False, id="f2", result="0-1", end_ts=300)
-        groups = openings.rank([sic, fr_old, fr_new])
-        self.assertEqual([g.family for g in groups], ["Sicilian Defense", "French Defense"])
-        analysed = {
-            "lichess:s1": scores_with({5: 8, 3: 6, 1: 4}, len(SICILIAN)),  # 4 is normal play: no card
-            "lichess:f1": scores_with({1: 6}, len(FRENCH)),
-            "lichess:f2": scores_with({1: 6, 3: 5.5}, len(FRENCH) + 1),
-        }
-        cands = opening_candidates(groups, analysed, Config())
-        self.assertEqual([(c.game_key, c.ply) for c in cands],
-                         [("lichess:s1", 3), ("lichess:s1", 5), ("lichess:f2", 1), ("lichess:f2", 3)])
-        # f1's 1...e6 is the same position as f2's: offered once, from the newest game.
-        self.assertEqual([c.note for c in cands],
-                         ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6",
-                          "opening:black:french-defense:2", "opening:black:french-defense:4"])
-        self.assertEqual(parse_opening_note_key(cands[0].note), ("black", "sicilian-defense", 3))
-        self.assertIsNone(parse_opening_note_key("lichess:abcd"))
-        # Already-carded positions are skipped; the opponent's moves come in when asked for.
-        skip = {cands[0].fen_key}
-        self.assertNotIn(cands[0].fen_key, [c.fen_key for c in opening_candidates(groups, analysed, Config(), skip)])
-        analysed["lichess:s1"] = scores_with({2: 9}, len(SICILIAN))
-        self.assertEqual([c.ply for c in opening_candidates(groups[:1], analysed, Config())], [])
-        both = opening_candidates(groups[:1], analysed, Config(include_opponent=True))
-        self.assertEqual([(c.ply, c.mine) for c in both], [(2, False)])
+def seed(test, games, user="knightlyme"):
+    c = tmpcache(test)
+    c.put_games(games, user)
+    return c
 
-    def test_note_tags_roundtrip(self):
-        for key in ("lichess:abcd1234:opening", "chesscom:123:endgame", "opening:black:sicilian-defense:10"):
-            self.assertEqual(notes.key_from_tags(["knightly", notes.note_key_tag(key)]), key)
-        self.assertEqual(notes.note_key_tag("lichess:abcd1234:middlegame"), "knightly::game::lichess-abcd1234::middlegame")
-        self.assertIsNone(notes.key_from_tags(["knightly::game::lichess-abcd1234"]))  # from before phases
-        self.assertEqual(parse_game_note_key(game_note_key("lichess:x", "endgame")), ("lichess:x", "endgame"))
-        self.assertIsNone(parse_game_note_key("opening:black:sicilian-defense:10"))
-        self.assertIsNone(parse_game_note_key("lichess:abcd1234"))
-        self.assertEqual(notes.note_key_tag("opening:white:kings-pawn-game:7"),
-                         "knightly::by-opening::white-kings-pawn-game::ply-007")
 
-    def test_order(self):
-        groups = openings.rank([game_from(SICILIAN, white=False, id="a", result="1-0"),
-                                game_from(FRENCH, white=False, id="b", result="0-1")])
-        keys = {"opening:black:french-defense:2", "opening:black:sicilian-defense:6", "lichess:x",
-                "opening:black:sicilian-defense:2", "opening:white:gone:1"}
-        self.assertEqual(opening_order(groups, keys),
-                         ["opening:black:sicilian-defense:2", "opening:black:sicilian-defense:6",
-                          "opening:black:french-defense:2", "opening:white:gone:1"])
+def recent(**kw):
+    import time as _t
+    kw.setdefault("end_ts", int(_t.time()) - 3600)
+    return scholar_game(**kw)
 
-    def test_build_opening_appends_games(self):
-        g1 = scholar_game(id="g1")
-        card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), Config())
-        key = "opening:black:kings-pawn-game:6"
-        n1 = notes.build_opening(key, "King's Pawn Game (Black)", 5, [(g1, SCHOLAR_SCORES, card)])
-        self.assertEqual((n1.cards, n1.new_cards), ("{{c1::1::1}}", 1))
-        self.assertIn("knightly::by-opening::black-kings-pawn-game::ply-006", n1.tags)
-        self.assertIn("knightly::color::black", n1.tags)
-        self.assertTrue(n1.notes.startswith("King&#x27;s Pawn Game (Black), move 3… (ply 6)"))
-        # A second game, another position at the same ply: the first game stays as it was.
-        g2 = game_from(FRENCH + ["b1c3", "g8f6"], white=False, id="g2", url="https://lichess.org/g2")
-        sc = scores_with({5: 30}, 6)
-        table = {fen_key(board_at(g2.moves, 5).fen()): Eval(20, [
-            Line(S(0, 0, 1000, 0), ["f8b4"]), Line(S(600, 600, 400, 0), ["g8f6"])])}
-        card2 = build_card(board_at(g2.moves, 5), 5, "g8f6", FakeAnalyser(table=table), Config(), min_loss=2)
-        n2 = notes.build_opening(key, "King's Pawn Game (Black)", 5, [(g2, sc, card2)], n1.pgn)
-        self.assertEqual((n2.cards, n2.new_cards), ("{{c1::1::1}} {{c2::2::2}}", 1))
-        self.assertTrue(n2.pgn.startswith(n1.pgn.strip()))
-        self.assertEqual(notes.card_ids(n2.pgn), {PUZZLE_FEN: 1, card2.fen_key: 2})
-        self.assertEqual(n2.notes.count("<a href"), 2)
-        golden = FIXTURES / "generated_opening_note.pgn"  # also parsed by card/test/generated.test.ts
-        if os.environ.get("UPDATE_GOLDEN"):
-            golden.write_text(n2.pgn + "\n")
-        self.assertEqual(n2.pgn + "\n", golden.read_text())
+
+CFG = dict(lichess_user="KnightlyMe", stockfish_path="x")
+# A second position like the scholar's (the bishop on b5 instead of c4), where Nf6 is also a mistake.
+B_MOVES = ["e2e4", "e7e5", "d1h5", "b8c6", "f1b5", "g8f6"]
+B_TABLE = {
+    fen_key(board_at(B_MOVES, 5).fen()): Eval(20, [
+        Line(S(-30, 50, 850, 100), ["g7g6", "h5f3"]), Line(S(-20, 55, 850, 95), ["d8e7", "b1c3"]),
+        Line(S(-10, 60, 850, 90), ["d8f6", "b1c3"]), Line(S(400, 800, 200, 0), ["g8f6", "h5f7"])])}
 
 
 class JobsTest(unittest.TestCase):
-    def test_opening_mode_ply_by_ply_across_runs(self):
-        import time as _t
-        c = tmpcache(self)
-        now = int(_t.time())
-        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
-        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
-        c.put_games([sic, fr], "knightlyme")
-        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", note_grouping="opening", max_new_cards=2)
-        an = lambda *a: ScriptedAnalyser([sic, fr], script)  # noqa: E731
-        res = run_update(cfg, c, fetch=False, analyser_factory=an)
-        # The Sicilian (a loss) outranks the French (a win), whatever the game dates; ply 4 before ply 6.
-        self.assertEqual([n.key for n in res.notes],
-                         ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6"])
+    def test_a_mistake_is_one_note_with_two_puzzles(self):
+        c = seed(self, [recent()])
+        res = run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
+        (note,) = res.notes
+        self.assertEqual((note.key, note.new_cards, note.cards), (puzzles.puzzle_key(PUZZLE_FEN, 5), 2, "{{c1::1::1}} {{c2::2::2}}"))
         self.assertEqual(res.new_cards, 2)
-        self.assertEqual(res.order, ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6"])
-        existing = {n.key: n.pgn for n in res.notes}
-        again = run_update(cfg, c, fetch=False, existing=existing, analyser_factory=an)
-        self.assertEqual([n.key for n in again.notes], ["opening:black:french-defense:2"])
-        self.assertEqual(again.order, ["opening:black:sicilian-defense:4", "opening:black:sicilian-defense:6",
-                                       "opening:black:french-defense:2"])
+        self.assertGreater(res.analysed_positions, 0)
+        self.assertTrue(note.notes.startswith("Opening · <a href"))
+        # Second run: the position is on a card already, and nothing about the note changed.
+        again = run_update(Config(**CFG), c, fetch=False, existing={note.key: note.pgn},
+                           analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
+        self.assertEqual((again.new_cards, again.notes), (0, []))
 
-    def test_remake_keeps_cards_and_deprecates_lost_puzzles(self):
-        import time as _t
-        c = tmpcache(self)
-        now = int(_t.time())
-        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
-        sic.url = "https://lichess.org/s1/black"
-        c.put_games([sic], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2)
-        script = {"s1": {5: 30, 3: 12}}
-        made = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic], script))
-        existing = {n.key: n.pgn for n in made.notes}
-        self.assertEqual(len(existing), 1)
-        # Same engine, same code: nothing changes and nothing is deprecated.
-        same = remake_notes(cfg, c, existing, analyser_factory=lambda *a: ScriptedAnalyser([sic], script))
-        self.assertEqual((same.pgns, same.deprecated), ({}, {}))
-        self.assertEqual(same.remade, same.cards)
-        self.assertGreater(same.cards, 0)
-        # The move is no longer a mistake: the card is deprecated and the PGN stays as it was.
-        gone = remake_notes(cfg, c, existing, analyser_factory=lambda *a: ScriptedAnalyser([sic], {"s1": {}}))
-        self.assertEqual(gone.remade, 0)
-        self.assertEqual(list(gone.deprecated.values()), [[1, 2]])
-        self.assertEqual(gone.pgns, {})
+    def test_no_second_puzzle_when_the_reply_is_unknown(self):
+        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser)
+        self.assertEqual([(n.new_cards, n.cards) for n in res.notes], [(1, "{{c1::1::1}}")])
 
-    def test_remake_adds_nags_to_the_other_moves(self):
-        c = tmpcache(self)
-        g = scholar_game()
-        g.url = "https://lichess.org/test0001/black"
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x")
-        c.put_games([g], "knightlyme")
-        card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(), cfg)
-        old = notes.build(g, [None] * 8, [card])  # an old note: evals only, no NAGs on the other moves
-        self.assertNotIn("$6", old.pgn)
+    def test_old_cards_keep_their_positions_off_the_list(self):
+        old = "1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 { [%kr 1] } 4. Qxf7# *"
+        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, existing={"lichess:test0001:opening": old},
+                         analyser_factory=FakeAnalyser)
+        self.assertEqual(res.notes, [])
 
-        class Known(FakeAnalyser):
-            def known(self, keys):
-                return {k: (13, s) for k, s in self.scores.items() if k in keys}
+    def test_ply_by_ply_and_the_card_cap(self):
+        now = int(__import__("time").time())
+        sic = game_from(SICILIAN, white=False, id="s1", end_ts=now - 100)
+        fr = game_from(FRENCH, white=False, id="f1", end_ts=now - 200)
+        script = {"s1": {5: 30}, "f1": {1: 20}}
+        an = lambda *a: ScriptedAnalyser([sic, fr], script)  # noqa: E731
+        res = run_update(Config(**CFG, max_new_cards=5), seed(self, [sic, fr]), fetch=False, analyser_factory=an)
+        # Ply 1 (the French game's) before ply 5, though the Sicilian game is newer.
+        self.assertEqual([n.key.split(":")[1] for n in res.notes], ["1", "5"])
+        one = run_update(Config(**CFG, max_new_cards=1), seed(self, [sic, fr]), fetch=False, analyser_factory=an)
+        self.assertEqual([n.key.split(":")[1] for n in one.notes], ["1"])
+        self.assertTrue(one.finished)  # enough puzzles
 
-        res = remake_notes(cfg, c, {old.key: old.pgn}, analyser_factory=lambda *a: Known())
-        self.assertIn("Qh5 $6", res.pgns[old.key])  # 2. Qh5 lost 6 points
+    def test_opponent_mistakes_come_at_their_ply(self):
+        table = dict(PUNISH_TABLE)
+        table[fen_key(board_at(SCHOLAR_MOVES, 2).fen())] = Eval(20, [
+            Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])])
+        an = lambda *a: FakeAnalyser(table=table)  # noqa: E731
+        c = seed(self, [recent()])
+        ours = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
+        self.assertEqual([n.key.split(":")[1] for n in ours.notes], ["5"])
+        both = run_update(Config(**CFG, include_opponent=True), seed(self, [recent()]), fetch=False, analyser_factory=an)
+        self.assertEqual([(n.key.split(":")[1], "knightly::opponent" in n.tags) for n in both.notes],
+                         [("2", True), ("5", False)])
+
+    def test_repeated_positions_update_the_notes_stats(self):
+        a, b = recent(), recent(id="test0002", end_ts=int(__import__("time").time()) - 60)
+        an = lambda *a_: FakeAnalyser(table=PUNISH_TABLE)  # noqa: E731
+        c = seed(self, [a])
+        first = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
+        self.assertNotIn("Played before", first.notes[0].notes)
+        c.put_games([b], "knightlyme")
+        res = run_update(Config(**CFG), c, fetch=False, existing={first.notes[0].key: first.notes[0].pgn}, analyser_factory=an)
+        (changed,) = res.notes
+        self.assertEqual((changed.key, changed.new_cards, res.new_cards), (first.notes[0].key, 0, 0))
+        self.assertIn("Nf6: played 2 times (you 2, opponents 0; 100% of the 2 games that reached this position).",
+                      changed.notes)
+        self.assertEqual(changed.pgn, first.notes[0].pgn)
+        self.assertEqual(changed.tags, first.notes[0].tags)
+
+    def test_a_similar_position_comments_on_the_old_puzzle_instead_of_a_new_note(self):
+        a = recent()
+        b = recent(id="test0002", moves=list(B_MOVES), end_ts=int(__import__("time").time()) - 60)
+        table = {**PUNISH_TABLE, **B_TABLE}
+
+        def an(*_):
+            f = FakeAnalyser(table=table)
+            f.scores[fen_key(board_at(B_MOVES, 6).fen())] = S(400, 800, 200, 0)
+            return f
+
+        c = seed(self, [a])
+        first = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
+        key = first.notes[0].key
+        c.put_games([b], "knightlyme")
+        res = run_update(Config(**CFG), c, fetch=False, existing={key: first.notes[0].pgn}, analyser_factory=an)
+        (changed,) = res.notes
+        self.assertEqual((changed.key, res.new_cards), (key, 0))
+        self.assertIn("<b>Similar positions</b>", changed.notes)
+        self.assertIn("g6 would also be a good move if the white bishop on c4 was on b5.", changed.notes)
+        self.assertIn("Nf6 would still be a bad move if the white bishop on c4 was on b5.", changed.notes)
+        # Remembered: the similar position is not looked at again, nor is anything rewritten.
+        again = run_update(Config(**CFG), c, fetch=False, existing={key: first.notes[0].pgn}, force=True,
+                           analyser_factory=an)
+        self.assertEqual(again.notes, [])
+
+    def test_a_similar_position_in_the_same_run_rewrites_the_note_just_made(self):
+        a = recent()
+        b = recent(id="test0002", moves=list(B_MOVES), end_ts=int(__import__("time").time()) - 60)
+
+        def an(*_):
+            f = FakeAnalyser(table={**PUNISH_TABLE, **B_TABLE})
+            f.scores[fen_key(board_at(B_MOVES, 6).fen())] = S(400, 800, 200, 0)
+            return f
+
+        res = run_update(Config(**CFG), seed(self, [a, b]), fetch=False, analyser_factory=an)
+        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [(puzzles.puzzle_key(PUZZLE_FEN, 5), 2), (puzzles.puzzle_key(PUZZLE_FEN, 5), 0)])
+        self.assertIn("would also be a good move", res.notes[-1].notes)
+        self.assertNotIn("would also be a good move", res.notes[0].notes)
+
+    def test_a_note_deleted_from_the_collection_is_made_again(self):
+        c = seed(self, [recent()])
+        run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser)
+        again = run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser)
+        self.assertEqual(again.new_cards, 1)
 
     def test_game_nags_grade_every_move(self):
         from knightly.select import game_nags
@@ -647,103 +634,23 @@ class JobsTest(unittest.TestCase):
         g2 = scholar_game(moves=SCHOLAR_MOVES[:5] + ["g8f6"])
         self.assertEqual(game_nags(g2, FakeAnalyser(table=table), cfg), {5: 8})
 
-    def test_game_mode_default(self):
-        import time as _t
-        c = tmpcache(self)
-        now = int(_t.time())
-        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
-        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
-        c.put_games([sic, fr], "knightlyme")
-        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2)
-        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
-        # Newest game first: the French game's card, then the Sicilian's first one.
-        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:f1:opening", 1), ("lichess:s1:opening", 1)])
-        self.assertEqual(res.order, [])
-
-    def test_one_note_per_phase(self):
-        import time as _t
-        c = tmpcache(self)
-        gid, moves, (mid, _) = next(d for d in division_games() if d[0] == "rRWljygz")
-        g = game_from(moves, white=True, id=gid, result="0-1", end_ts=int(_t.time()) - 60)
-        c.put_games([g], "knightlyme")
-        early, late = mid - 6, mid + 4  # White's moves, either side of the middlegame start
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=5)
-        an = lambda *a: ScriptedAnalyser([g], {gid: {early: 20, late: 25}})  # noqa: E731
-        res = run_update(cfg, c, fetch=False, analyser_factory=an)
-        by_key = {n.key: n for n in res.notes}
-        self.assertEqual(set(by_key), {f"lichess:{gid}:opening", f"lichess:{gid}:middlegame"})
-        for phase in ("opening", "middlegame"):
-            n = by_key[f"lichess:{gid}:{phase}"]
-            self.assertEqual(n.new_cards, 1)
-            self.assertEqual([t for t in n.tags if "::phase::" in t], [f"knightly::phase::{phase}"])
-            self.assertIn("knightly::color::white", n.tags)
-            self.assertIn("knightly::result::loss", n.tags)
-        self.assertIn("knightly::severity::mistake", by_key[f"lichess:{gid}:opening"].tags)
-        self.assertIn("knightly::severity::blunder", by_key[f"lichess:{gid}:middlegame"].tags)
-        # Next run: both notes are known, nothing new to add.
-        again = run_update(cfg, c, fetch=False, existing={k: n.pgn for k, n in by_key.items()}, analyser_factory=an)
-        self.assertEqual(again.new_cards, 0)
-
-    def test_ranked_mode(self):
-        import time as _t
-        c = tmpcache(self)
-        now = int(_t.time())
-        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
-        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
-        c.put_games([sic, fr], "knightlyme")
-        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2, note_grouping="ranked")
-        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
-        # Biggest scores first, whatever the game: 30 (a loss) beats 20 × 0.6 (a win) and 12.
-        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [("lichess:s1:opening", 1), ("lichess:f1:opening", 1)])
-
-    def test_motif_mode(self):
-        import time as _t
-        c = tmpcache(self)
-        now = int(_t.time())
-        sic = game_from(SICILIAN, white=False, id="s1", result="1-0", end_ts=now - 100)
-        fr = game_from(FRENCH, white=False, id="f1", result="0-1", end_ts=now - 50)
-        c.put_games([sic, fr], "knightlyme")
-        script = {"s1": {5: 30, 3: 12}, "f1": {1: 20}}
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x", max_new_cards=2, note_grouping="motif")
-        res = run_update(cfg, c, fetch=False, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
-        # One note per motif, games from any opening in it, biggest mistakes first.
-        self.assertEqual(res.new_cards, 2)
-        self.assertTrue(all(n.key.startswith("motif:") for n in res.notes))
-        self.assertEqual(res.order, [n.key for n in res.notes])
-        for n in res.notes:
-            self.assertIn(notes.note_key_tag(n.key), n.tags)
-            self.assertTrue(any(t.startswith("knightly::motif::") for t in n.tags))
-        existing = {n.key: n.pgn for n in res.notes}
-        again = run_update(cfg, c, fetch=False, existing=existing, analyser_factory=lambda *a: ScriptedAnalyser([sic, fr], script))
-        self.assertEqual(again.new_cards, 1)
-
     def test_run_update_without_fetch(self):
-        c = tmpcache(self)
-        g = scholar_game(end_ts=int(__import__("time").time()) - 3600)
-        c.put_games([g], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
-        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
+        c = seed(self, [recent()])
+        res = run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser)
         self.assertEqual((res.new_cards, len(res.notes)), (1, 1))
-        self.assertGreater(res.analysed_positions, 0)
-        # Second run: the position is on a card already, so nothing new.
-        again = run_update(cfg, c, fetch=False, existing={g.key: res.notes[0].pgn}, analyser_factory=FakeAnalyser)
-        self.assertEqual((again.new_cards, again.notes), (0, []))
 
     def test_skips_when_nothing_changed(self):
-        import time as _t
-        c = tmpcache(self)
-        g = scholar_game(end_ts=int(_t.time()) - 3600)
-        c.put_games([g], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
+        c = seed(self, [recent()])
+        cfg = Config(**CFG)
         calls = []
+
         def factory(*a):
             calls.append(1)
             return FakeAnalyser(*a)
+
         run = lambda cfg=cfg, **kw: run_update(cfg, c, fetch=False, analyser_factory=factory, **kw)  # noqa: E731
         first = run()
-        existing = {g.key: first.notes[0].pgn}
+        existing = {first.notes[0].key: first.notes[0].pgn}
         self.assertFalse(run().skipped)  # cards were made last time and may never have been written
         run(existing=existing)  # settles: the new card is on the collection now
         n = len(calls)
@@ -751,64 +658,38 @@ class JobsTest(unittest.TestCase):
         self.assertTrue(again.skipped)
         self.assertEqual((len(calls), again.notes, again.analysed_positions), (n, [], 0))
         self.assertFalse(run(existing=existing, force=True).skipped)
-        # A deleted card frees its position, a setting change or a new game changes the inputs.
-        self.assertFalse(run().skipped)
-        self.assertFalse(run(Config(lichess_user="KnightlyMe", stockfish_path="unused", min_loss=20), existing=existing).skipped)
-        c.put_games([scholar_game(end_ts=int(_t.time()) - 60, id="other")], "knightlyme")
+        # A setting change or a new game changes the inputs.
+        self.assertFalse(run(Config(**CFG, min_loss=20), existing=existing).skipped)
+        c.put_games([recent(end_ts=int(__import__("time").time()) - 60, id="other")], "knightlyme")
         self.assertFalse(run(existing=existing).skipped)
 
-    def test_on_note_gets_each_note_as_its_card_is_built(self):
-        import time as _t
-        c = tmpcache(self)
-        c.put_games([scholar_game(end_ts=int(_t.time()) - 3600)], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
+    def test_on_note_gets_each_note_as_it_is_built(self):
         seen = []
-        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser, on_note=seen.append)
-        self.assertEqual(res.new_cards, 1)
-        self.assertEqual(seen, res.notes)
+        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser, on_note=seen.append)
+        self.assertEqual((res.new_cards, seen), (1, res.notes))
         # A cancel after the first note keeps it in the result.
-        c2 = tmpcache(self)
-        c2.put_games([scholar_game(end_ts=int(_t.time()) - 3600)], "knightlyme")
         ev = threading.Event()
-
-        def stop(spec):
-            ev.set()
-
-        res = run_update(cfg, c2, fetch=False, analyser_factory=FakeAnalyser, on_note=stop, cancel=ev)
+        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser,
+                         on_note=lambda spec: ev.set(), cancel=ev)
         self.assertEqual(len(res.notes), 1)
 
-    def test_precalculate_saves_candidates_for_the_next_update(self):
-        import time as _t
-        c = tmpcache(self)
-        g = scholar_game(end_ts=int(_t.time()) - 3600)
-        c.put_games([g], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
-        pre = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser, precalculate=True)
-        self.assertEqual((pre.new_cards, pre.notes, pre.skipped), (0, [], False))  # candidates only, no cards
-        self.assertTrue(c.get("confirmed")["confirmed"])
-        saved = {tuple(x) for x in c.get("confirmed")["confirmed"]}
-        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
-        self.assertEqual(res.new_cards, 1)  # made from the saved candidates
-        self.assertTrue(saved <= {tuple(x) for x in c.get("confirmed")["confirmed"]})
-        # A change that affects which moves are mistakes drops the saved candidates.
-        from knightly.jobs import precalc_signature
-        self.assertNotEqual(precalc_signature(cfg), precalc_signature(Config(lichess_user="KnightlyMe", stockfish_path="unused", min_loss=20)))
-        self.assertEqual(precalc_signature(cfg), precalc_signature(Config(lichess_user="x", stockfish_path="unused", max_new_cards=99)))
+    def test_precalculate_only_analyses(self):
+        c = seed(self, [recent()])
+        pre = run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser, precalculate=True)
+        self.assertEqual((pre.new_cards, pre.notes, pre.skipped), (0, [], False))
+        self.assertGreater(pre.analysed_positions, 0)
+        self.assertEqual(run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser).new_cards, 1)
 
     def test_unfinished_run_is_not_skipped(self):
-        import time as _t
-        c = tmpcache(self)
-        c.put_games([scholar_game(end_ts=int(_t.time()) - 3600)], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused", analysis_minutes=1e-9)
+        c = seed(self, [recent()])
+        cfg = Config(**CFG, analysis_minutes=1e-9)
         run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)  # budget ran out at once
         self.assertFalse(run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser).skipped)
 
     def test_progress_events(self):
-        c = tmpcache(self)
-        c.put_games([scholar_game(end_ts=int(__import__("time").time()))], "knightlyme")
         events = []
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused", max_new_cards=3)
-        run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser, progress=lambda *e: events.append(e))
+        run_update(Config(**CFG, max_new_cards=3), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser,
+                   progress=lambda *e: events.append(e))
         pos = [(d, t) for s, d, t, _ in events if s == "positions"]
         self.assertTrue(pos)
         self.assertTrue(all(0 <= d <= t for d, t in pos))
@@ -816,69 +697,59 @@ class JobsTest(unittest.TestCase):
 
     def test_newest_game_gets_a_shared_mistake(self):
         import time as _t
-        c = tmpcache(self)
         now = int(_t.time())
         old_li = scholar_game(id="old", end_ts=now - 7200)
         new_cc = scholar_game(source="chesscom", id="new", end_ts=now - 60)
+        c = tmpcache(self)
         c.put_games([old_li], "knightlyme")
         c.put_games([new_cc], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", chesscom_user="KnightlyMe", stockfish_path="x")
-        res = run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)
-        self.assertEqual([n.key for n in res.notes], [new_cc.key + ":opening"])
+        res = run_update(Config(**CFG, chesscom_user="KnightlyMe"), c, fetch=False, analyser_factory=FakeAnalyser)
+        self.assertEqual(len(res.notes), 1)
+        self.assertIn(new_cc.url, res.notes[0].pgn)  # made from the newest game that played it
 
     def test_cancel(self):
         ev = threading.Event()
         ev.set()
-        c = tmpcache(self)
-        c.put_games([scholar_game(end_ts=int(__import__("time").time()))], "knightlyme")
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="unused")
 
         class Cancelling(FakeAnalyser):
             def score(self, board, depth):
                 raise http.Cancelled()
 
-        self.assertTrue(run_update(cfg, c, fetch=False, cancel=ev, analyser_factory=Cancelling).cancelled)
+        self.assertTrue(run_update(Config(**CFG), seed(self, [recent()]), fetch=False, cancel=ev,
+                                   analyser_factory=Cancelling).cancelled)
 
 
-class DeepenTest(unittest.TestCase):
-    """Analysis by increasing depth (deepen.py)."""
+class PipelineTest(unittest.TestCase):
+    """The ply-by-ply mining (pipeline.py)."""
 
-    def setUp(self):
-        self.sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
-        self.fr = game_from(FRENCH, white=False, id="f1", end_ts=100)
-        self.cfg = Config(sf_depth=3, max_new_cards=5)
+    def test_depth_steps(self):
+        self.assertEqual(pipeline.depth_steps(13), [5, 9, 13])
+        self.assertEqual(pipeline.depth_steps(20), [8, 14, 20])
+        self.assertEqual(pipeline.depth_steps(3), [3])
+        self.assertEqual(pipeline.scan_steps(13), [5, 9])
+        self.assertEqual(pipeline.scan_steps(3), [3])
 
-    def run_deepener(self, script, **kw):
-        an = ScriptedAnalyser([self.sic, self.fr], script)
-        p = deepen.collect([self.sic, self.fr], self.cfg)
-        dp = deepen.Deepener(p, an, self.cfg, threshold=self.cfg.min_loss, card_min_loss=None, opponents={},
-                             want=self.cfg.max_new_cards, **kw)
-        dp.run()
-        return p, an, dp
+    def mine(self, games, script, cfg=None, **kw):
+        cfg = cfg or Config(sf_depth=13, max_new_cards=9)
+        an = ScriptedAnalyser(games, script)
+        m = pipeline.Miner(sorted(games, key=lambda g: -g.end_ts), an, cfg, puzzles.Store(tmpcache(self)),
+                           want=cfg.max_new_cards, **kw)
+        m.run()
+        return m, an
 
-    def test_collect_counts_games(self):
-        p = deepen.collect([self.sic, self.fr], self.cfg)
-        start, after_e4 = p.keys["lichess:s1"][:2]
-        self.assertEqual((p.count[start], p.count[after_e4]), (2, 2))
-        self.assertEqual(p.order[:2], [start, after_e4])  # most-seen first
-        self.assertTrue(all(e.mine for e in p.edges))  # Black's moves only
-        self.assertEqual(len(p.edges), 5 + 2)
-
-    def test_depth_one_first_most_seen_first(self):
-        p, an, dp = self.run_deepener({})
-        first = len(p.fen)
-        self.assertEqual({d for _, d in an.searched[:first]}, {1})
-        self.assertEqual([k for k, _ in an.searched[:2]], p.order[:2])
-        # No mistakes: everything is deepened to the configured depth in the end.
-        self.assertTrue(all(dp.depth[k] >= 3 for k in p.fen))
-        self.assertEqual(dp.confirmed, set())
-
-    def test_candidates_climb_first(self):
-        p, an, dp = self.run_deepener({"s1": {5: 30}})
-        ks = p.keys["lichess:s1"]
-        depth2 = [k for k, d in an.searched if d == 2]
-        self.assertEqual(set(depth2[:2]), {ks[5], ks[6]})
-        self.assertEqual(dp.confirmed, {(ks[5], SICILIAN[5])})
+    def test_the_biggest_losses_are_promoted_first_and_small_ones_dropped(self):
+        g1 = game_from(SICILIAN, white=False, id="g1", end_ts=300)
+        g2 = game_from(["d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"], white=False, id="g2", end_ts=200)
+        g3 = game_from(["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"], white=False, id="g3", end_ts=100)
+        m, an = self.mine([g1, g2, g3], {"g1": {5: 30}, "g2": {5: 15}, "g3": {5: 0.2}})
+        child = lambda g: fen_key(board_at(g.moves, 6).fen())  # noqa: E731
+        at = lambda k, d: [i for i, s in enumerate(an.searched) if s == (k, d)]  # noqa: E731
+        self.assertTrue(all(at(child(g), 5) for g in (g1, g2, g3)))  # every move of every position, first
+        self.assertTrue(at(child(g1), 9) and at(child(g2), 9))
+        self.assertLess(at(child(g1), 9)[0], at(child(g2), 9)[0])  # the bigger loss first
+        self.assertEqual(at(child(g3), 9), [])  # 0.2 % is nothing: dropped at the first step
+        self.assertEqual([n.key for n in m.notes][:2], [puzzles.puzzle_key(board_at(g.moves, 5).fen(), 5) for g in (g1, g2)])
+        self.assertEqual(len(m.notes), 2)
 
     def test_time_budget(self):
         t = [0.0]
@@ -888,14 +759,64 @@ class DeepenTest(unittest.TestCase):
                 t[0] += 10  # seconds per position
                 return super().score(board, depth)
 
-        cfg = Config(sf_depth=3, analysis_minutes=1)
-        an = Slow([self.sic, self.fr], {"s1": {5: 30}})
-        p = deepen.collect([self.sic, self.fr], cfg)
-        dp = deepen.Deepener(p, an, cfg, threshold=cfg.min_loss, card_min_loss=None, opponents={}, want=5,
-                             clock=lambda: t[0])
-        dp.run()
-        self.assertEqual(dp.analysed, 6)
-        self.assertEqual(dp.confirmed, set())
+        sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
+        cfg = Config(sf_depth=13, analysis_minutes=1, max_new_cards=5)
+        m = pipeline.Miner([sic], Slow([sic], {"s1": {5: 30}}), cfg, puzzles.Store(tmpcache(self)), want=5, clock=lambda: t[0])
+        m.run()
+        self.assertEqual((m.analysed, m.notes, m.finished), (6, [], False))
+
+
+class StatsTest(unittest.TestCase):
+    def test_collect_counts_moves_by_side(self):
+        a = game_from(SICILIAN, white=False, id="s1", end_ts=200)
+        b = game_from(FRENCH, white=True, id="f1", end_ts=100)  # the user is White here
+        by_ply = stats.collect([a, b])
+        start = by_ply[0][fen_key(chess.Board().fen())]
+        self.assertEqual({u: (st.mine, st.opp) for u, st in start.moves.items()}, {"e2e4": (1, 1)})
+        after_e4 = by_ply[1][fen_key(board_at(SICILIAN, 1).fen())]
+        self.assertEqual({u: (st.mine, st.opp) for u, st in after_e4.moves.items()}, {"c7c5": (1, 0), "e7e6": (0, 1)})
+        self.assertEqual(after_e4.moves["c7c5"].mine_game, a)  # the newest game that played it
+
+    def test_lines_only_for_repeated_moves(self):
+        a = game_from(SICILIAN, white=False, id="s1", end_ts=200)
+        b = game_from(SICILIAN, white=True, id="s2", end_ts=100)
+        c = game_from(FRENCH, white=False, id="f1", end_ts=50)
+        by_ply = stats.collect([a, b, c])
+        start = by_ply[0][fen_key(chess.Board().fen())]
+        self.assertEqual(stats.lines(start), ["e4: played 3 times (you 1, opponents 2; 100% of the 3 games that reached this position)."])
+        after_e4 = by_ply[1][fen_key(board_at(SICILIAN, 1).fen())]
+        self.assertEqual(stats.lines(after_e4, "Then "),
+                         ["Then c5: played 2 times (you 1, opponents 1; 67% of the 3 games that reached this position)."])
+        self.assertEqual(stats.lines(None), [])
+
+
+class SimilarTest(unittest.TestCase):
+    def boards(self, a, b):
+        return board_at(a, len(a)), board_at(b, len(b))
+
+    def test_similar_means_same_side_and_few_squares(self):
+        scholar, bishop_b5 = self.boards(SCHOLAR_MOVES[:5], B_MOVES[:5])
+        self.assertTrue(similar.is_similar(scholar, bishop_b5))
+        self.assertFalse(similar.is_similar(scholar, board_at(SCHOLAR_MOVES, 4)))  # the other side to move
+        self.assertFalse(similar.is_similar(scholar, chess.Board()))
+        self.assertTrue(similar.is_similar(scholar, scholar))  # the same position at another ply
+
+    def test_describe(self):
+        scholar, bishop_b5 = self.boards(SCHOLAR_MOVES[:5], B_MOVES[:5])
+        self.assertEqual(similar.describe(scholar, bishop_b5), "the white bishop on c4 was on b5")
+        a = chess.Board("4k3/8/8/8/8/8/P7/4K3 w - - 0 1")
+        b = chess.Board("4k3/8/8/8/8/8/PP6/4K3 w - - 0 1")
+        self.assertEqual(similar.describe(a, b), "there was a white pawn on b2")
+        c = chess.Board("4k3/8/8/8/8/8/8/4K3 w - - 0 1")
+        self.assertEqual(similar.describe(a, c), "the white pawn on a2 was gone")
+        self.assertIn("same position", similar.describe(a, a))
+
+    def test_comments(self):
+        w = "the pawn was on h4"
+        self.assertEqual(similar.comment("Ng4", True, True, w), "Ng4 would also be a good move if the pawn was on h4.")
+        self.assertEqual(similar.comment("Ng4", True, False, w), "Ng4 would not be a good move if the pawn was on h4.")
+        self.assertEqual(similar.comment("Be3", False, True, w), "Be3 is not a good move, but it would be if the pawn was on h4.")
+        self.assertEqual(similar.comment("Be3", False, False, w), "Be3 would still be a bad move if the pawn was on h4.")
 
 
 class AnalyserTest(unittest.TestCase):

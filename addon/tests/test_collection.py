@@ -32,7 +32,9 @@ class CollectionTest(unittest.TestCase):
         self.card_dir = self.dir / "card"
         shutil.copytree(ADDON / "knightly_review" / "card", self.card_dir)
 
-    def spec(self, key="lichess:abcd1234:opening", cards="{{c1::1::1}}", pgn="1. e4 { [%kr 1] } e5 *",
+    KEY = "puzzle:5:abcdef123456"
+
+    def spec(self, key=KEY, cards="{{c1::1::1}}", pgn="1. e4 { [%kr 1] } e5 *",
              tags=("knightly::phase::opening",)):
         from knightly_review.vendor.knightly import notes as kn
         from knightly_review.vendor.knightly.model import NoteSpec
@@ -70,7 +72,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(self.kc.count_notes(self.col), 1)  # already there before the run ends
         two = self.spec(cards="{{c1::1::1}}\n{{c2::2::1}}", pgn="1. e4 { [%kr 1] } e5 { [%kr 2] } *")
         w.add(two)  # the same note, updated in place
-        w.add(self.spec(key="lichess:other000:opening"))
+        w.add(self.spec(key="puzzle:6:fedcba654321"))
         self.assertEqual(self.kc.count_notes(self.col), 2)
         w.finish()
         self.assertTrue(w.clean)
@@ -85,7 +87,7 @@ class CollectionTest(unittest.TestCase):
         other = self.col.new_note(self.col.models.by_name(self.kc.MODEL))
         other["PGN"] = "x"
         self.col.add_note(other, self.col.decks.id("K"))  # the user's own change in between
-        w.add(self.spec(key="lichess:other000:opening"))
+        w.add(self.spec(key="puzzle:6:fedcba654321"))
         w.finish()
         self.assertFalse(w.clean)
         self.col.undo()  # undoes only the last write
@@ -95,42 +97,13 @@ class CollectionTest(unittest.TestCase):
         self.kc.ensure_installed(self.col, self.card_dir)
         self.kc.apply_notes(self.col, [self.spec()], "Chess::Knightly")
         self.assertEqual(self.col.card_count(), 1)
-        self.assertEqual(self.kc.existing_notes(self.col), {"lichess:abcd1234:opening": "1. e4 { [%kr 1] } e5 *"})
+        self.assertEqual(self.kc.existing_notes(self.col), {self.KEY: "1. e4 { [%kr 1] } e5 *"})
         two = self.spec(cards="{{c1::1::1}} {{c2::2::2}}", pgn="1. e4 { [%kr 1] } e5 { [%kr 2] } *")
         self.kc.apply_notes(self.col, [two], "Chess::Knightly")
         self.assertEqual(self.col.note_count(), 1)
         self.assertEqual(self.col.card_count(), 2)
         self.assertIn("Chess::Knightly", [d.name for d in self.col.decks.all_names_and_ids()])
         self.assertEqual(self.kc.count_notes(self.col), 1)
-
-    def test_apply_remake_updates_pgn_suspends_and_tags(self):
-        self.kc.ensure_installed(self.col, self.card_dir)
-        key = "lichess:abcd1234:opening"
-        self.kc.apply_notes(self.col, [self.spec(key, cards="{{c1::1::1}} {{c2::2::2}}")], "KR")
-        nid = self.col.find_notes(f'"note:{self.kc.MODEL}"')[0]
-        self.col.get_note(nid).add_tag("mine")
-        self.kc.apply_remake(self.col, {key: "1. d4 { [%kr 1] } d5 *"}, {key: [2]})
-        note = self.col.get_note(nid)
-        self.assertIn("d4", note["PGN"])
-        self.assertIn("knightly::deprecated", note.tags)
-        cards = {c.ord: c for c in map(self.col.get_card, self.col.card_ids_of_note(nid))}
-        self.assertEqual({o: c.queue for o, c in cards.items()}, {0: 0, 1: -1})  # only cloze 2 suspended
-        # A later regular update of the note keeps the deprecated tag.
-        self.kc.apply_notes(self.col, [self.spec(key, cards="{{c1::1::1}} {{c2::2::2}}")], "KR")
-        self.assertIn("knightly::deprecated", self.col.get_note(nid).tags)
-
-    def test_remake_due_follows_the_generator_version(self):
-        from knightly_review.vendor.knightly import notes as kn
-
-        self.kc.ensure_installed(self.col, self.card_dir)
-        self.assertFalse(self.kc.remake_due(self.col))  # no notes yet: marked current
-        self.assertEqual(self.col.get_config(self.kc.VERSION_KEY), kn.GENERATOR_VERSION)
-        self.kc.apply_notes(self.col, [self.spec()], "KR")
-        self.assertFalse(self.kc.remake_due(self.col))
-        self.col.set_config(self.kc.VERSION_KEY, kn.GENERATOR_VERSION - 1)  # cards from an older generator
-        self.assertTrue(self.kc.remake_due(self.col))
-        self.kc.mark_remade(self.col)
-        self.assertFalse(self.kc.remake_due(self.col))
 
     def test_sibling_bury_hint(self):
         self.kc.ensure_installed(self.col, self.card_dir)
@@ -156,56 +129,26 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("knightly::severity::blunder", tags)
         self.assertNotIn("knightly::severity::mistake", tags)
         self.assertIn("my-own", tags)
-        self.assertIn(self.kc.kn.note_key_tag("lichess:abcd1234:opening"), tags)
+        self.assertIn(self.kc.kn.note_key_tag(self.KEY), tags)
 
-    def test_opening_notes_and_reposition(self):
+    def test_existing_notes_lists_puzzles_by_key_and_older_notes_as_legacy(self):
         self.kc.ensure_installed(self.col, self.card_dir)
-        game = self.spec(key="lichess:old1:opening")
-        self.kc.apply_notes(self.col, [game], "Chess::Knightly")
-        a, b = "opening:black:french-defense:2", "opening:black:sicilian-defense:4"
-        two = "{{c1::1::1}} {{c2::2::2}}"
-        pgn2 = "1. e4 { [%kr 1] } e5 { [%kr 2] } *"
-        self.kc.apply_notes(self.col, [self.spec(key=a, cards=two, pgn=pgn2), self.spec(key=b)], "Chess::Knightly")
-        self.assertEqual(set(self.kc.existing_notes(self.col)), {"lichess:old1:opening", a, b})
-
-        def queue():
-            cids = self.col.find_cards('"note:Knightly Review" is:new')
-            cards = sorted((self.col.get_card(c) for c in cids), key=lambda c: c.due)
-            return [(self.kc.key_from_tags(c.note().tags), c.ord) for c in cards]
-
-        # The Sicilian became the more important opening: its cards go first, then the French note's in
-        # cloze order; the game note's card is shifted after them.
-        self.kc.apply_notes(self.col, [], "Chess::Knightly", [b, a])
-        self.assertEqual(queue(), [(b, 0), (a, 0), (a, 1), ("lichess:old1:opening", 0)])
-        # Studied cards are left alone.
-        first_a = next(c for c in self.col.find_cards(f'"tag:{self.kc.kn.note_key_tag(a)}"')
-                       if self.col.get_card(c).ord == 0)
-        card = self.col.get_card(first_a)
-        card.type = card.queue = 1
-        self.col.update_card(card)
-        self.assertEqual(self.kc.reposition_new(self.col, [a, b]), 2)
-        self.assertEqual(queue(), [(a, 1), (b, 0), ("lichess:old1:opening", 0)])
-
-    def test_motif_notes_are_found_again_and_keep_their_tags(self):
-        self.kc.ensure_installed(self.col, self.card_dir)
-        key = "motif:fork:1"
-        tag = "knightly::motif::fork"
-        self.kc.apply_notes(self.col, [self.spec(key=key, tags=(tag,))], "Chess::Knightly", [key])
-        self.assertEqual(list(self.kc.existing_notes(self.col)), [key])
-        # A later run adds a game with another motif: the note keeps the earlier tags (like an opening note).
-        two = "{{c1::1::1}} {{c2::2::2}}"
-        self.kc.apply_notes(self.col, [self.spec(key=key, cards=two, tags=("knightly::motif::pin",))], "Chess::Knightly")
-        (nid,) = self.col.find_notes(f'"tag:{self.kc.kn.note_key_tag(key)}"')
-        tags = set(self.col.get_note(nid).tags)
-        self.assertTrue({tag, "knightly::motif::pin"} <= tags)
-        self.assertEqual(len(self.col.find_cards(f'"tag:{self.kc.kn.note_key_tag(key)}"')), 2)
+        self.kc.apply_notes(self.col, [self.spec()], "Chess::Knightly")
+        old = self.col.new_note(self.col.models.by_name(self.kc.MODEL))
+        old["PGN"], old["Cards"] = "1. d4 { [%kr 1] } d5 *", "{{c1::1::1}}"
+        old.add_tag("knightly")
+        old.add_tag("knightly::game::lichess-old1::opening")  # made by an earlier version
+        self.col.add_note(old, self.col.decks.id("Chess::Knightly"))
+        found = self.kc.existing_notes(self.col)
+        self.assertEqual(found[self.KEY], "1. e4 { [%kr 1] } e5 *")
+        self.assertEqual(found[f"legacy:{old.id}"], "1. d4 { [%kr 1] } d5 *")
+        self.assertEqual(len(found), 2)
 
     def test_key_from_tags(self):
-        self.assertEqual(self.kc.key_from_tags(["x", "knightly::game::chesscom-123::endgame"]), "chesscom:123:endgame")
-        self.assertIsNone(self.kc.key_from_tags(["knightly::game::chesscom-123"]))  # from before phases
+        self.assertEqual(self.kc.key_from_tags(["x", self.kc.kn.note_key_tag(self.KEY)]), self.KEY)
+        self.assertEqual(self.kc.kn.note_key_tag(self.KEY), "knightly::puzzle::005-abcdef123456")
         self.assertIsNone(self.kc.key_from_tags(["knightly"]))
-        self.assertEqual(self.kc.key_from_tags(["knightly::by-opening::white-kings-pawn-game::ply-007"]),
-                         "opening:white:kings-pawn-game:7")
+        self.assertIsNone(self.kc.key_from_tags(["knightly::game::chesscom-123::endgame"]))  # an older version's
 
 
 if __name__ == "__main__":

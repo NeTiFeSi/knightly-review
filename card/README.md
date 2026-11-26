@@ -82,9 +82,10 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
 - **Back side:** at the puzzle position only the accepted moves, the game move and your move are
   listed; "+ N more" shows the rejected ones.
 - **What each side shows:**
-  - Front: the mainline only. The NAG, comment, eval and arrows of every tagged move in the note are
-    hidden, and so are the eval and arrows of the position before each one.
-  - Back: the mainline plus this card's variations only. Other cards' tagged moves stay hidden.
+  - Front: the mainline only. The NAG of every move is shown; the comment, eval and arrows of every
+    tagged move in the note are hidden, and so are the eval and arrows of the position before each one.
+  - Back: the mainline plus this card's variations only. Other cards' tagged moves stay hidden,
+    NAG included.
   - The same game can appear in other notes with different tags.
 
 - **Hints:** `[%hint text]` on the tagged move is shown as the first hint. The next hint circles the

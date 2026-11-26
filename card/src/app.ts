@@ -13,6 +13,7 @@ import { nagInfo } from './nag';
 import {
   allPuzzleMoves,
   annotationsHidden,
+  nagHidden,
   evalHidden,
   shapesHidden,
   findNode,
@@ -941,7 +942,7 @@ export class App {
 
   /** The move's classification as a round badge on the corner of the square it landed on. */
   private nagBadge(node: KNode): DrawShape | undefined {
-    if (!node.move || annotationsHidden(node, this.view)) return undefined;
+    if (!node.move || nagHidden(node, this.view)) return undefined;
     const info = nagInfo(node.nags);
     if (!info) return undefined;
     const dest = chessgroundMove(node.move)[1] as Key;
@@ -1243,7 +1244,7 @@ export class App {
     m.setAttribute('role', 'button');
     m.tabIndex = -1;
     m.appendChild(h('span', 'kr-san', n.san));
-    const info = hideAnn ? undefined : nagInfo(n.nags);
+    const info = nagHidden(n, this.view) ? undefined : nagInfo(n.nags);
     if (info) {
       m.classList.add('kr-nag-' + info.cls);
       const g = h('span', 'kr-glyph', info.glyph);

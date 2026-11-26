@@ -136,11 +136,9 @@ export const scenarios = [
   },
   {
     name: 'nag-badge',
-    about: "A move's classification shows as a badge on the board (back: the game's move; hidden on the front)",
+    about: "A move's classification shows as a badge on the board (shown on the front for any visible move, and on the back)",
     async run(t, ctx) {
       let page = await fresh(t, ctx);
-      const count = () => page.evaluate(() => document.querySelectorAll('.cg-custom-svgs text').length);
-      expect((await count()) === 0, 'the front must not show a badge on the puzzle move');
       await card.setOverrides(page, { ...BASE, afterAnswer: 'flip', flipDelay: 200 });
       await card.waitMounted(page, 'front');
       await card.click(page, '.kr-giveup');
