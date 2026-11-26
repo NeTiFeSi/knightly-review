@@ -136,7 +136,7 @@ describe('forced mates', () => {
 [SetUp "1"]
 
 1. h3 $4 { [%eval 4.5] [%kr 1] } ( 1. Ra8# $1 { [%eval #1] } ) ( 1. Ra7 $1 { [%eval #3] } ) ( 1. Kf1 $1 { [%eval 6.5] } ) 1... h6 *`;
-  const mateRun = (strict = false) => new PuzzleRun(findPuzzle(parseGames(PGN), 1)!.position, DEFAULT_ACCEPT, undefined, undefined, strict);
+  const mateRun = (strict = false) => new PuzzleRun(findPuzzle(parseGames(PGN), 1)!.position, DEFAULT_ACCEPT, undefined, strict);
 
   it('accepts any move that keeps a forced mate, and nothing else', () => {
     expect(mateRun().accepted().map(n => n.san)).toEqual(['Ra8#', 'Ra7']);

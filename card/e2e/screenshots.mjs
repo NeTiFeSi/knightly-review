@@ -15,7 +15,6 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import * as card from './lib/card.mjs';
 import { CARD_DIR, puppeteer, until as poll, wait } from './lib/common.mjs';
-import { bestMove } from './lib/uci.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,7 +41,7 @@ function serve() {
   return new Promise(r => server.listen(0, '127.0.0.1', () => r(server)));
 }
 
-const SETTINGS = { intro: 'lastMove', afterAnswer: 'stay', autoReplyDelay: 300, hints: true, showEval: true, live: false };
+const SETTINGS = { intro: 'lastMove', afterAnswer: 'stay', autoReplyDelay: 300, hints: true, showEval: true };
 
 /** Right-click drag from one square to another: chessground draws an arrow. */
 async function drawArrow(page, from, to, { shift = false } = {}) {
@@ -190,28 +189,7 @@ async function main() {
     await card.closeSettings(page);
 
     if (REAL) {
-      // 7. Live play: past the stored moves, the engine keeps the puzzle going.
-      await fresh({ ...SETTINGS, live: true });
-      for (const m of sol.line) {
-        await card.play(page, m.uci, 'mouse');
-        await wait(SETTINGS.autoReplyDelay + 400);
-      }
-      let s;
-      for (let i = 0; i < 15; i++) {
-        s = await poll(async () => {
-          const r = await card.read(page);
-          return /thinking|Checking/.test(r.status) ? null : r;
-        }, 'the engine', 30000);
-        if (/Solved|✗/.test(s.status)) break;
-        await wait(300);
-        const fen = await page.evaluate(() => document.getElementById('kr-root').getAttribute('data-fen'));
-        await card.play(page, await bestMove(fen), 'mouse');
-        await wait(SETTINGS.autoReplyDelay + 400);
-      }
-      await wait(500);
-      await shot('live-play');
-
-      // 8. The add-on's own windows, saved by the test-only helper add-on (e2e/helper/kr_shots).
+      // 7. The add-on's own windows, saved by the test-only helper add-on (e2e/helper/kr_shots).
       for (const [what, name] of [['settings', 'addon-settings'], ['engine', 'stockfish'], ['progress', 'progress']]) {
         const r = await fetch(`http://127.0.0.1:8767/shot?what=${what}&file=${encodeURIComponent(OUT + name + '.png')}`);
         if (!r.ok) throw new Error('helper add-on failed for ' + what + ': ' + (await r.text()) + ' (see e2e/README.md: kr_shots)');

@@ -129,7 +129,9 @@ class Choice:
     move: str  # UCI
     nag: int
     score: Score  # after the move (White's view)
-    reply: list[str] = field(default_factory=list)  # continuation after the move
+    children: list["Choice"] = field(default_factory=list)  # what follows the move, best first (the solution tree)
+    comment: str = ""  # shown with the move (why the line ends here…)
+    tag: int = 0  # cloze number of the puzzle whose answer this move is (written as [%kr N])
 
 
 @dataclass
@@ -142,6 +144,7 @@ class CardSpec:
     comment: str = ""
     mine: bool = True
     motifs: list[str] = field(default_factory=list)  # tactical motifs of the best move, main one first
+    mate: bool = False  # the best move mates by force (the tree follows mates to the end, see follow.py)
 
 
 @dataclass

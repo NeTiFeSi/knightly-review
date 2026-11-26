@@ -38,8 +38,11 @@ export interface KNode {
   hint?: string;
   /** `[%kr N]` tag on this move. */
   puzzleId?: number;
-  /** Played with the live engine (not in the PGN). */
-  live?: boolean;
+  /**
+   * A position written elsewhere in the note (the same fen key, with moves under it): this node continues
+   * like it. Set while parsing on leaves, and on the copies `expandAlias` makes.
+   */
+  alias?: KNode;
   parent?: KNode;
   children: KNode[];
 }
@@ -120,6 +123,7 @@ export function parseGames(pgn: string): KGame[] {
       children: [],
     };
     build(g.moves, root, pos);
+    linkAliases(root);
     games.push({ index, headers: g.headers, root });
   });
   return games;
@@ -160,14 +164,68 @@ function build(src: PgnNode<PgnNodeData>, parent: KNode, pos: Position): void {
   });
 }
 
+/** FEN without the move counters: positions equal whatever move order reached them. */
+export function fenKey(fen: string): string {
+  return fen.split(' ').slice(0, 4).join(' ');
+}
+
+/** Mark each leaf whose position is also written in full elsewhere in the game as an alias of that node. */
+function linkAliases(root: KNode): void {
+  const written = new Map<string, KNode>();
+  for (const n of walkNodes(root)) if (n.children.length && !written.has(fenKey(n.fen))) written.set(fenKey(n.fen), n);
+  for (const n of walkNodes(root)) {
+    if (n.children.length || n === root) continue;
+    const other = written.get(fenKey(n.fen));
+    if (other && other !== n) n.alias = other;
+  }
+}
+
+/**
+ * Give an alias leaf the continuation of the node it stands for: copies of its children (themselves aliases
+ * until their own children are needed), so the move list shows the path actually played. Idempotent.
+ */
+export function expandAlias(node: KNode): void {
+  const src = node.alias;
+  if (!src || node.children.length) return;
+  src.children.forEach((c, i) => {
+    node.children.push({
+      id: node.id + '.' + i,
+      fen: c.fen,
+      turn: c.turn,
+      ply: node.ply + 1,
+      mainline: false,
+      check: c.check,
+      san: c.san,
+      uci: c.uci,
+      move: c.move,
+      nags: c.nags.slice(),
+      comment: c.comment,
+      startingComment: c.startingComment,
+      eval: c.eval,
+      shapes: c.shapes,
+      parent: node,
+      alias: c.children.length ? c : c.alias,
+      children: [],
+    });
+  });
+}
+
 export function* walkNodes(node: KNode): Generator<KNode> {
   yield node;
   for (const c of node.children) yield* walkNodes(c);
 }
 
+/** The node with this path id; the copies alias leaves make are rebuilt on the way. */
 export function findNode(games: KGame[], id: string): KNode | undefined {
-  for (const g of games) for (const n of walkNodes(g.root)) if (n.id === id) return n;
-  return undefined;
+  const parts = id.split('.');
+  const game = games.find(g => g.root.id === parts[0]);
+  let n = game && game.root;
+  for (const p of parts.slice(1)) {
+    if (!n) return undefined;
+    expandAlias(n);
+    n = n.children[parseInt(p, 10)];
+  }
+  return n;
 }
 
 export function findPuzzle(games: KGame[], id: number): PuzzleRef | undefined {

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import html
 import io
 import re
@@ -15,7 +14,7 @@ import chess.pgn
 from . import openings, phases
 from .cache import fen_key
 from .engine.analyse import MATED
-from .model import CardSpec, Game, NoteSpec, Score
+from .model import CardSpec, Choice, Game, NoteSpec, Score
 from .config import Config
 from .puzzles import parse_key, puzzle_key
 from .select import BLUNDER, DUBIOUS, MISTAKE, quick_nag
@@ -80,25 +79,32 @@ def _join(*parts: str) -> str:
     return " ".join(p for p in parts if p)
 
 
+def _write_choice(parent: chess.pgn.GameNode, ch: Choice) -> chess.pgn.GameNode:
+    """`ch` as a move after `parent`, with the moves that follow it (the first one is the main line)."""
+    v = parent.add_variation(chess.Move.from_uci(ch.move))
+    v.nags = {ch.nag} - {0}
+    v.comment = _join(_eval(ch.score), f"[%kr {ch.tag}]" if ch.tag else "", ch.comment)
+    for child in ch.children:
+        _write_choice(v, child)
+    return v
+
+
 def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardSpec, number: int,
                after: Optional[Score] = None) -> None:
-    """Tag `node` (the played move, after `parent`) as cloze `number`, and add the card's alternatives as variations."""
+    """Tag `node` (the played move, after `parent`) as cloze `number`, add the card's alternatives as variations
+    and what follows the played move (the punishment) as its continuation."""
     node.nags = {card.played.nag} - {0}
-    node.comment = _join(_eval(card.played.score or after), f"[%kr {number}]", card.comment)
+    node.comment = _join(_eval(card.played.score or after), f"[%kr {number}]", card.comment, card.played.comment)
     for alt in card.alternatives:
-        v = parent.add_variation(chess.Move.from_uci(alt.move))
-        v.nags = {alt.nag} - {0}
-        v.comment = _eval(alt.score)
-        for r in alt.reply:
-            v = v.add_variation(chess.Move.from_uci(r))
-            v.comment = _eval(alt.score)
+        _write_choice(parent, alt)
+    for child in card.played.children:
+        _write_choice(node, child)
 
 
-def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], ids: dict[str, int],
-              inaccuracy: float = Config.inaccuracy, nags: Optional[dict[int, int]] = None) -> str:
-    """One game with `cards` tagged. Every other move gets its NAG: `nags` (ply → NAG, see select.game_nags)
-    where given, else ?!, ?, ?? from the loss shown by `scores`."""
-    by_ply = {c.ply: c for c in cards}
+def _puzzle_pgn(game: Game, scores: list[Optional[Score]], first: CardSpec, inaccuracy: float = Config.inaccuracy,
+                nags: Optional[dict[int, int]] = None) -> str:
+    """The game up to the mistake (every earlier move with its NAG: `nags`, ply → NAG, see select.game_nags,
+    else ?!, ?, ?? from the loss shown by `scores`), then the mistake tagged `[%kr 1]` with the solution trees."""
     pg = chess.pgn.Game()
     h = pg.headers
     h["Event"] = game.event or "?"
@@ -114,21 +120,20 @@ def _game_pgn(game: Game, scores: list[Optional[Score]], cards: list[CardSpec], 
     del h["Round"]
 
     node: chess.pgn.GameNode = pg
-    for ply, u in enumerate(game.moves):
-        card = by_ply.get(ply)
+    for ply, u in enumerate(game.moves[: first.ply + 1]):
         parent = node
         node = parent.add_variation(chess.Move.from_uci(u))
         after = scores[ply + 1] if ply + 1 < len(scores) else None
-        if card is None:
-            node.comment = _eval(after)
-            before = scores[ply] if ply < len(scores) else None
-            if ply in (nags or {}):
-                node.nags = {(nags or {})[ply]}
-            elif before is not None and after is not None and before.wdl and after.wdl:
-                white = ply % 2 == 0
-                node.nags = {quick_nag(before.win_pct(white) - after.win_pct(white), inaccuracy)} - {0}
-            continue
-        write_card(parent, node, card, ids[card.fen_key])
+        if ply == first.ply:
+            write_card(parent, node, first, 1, after)
+            break
+        node.comment = _eval(after)
+        before = scores[ply] if ply < len(scores) else None
+        if ply in (nags or {}):
+            node.nags = {(nags or {})[ply]}
+        elif before is not None and after is not None and before.wdl and after.wdl:
+            white = ply % 2 == 0
+            node.nags = {quick_nag(before.win_pct(white) - after.win_pct(white), inaccuracy)} - {0}
     return pg.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
 
 
@@ -203,24 +208,21 @@ def build_puzzle(
     """The note of one mistake: cloze 1 is the position before it, cloze 2 (when there is one) the position
     after it, where the best reply punishes it. Tags describe the first puzzle only.
 
-    `first.ply` is the ply of the mistake in `game`. When the game's own reply is not the best one, the
-    second puzzle sits in a short extra game (the moves up to the mistake, then the best reply).
+    One game: the moves up to the mistake, then the mistake with the solution trees already grown under
+    `first` and `second` (see follow.py): the punishment's answers are the moves that follow the mistake.
     """
     key = puzzle_key(first.fen_key, first.ply)
     ids = {first.fen_key: 1}
     cards = [first]
-    parts = []
-    in_game = second is not None and second.ply < len(game.moves) and game.moves[second.ply] == second.played.move
     if second is not None:
         ids[second.fen_key] = 2
         cards.append(second)
-    parts.append(_game_pgn(game, scores, [c for c in cards if c is not second or in_game], ids, inaccuracy, nags).strip())
-    if second is not None and not in_game:
-        short = dataclasses.replace(game, moves=game.moves[: second.ply] + [second.played.move])
-        parts.append(_game_pgn(short, scores[: second.ply + 2], [second], ids, inaccuracy).strip())
+        second.played.tag = 2
+        second.played.comment = _join(second.comment, second.played.comment)
+        first.played.children = [second.played, *second.alternatives]
     return NoteSpec(
         key=key,
-        pgn="\n\n".join(parts),
+        pgn=_puzzle_pgn(game, scores, first, inaccuracy, nags).strip(),
         cards=_clozes(ids, cards),
         notes=notes,
         tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, first)]),

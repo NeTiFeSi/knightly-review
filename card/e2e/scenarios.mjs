@@ -3,10 +3,9 @@
 // t: target (desktop | android), ctx: { shot(name), solution(page), errors }
 import * as card from './lib/card.mjs';
 import { expect, until, wait } from './lib/common.mjs';
-import { bestMove } from './lib/uci.mjs';
 
-/** Per-device settings used unless a scenario sets its own. Live play is off: these test the PGN part. */
-const BASE = { intro: 'lastMove', afterAnswer: 'stay', autoReplyDelay: 300, hints: true, showEval: true, live: false };
+/** Per-device settings used unless a scenario sets its own. */
+const BASE = { intro: 'lastMove', afterAnswer: 'stay', autoReplyDelay: 300, hints: true, showEval: true };
 
 async function fresh(t, ctx, overrides = BASE) {
   const page = await t.openDeck();
@@ -91,34 +90,6 @@ export const scenarios = [
       const s = await card.waitStatus(page, /Solved/);
       expect(s.side === 'front', 'should stay on the front with afterAnswer "stay"');
       await ctx.shot('solved');
-    },
-  },
-  {
-    name: 'live-play-on',
-    about: 'After the PGN line, a live engine keeps the puzzle going until it is settled (desktop: the add-on; elsewhere: built-in Stockfish)',
-    async run(t, ctx) {
-      const page = await fresh(t, ctx, { ...BASE, live: true });
-      const sol = await ctx.solution(page);
-      for (const m of sol.line) {
-        await card.play(page, m.uci, t.pointer);
-        await wait(BASE.autoReplyDelay + 400);
-      }
-      let s;
-      for (let i = 0; i < 15; i++) {
-        s = await until(async () => {
-          const r = await card.read(page);
-          return /thinking|Checking/.test(r.status) ? null : r;
-        }, 'the engine', 30000);
-        if (/Solved|✗/.test(s.status)) break;
-        await wait(300);
-        const fen = await page.evaluate(() => document.getElementById('kr-root').getAttribute('data-fen'));
-        await card.play(page, await bestMove(fen), t.pointer);
-        await wait(BASE.autoReplyDelay + 400);
-      }
-      expect(/Solved/.test(s.status), 'should end solved, got: ' + s.status);
-      const live = await page.$$('.kr-move.kr-live');
-      expect(live.length > 0, 'no live moves were played (desktop: the add-on engine; elsewhere: the built-in one)');
-      await ctx.shot('live-solved');
     },
   },
   {
@@ -298,30 +269,6 @@ export const scenarios = [
       const b = await clockState(page);
       expect(a.text === b.text, `clock moved during the reply: ${a.text} → ${b.text}`);
       await until(async () => !(await clockState(page)).paused, 'the clock to resume after the reply', 6000);
-    },
-  },
-  {
-    name: 'timed-pauses-for-engine',
-    about: 'Timed + live play: the clock stands still whenever the card says the engine is thinking',
-    async run(t, ctx) {
-      const page = await fresh(t, ctx, { ...TIMED, live: true, autoReplyDelay: 100 });
-      const sol = await ctx.solution(page);
-      // Record the clock's state at every status change that says the engine is working.
-      await page.evaluate(() => {
-        window.__krSeen = [];
-        new MutationObserver(() => {
-          const st = document.querySelector('.kr-status').innerText;
-          const c = document.querySelector('.kr-clock');
-          if (/thinking|Checking your move/.test(st)) window.__krSeen.push(c.classList.contains('kr-clock-paused'));
-        }).observe(document.querySelector('.kr-status'), { childList: true, subtree: true });
-      });
-      for (const m of sol.line) {
-        await card.play(page, m.uci, t.pointer);
-        await wait(BASE.autoReplyDelay + 400);
-      }
-      await until(async () => (await page.evaluate(() => window.__krSeen.length)) > 0, 'the engine wait to show', 30000);
-      const seen = await page.evaluate(() => window.__krSeen);
-      expect(seen.every(Boolean), 'clock kept running while the engine thought: ' + JSON.stringify(seen));
     },
   },
   {

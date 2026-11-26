@@ -44,10 +44,10 @@ class CollectionTest(unittest.TestCase):
 
     def test_install_is_idempotent_and_keeps_config(self):
         self.assertEqual(self.kc.ensure_installed(self.col, self.card_dir),
-                         ["_knightly.js updated", "_kr_stockfish.js updated", "_kr_stockfish.wasm updated", "note type created"])
+                         ["_knightly.js updated", "note type created"])
         self.assertEqual(self.kc.ensure_installed(self.col, self.card_dir), [])
         nt = self.col.models.by_name(self.kc.MODEL)
-        self.assertEqual([f["name"] for f in nt["flds"]], ["PGN", "Cards", "Notes"])
+        self.assertEqual([f["name"] for f in nt["flds"]], ["PGN", "Cards", "Notes", "Visits"])
         # The user saved their own settings; a new build must keep them.
         t = nt["tmpls"][0]
         t["qfmt"] = self.kc.BLOCK_RE.sub("window.KR_CONFIG = { hints: false };", t["qfmt"])
@@ -130,6 +130,28 @@ class CollectionTest(unittest.TestCase):
         self.assertNotIn("knightly::severity::mistake", tags)
         self.assertIn("my-own", tags)
         self.assertIn(self.kc.kn.note_key_tag(self.KEY), tags)
+
+    def test_visits_field_is_added_to_an_older_note_type_and_merged_per_card(self):
+        import json
+        from types import SimpleNamespace
+
+        from knightly_review import _save_visits
+
+        self.kc.ensure_installed(self.col, self.card_dir)
+        mm = self.col.models
+        nt = mm.by_name(self.kc.MODEL)
+        mm.remove_field(nt, next(f for f in nt["flds"] if f["name"] == "Visits"))  # an older note type
+        mm.update_dict(nt)
+        self.assertIn("Visits field added", self.kc.ensure_installed(self.col, self.card_dir))
+        self.kc.apply_notes(self.col, [self.spec()], "KR")
+        note = self.col.get_note(self.col.find_notes('"note:Knightly Review"')[0])
+        card = SimpleNamespace(note=lambda: self.col.get_note(note.id), col=self.col)
+        self.assertEqual(_save_visits(card, 'k1:1|{"r1":2,"r2":1}'), {"ok": True})
+        self.assertEqual(_save_visits(card, 'k1:1|{"r1":1,"r3":4}'), {"ok": True})  # the larger count per position wins
+        self.assertEqual(_save_visits(card, 'k2:2|{"r1":9}'), {"ok": True})  # another card of the note
+        self.assertEqual(_save_visits(card, 'k2:2|{"r1":9}'), {"ok": True, "same": True})
+        stored = json.loads(self.col.get_note(note.id)["Visits"])
+        self.assertEqual(stored, {"k1:1": {"r1": 2, "r2": 1, "r3": 4}, "k2:2": {"r1": 9}})
 
     def test_existing_notes_lists_puzzles_by_key_and_older_notes_as_legacy(self):
         self.kc.ensure_installed(self.col, self.card_dir)

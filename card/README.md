@@ -66,19 +66,16 @@ that simulates AnkiMobile and AnkiWeb. Use the browser's device mode to check ph
 - **Evals:** `[%eval 0.17]`, `[%eval #-3]` or `[%eval 0.17,22]`, from White's point of view, in the
   comment *after* a move. They describe the position reached by that move.
 - **Arrows:** `[%cal Ge2e4]` and `[%csl Re4]` are drawn when that node is shown.
-- **Playing on (live engine):** the PGN holds only the candidate moves and the reply. Where its line
-  ends, a live engine can take over (setting `live`, off by default: turn it on in ⚙ or in `KR_CONFIG`). You keep playing until mate, a draw,
-  a quiet position (two or more good moves, no check, no capture just made) or `liveMaxMoves`. Each of
-  your moves must be within `goodMove` win-% of the engine's best (its WDL expected score); when the
-  best move mates by force, your move must keep a forced mate instead (as fast as the best with
-  `strictMate`), and the position is never "quiet" until the mate is played out. The
-  opponent plays the engine's best reply. Live moves are shown in italics, and on the back too.
-  - Desktop with the add-on: your Stockfish (and Lc0, if on), same rule as the analysis. Background
-    analysis pauses while you review.
-  - Everywhere else (AnkiDroid, AnkiMobile, AnkiWeb, desktop without the add-on): a built-in
-    Stockfish (stockfish.js 19 "lite, single-threaded", GPL-3) shipped as the media files
-    `_kr_stockfish.js` + `_kr_stockfish.wasm` (1.8 MB), capped at depth 18 / 1.5 s per search.
-  - Without an engine, the puzzle ends where the PGN does.
+- **Solution tree:** the PGN after the puzzle position is the solution: the accepted moves of the user, and
+  the opponent's good replies (written only when they are good: within 1 % win rate, or the same mate), branch
+  by branch. The card plays one reply per position: the one shown least in earlier reviews of this card,
+  chosen at random among equals. Counts are kept per card in browser storage and, on desktop Anki, in the
+  note's `Visits` field, which syncs to other devices (phones can read it but cannot write it). A leaf whose
+  position is also written elsewhere in the note (same fen key, other move order) is an *alias*: playing into
+  it continues like the written position, so the path never matters. A line that ends (comment on the
+  last move: decided game, draw, mate in N according to Stockfish) ends the puzzle as solved.
+- **Draws while reviewing:** threefold repetition (the game's own moves count), the fifty-move rule or
+  not enough material end the line as solved ("Draw by …"), also where the PGN would go on.
 - **Back side:** at the puzzle position only the accepted moves, the game move and your move are
   listed; "+ N more" shows the rejected ones.
 - **What each side shows:**
@@ -112,14 +109,11 @@ Invalid values, unknown keys and a `KR_CONFIG` script that fails to run show a �
 | `afterAnswer` | `'flip'` | `'flip'` shows the back after `flipDelay` ms. `'stay'` stays on the front. `'grade'` flips, then answers automatically after `gradeDelay` ms with `gradeSolved` (3 Good), `gradeHinted` (2 Hard) or `gradeFailed` (1 Again). Any tap or key cancels the automatic answer. |
 | `hints` | `true` | Show the Hint button. |
 | `acceptNags` | `[1, 3, 5, 8]` | NAGs counted as correct. |
-| `strictMate` | `false` | Forced mates: a move must keep a forced mate whatever its NAG (when a candidate's `[%eval #N]` shows one for the side to move); with `true`, only the fastest mate counts. Live play too. |
+| `strictMate` | `false` | Forced mates: a move must keep a forced mate whatever its NAG (when a candidate's `[%eval #N]` shows one for the side to move); with `true`, only the fastest mate counts. |
 | `autoReplyDelay` | `400` | ms before the opponent's reply. |
 | `showEval` / `evalOnPuzzleFront` | `true` / `false` | Eval bar and numbers; whether to show them at the puzzle position on the front. |
-| `live` | `false` | Keep playing past the PGN with a live engine. |
 | `acceptNeutral` | `false` | Also accept moves with no NAG (normal play: losing a little more than a good move, under an inaccuracy). |
-| `goodMove` | `1` | Live play: win-% a move may lose against the engine's best and still count. |
-| `liveMaxMoves` | `10` | Live play: at most this many of your moves. |
-| `timed` | `false` | Timed puzzles: a clock runs on the front while you think (not during the opponent's reply or the engine's), and the back shows the time taken. |
+| `timed` | `false` | Timed puzzles: a clock runs on the front while you think (not during the opponent's reply), and the back shows the time taken. |
 | `timeLimit` | `30` | Timed: seconds for the whole puzzle (5–600). |
 | `timeAffects` | `'nothing'` | Timed: when time is up, `'nothing'` only shows the time, `'fail'` ends the attempt as failed and shows the answer, `'grade'` lets you finish but a solve over the limit is graded `gradeSlow` (with `afterAnswer: 'grade'`). |
 | `gradeSlow` | `2` | Ease for a slow solve (1 Again … 4 Easy). It never grades better than the hint/solved ease. |

@@ -21,8 +21,7 @@ describe('readConfig', () => {
     expect(bad.afterAnswer).toBe('flip');
     expect(bad.hints).toBe(true);
     expect(bad.acceptNags).toEqual(DEFAULT_CONFIG.acceptNags);
-  });
-});
+  });});
 
 describe('timed puzzle settings', () => {
   it('are off by default', () => {
@@ -38,8 +37,7 @@ describe('timed puzzle settings', () => {
     expect(r.warnings).toHaveLength(4);
     expect(checkConfig({ timeLimit: 45.5 }).warnings[0]).toMatch(/whole number/);
     expect(checkConfig({ timed: true, timeLimit: 45, timeAffects: 'fail' }).warnings).toEqual([]);
-  });
-});
+  });});
 
 describe('checkConfig', () => {
   it('warns about bad values, wrong types and unknown keys', () => {
@@ -73,5 +71,8 @@ describe('checkConfig', () => {
     expect(text).toMatch(/showClock: true\n\};$/);
     const loader = readFileSync(new URL('../templates/loader.html', import.meta.url), 'utf8');
     expect(loader).toContain(formatConfig(DEFAULT_CONFIG));
+  });
+  it('ignores the settings of removed features without a warning', () => {
+    expect(checkConfig({ live: true, goodMove: 2, liveMaxMoves: 5, hints: false }).warnings).toEqual([]);
   });
 });

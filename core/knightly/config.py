@@ -45,7 +45,6 @@ class Config:
     inaccuracy: float = 5.0  # a move losing this much or more is an inaccuracy (?!); between "good" and this is normal play: no NAG, no puzzle
     sacrifice_points: int = 2  # material (1/3/3/5/9) given up against the alternative that keeps the most
     sacrifice_plies: int = 4  # where along the engine's line material is counted (then captures/checks finish)
-    line_plies: int = 2  # candidate move + opponent reply shown on the back
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> "Config":

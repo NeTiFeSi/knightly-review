@@ -271,9 +271,7 @@
   .kr-settings-nags { grid-template-columns: repeat(2, auto); }
 }
 
-/* Moves played with the live engine, and the "+ N more" fold on the back. */
-.kr-move.kr-live .kr-san { font-style: italic; }
-.kr-move.kr-live { border-bottom: 1px dotted currentColor; }
+/* The "+ N more" fold on the back. */
 .kr-btn.kr-more {
   display: block;
   margin: 2px 0 4px 12px;

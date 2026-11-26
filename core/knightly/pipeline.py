@@ -35,6 +35,7 @@ from . import notes as notes_mod, similar, stats
 from .cache import fen_key
 from .config import Config
 from .engine.analyse import terminal
+from .follow import follow_puzzle
 from .model import CardSpec, Game, NoteSpec, Score
 from .puzzles import Puzzle, Store, puzzle_id
 from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
@@ -283,11 +284,21 @@ class Miner:
         if similar_to is not None:
             self._merge(similar_to, u, ply)
             return
-        after = u.board.copy(stack=False)
-        played_san = u.board.san(chess.Move.from_uci(card.played.move))
+        # The boards carry the game's moves up to the puzzle, for the repetition and fifty-move rules.
+        hist = chess.Board()
+        for m in game.moves[:ply]:
+            hist.push_uci(m)
+        after = hist.copy()
+        played_san = hist.san(chess.Move.from_uci(card.played.move))
         after.push_uci(card.played.move)
-        second = build_punish(after, ply + 1, played_san, self.an, self.cfg, mine=card.mine)
-        skip = {ply} | ({ply + 1} if second is not None else set())
+        second = build_punish(after.copy(stack=False), ply + 1, played_san, self.an, self.cfg, mine=card.mine)
+        seen = {fen_key(hist.fen()), fen_key(after.fen())}
+        quick = self.scan[0]
+        follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick)
+        if second is not None:
+            follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=seen, quick_depth=quick,
+                          include_played=True)
+        skip = {ply}
         p = Puzzle(key=notes_mod.puzzle_key(card.fen_key, ply), fen=u.board.fen(), ply=ply,
                    moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},
                    played=card.played.move, after_fen=after.fen() if second else "", after_ply=ply + 1 if second else 0,

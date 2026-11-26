@@ -10,7 +10,6 @@ The add-on does three jobs:
 |---|---|
 | `__init__.py` | The `pycmd` handler; sets up the menu and hooks |
 | `runner.py` | Background updates (notes written as they are built): thread, cancel on profile close, startup and periodic scheduling |
-| `live.py` | Live engine for cards (`pycmd('kr:engine:{…}')`): own engine processes, answers via `web.eval`; pauses background analysis for 30 s after each request |
 | `ui.py` | Settings (also the first-run welcome), engine finder/installer, progress window |
 | `collection.py` | Note type, `_knightly.js` media, adding/updating notes (pylib only, no Qt) |
 | `settings.py` | Add-on config, `user_files/` paths, the Lichess token file |

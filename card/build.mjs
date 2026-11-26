@@ -1,7 +1,7 @@
 // Bundles the card UI into a single Anki media file: dist/_knightly.js
 // (the leading underscore keeps Anki's "Check Media" from deleting it).
 import * as esbuild from 'esbuild';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 const watch = process.argv.includes('--watch');
 
@@ -30,16 +30,7 @@ function writeTemplates() {
   writeFileSync('dist/templates/style.css', readFileSync('templates/style.css', 'utf8'));
 }
 
-/** The built-in engine for clients without the desktop add-on (stockfish.js, GPL-3): see src/wasm.ts. */
-function copyEngine() {
-  mkdirSync('dist', { recursive: true });
-  const bin = 'node_modules/stockfish/bin/stockfish-19-lite-single.';
-  copyFileSync(bin + 'js', 'dist/_kr_stockfish.js');
-  copyFileSync(bin + 'wasm', 'dist/_kr_stockfish.wasm');
-}
-
 writeTemplates();
-copyEngine();
 if (watch) {
   const ctx = await esbuild.context(options);
   await ctx.watch();

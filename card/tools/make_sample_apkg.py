@@ -46,7 +46,7 @@ def add_note_type(path: str) -> None:
         mm = col.models
         nt = mm.new(MODEL)
         nt["type"] = MODEL_CLOZE
-        for i, f in enumerate(("PGN", "Cards", "Notes")):
+        for i, f in enumerate(("PGN", "Cards", "Notes", "Visits")):
             fld = mm.new_field(f)
             fld["id"] = MODEL_ID * 10 + i  # fixed ids: the importer then sees the same note type
             mm.add_field(nt, fld)
@@ -79,8 +79,7 @@ def main() -> None:
             nt = col.models.get(MODEL_ID)
             assert nt and nt["name"] == MODEL
             did = col.decks.id(DECK)
-            for media in ("_knightly.js", "_kr_stockfish.js", "_kr_stockfish.wasm"):  # bundle + built-in engine
-                col.media.write_data(media, (DIST / media).read_bytes())
+            col.media.write_data("_knightly.js", (DIST / "_knightly.js").read_bytes())
             for p in args.pgn:
                 pgn = Path(p).read_text().strip()
                 note = col.new_note(nt)

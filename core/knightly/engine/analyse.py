@@ -132,12 +132,9 @@ class Engine:
 class Analyser:
     """Stockfish, plus Lc0 when enabled. Not thread-safe: use one per worker thread."""
 
-    def __init__(self, cfg: Config, cache: Cache, cancel: Optional[threading.Event] = None,
-                 gate: Optional[threading.Event] = None):
+    def __init__(self, cfg: Config, cache: Cache, cancel: Optional[threading.Event] = None):
         self.cfg = cfg
         self.cancel = cancel or threading.Event()
-        # Cleared while something more urgent (live play during review) needs the CPU.
-        self.gate = gate
         self.sf = Engine(STOCKFISH, cfg.stockfish_path, cfg, cache)
         self.lc0 = Engine(LC0, cfg.lc0_path, cfg, cache) if cfg.use_lc0 and cfg.lc0_path else None
         self.picked = {STOCKFISH: 0, LC0: 0}
@@ -163,21 +160,19 @@ class Analyser:
     def _check(self) -> None:
         if self.cancel.is_set():
             raise Cancelled()
-        while self.gate is not None and not self.gate.wait(0.25):
-            if self.cancel.is_set():
-                raise Cancelled()
 
     def evaluate(self, board: chess.Board, *, multipv: int = 1, ply: int = 99,
-                 moves: Optional[list[str]] = None) -> Eval:
+                 moves: Optional[list[str]] = None, sf_only: bool = False) -> Eval:
         """Eval of `board` with up to `multipv` lines (fewer if there are fewer legal moves).
 
-        With `moves`, only those root moves are searched.
+        With `moves`, only those root moves are searched. `sf_only`: Stockfish alone, even with Lc0 on
+        (mate puzzles: Stockfish is the authority on mates).
         """
         self._check()
         if board.is_game_over():
             return Eval(depth=99, lines=[Line(terminal(board), [])], source="rules")
         n = min(multipv, len(moves) if moves else board.legal_moves.count())
-        if self.lc0 is None:
+        if self.lc0 is None or sf_only:
             ev = self.sf.evaluate(board, n, moves)
             self.picked[STOCKFISH] += 1
             return ev

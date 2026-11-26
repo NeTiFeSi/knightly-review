@@ -92,12 +92,10 @@ def run_update(
     force: bool = False,
     fetch: bool = True,
     analyser_factory: Optional[Callable[..., Analyser]] = None,
-    gate: Optional[threading.Event] = None,
     precalculate: bool = False,
     on_note: Optional[Callable[[NoteSpec], None]] = None,
 ) -> UpdateResult:
-    """`gate`: analysis waits while it is cleared (live play during review takes priority).
-    `precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
+    """`precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
     the searches in the cache. `analysis_minutes` still bounds it.
     `existing` maps note key → PGN of the Knightly notes already in the collection.
     `on_note`: called with a note's whole spec as soon as it is built, so the caller can write it while
@@ -148,7 +146,6 @@ def run_update(
 
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
         with (analyser_factory or Analyser)(cfg, cache, cancel) as an:
-            an.gate = gate
             miner = pipeline.Miner(games, an, cfg, store, want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
                                    known=known, legacy=legacy, existing=existing, make=not precalculate,
                                    progress=progress, on_note=on_note)

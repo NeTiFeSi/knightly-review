@@ -45,9 +45,6 @@ class Updater:
         self.timer: Optional[QTimer] = None
         self._last_emit = 0.0
         self._pending = False
-        # Cleared while a card is being played on with the live engine: analysis then waits.
-        self.gate = threading.Event()
-        self.gate.set()
         # "Keep analysing" (settings.keep_running): after an update made its cards, more rounds follow
         # until this time, `stopped`, or nothing is left. Stopping also ends the rounds.
         self.keep_until = math.inf
@@ -155,7 +152,7 @@ class Updater:
             cache = SqliteCache(settings.CACHE_PATH)
             try:
                 res = run_update(core, cache, existing=existing, progress=self._emit, cancel=cancel,
-                                 force=manual and not _round, gate=self.gate, precalculate=_round == "precalc",
+                                 force=manual and not _round, precalculate=_round == "precalc",
                                  fetch=_round == "", on_note=on_note)
                 err = None
             except Exception as e:  # reported on the main thread
@@ -294,13 +291,9 @@ def _on_profile_open() -> None:
 
 
 def _on_profile_close() -> None:
-    from .live import service
-
     if updater.timer is not None:
         updater.timer.stop()
-    updater.gate.set()
     updater.stop(wait=5)
-    service.close()
 
 
 def setup() -> None:
