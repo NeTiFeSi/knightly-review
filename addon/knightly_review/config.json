@@ -8,8 +8,6 @@
   "update_every_hours": 6,
   "threads": 0,
   "hash_mb": 64,
-  "use_lc0": false,
-  "lc0_path": "",
   "history_days": 90,
   "time_classes": [
     "blitz",

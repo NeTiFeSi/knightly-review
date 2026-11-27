@@ -17,15 +17,12 @@ class Config:
     lichess_user: str = ""
     chesscom_user: str = ""
     lichess_token: str = ""
-    # Engines: Stockfish is required; Lc0 is optional and, when on, runs alongside it.
+    # Stockfish is the only engine. Every position is searched to this fixed depth with one line per legal move
+    # (MultiPV = every move), so each move has an exact score from the same search.
     stockfish_path: str = ""
-    sf_depth: int = 13  # fixed depth for every Stockfish analysis
+    sf_depth: int = 13
     threads: int = 0  # Stockfish threads; 0 = half the CPU cores
     hash_mb: int = 64  # Stockfish hash table (RAM), in MB
-    use_lc0: bool = False
-    lc0_path: str = ""
-    lc0_weights: str = ""  # network file; empty = Lc0 finds one itself
-    deep_multipv: int = 0  # lines analysed at a puzzle position; 0 = every legal move
     # What to fetch and how much work one run does.
     history_days: int = 90  # 0 or negative = all time
     time_classes: list[str] = field(default_factory=lambda: ["blitz", "rapid", "classical", "correspondence"])
@@ -49,7 +46,7 @@ class Config:
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> Config:
         d = dict(d or {})
-        if d.get("engine_path") and not d.get("stockfish_path"):  # settings from before Lc0 support
+        if d.get("engine_path") and not d.get("stockfish_path"):  # settings from an early version
             d["stockfish_path"] = d["engine_path"]
         names = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in names})

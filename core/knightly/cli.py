@@ -78,8 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--lichess", default="")
     up.add_argument("--chesscom", default="")
     up.add_argument("--stockfish", default="", help="Stockfish path (default: the first one found)")
-    up.add_argument("--lc0", default="", help="also analyse with this Lc0, after Stockfish, for as long as it took")
-    up.add_argument("--depth", type=int, help="Stockfish depth (default 13)")
+    up.add_argument("--depth", type=int, help="Stockfish depth, every move searched (default 13)")
     up.add_argument("--cache", default=default_cache())
     up.add_argument("--config", help="JSON file with Config fields")
     up.add_argument("--minutes", type=float, help="engine time for this run; 0 = until enough cards are found")
@@ -87,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--days", type=int, help="look back this many days; 0 = all time")
     up.add_argument("--out", default="-", help="output JSON file ('-' = stdout)")
 
-    eng = sub.add_parser("engines", help="list the supported engines (Stockfish, Lc0) found on this computer")
+    eng = sub.add_parser("engines", help="list the Stockfish builds found on this computer")
     eng.add_argument("--dir", help="extra folder with downloaded engines")
 
     inst = sub.add_parser("install-options", help="how to install Stockfish on this OS")
@@ -101,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         from .engine.discover import discover
 
         for e in discover(args.dir):
-            print(f"{e.kind}\t{e.name}\t{e.found_in}\t{e.path}")
+            print(f"{e.name}\t{e.found_in}\t{e.path}")
         return 0
     if args.cmd == "install-options":
         from .engine.install import package_options
@@ -131,13 +130,11 @@ def main(argv: list[str] | None = None) -> int:
         cfg.sf_depth = args.depth
     cfg.stockfish_path = args.stockfish or cfg.stockfish_path
     if not cfg.stockfish_path:
-        found = discover(kind="stockfish")
+        found = discover()
         if not found:
             print("Stockfish not found; pass --stockfish", file=sys.stderr)
             return 2
         cfg.stockfish_path = found[0].path
-    if args.lc0:
-        cfg.use_lc0, cfg.lc0_path = True, args.lc0
     if not (cfg.lichess_user or cfg.chesscom_user):
         print("pass --lichess and/or --chesscom", file=sys.stderr)
         return 2

@@ -60,33 +60,23 @@ def _bg(work, done, fail=None) -> None:
 # ---------------------------------------------------------------- engine dialog
 
 
-LABEL = {kd.STOCKFISH: "Stockfish", kd.LC0: "Lc0"}
-
-
 class EngineDialog(QDialog):
-    """Find Stockfish or Lc0, or help install it. `self.path` is the choice after accept()."""
+    """Find Stockfish, or help install it. `self.path` is the choice after accept()."""
 
-    def __init__(self, parent: QWidget, current: str = "", kind: str = kd.STOCKFISH):
+    def __init__(self, parent: QWidget, current: str = ""):
         super().__init__(parent)
-        self.kind = kind
-        name = LABEL[kind]
-        self.setWindowTitle(f"Knightly Review – {name}")
+        self.setWindowTitle("Knightly Review – Stockfish")
         self.path = current
         self.cancel = threading.Event()
         lay = QVBoxLayout(self)
-        intro = QLabel(
-            "Knightly Review analyses your games with Stockfish on this computer."
-            if kind == kd.STOCKFISH
-            else "Lc0 is optional. When it's on, it analyses alongside Stockfish and its judgement is used, "
-            "except in mate positions. It is much faster with a graphics card (GPU)."
-        )
+        intro = QLabel("Knightly Review analyses your games with Stockfish on this computer.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
         self.found = QComboBox()
         self.status = QLabel("Looking…")
         self.status.setWordWrap(True)
-        found_box = QGroupBox(f"{name} found on this computer")
+        found_box = QGroupBox("Stockfish found on this computer")
         fl = QVBoxLayout(found_box)
         fl.addWidget(self.found)
         fl.addWidget(self.status)
@@ -100,19 +90,6 @@ class EngineDialog(QDialog):
         row.addStretch()
         fl.addLayout(row)
         lay.addWidget(found_box)
-        if kind == kd.LC0:
-            get = QLabel(
-                "Don't have it? Download Lc0 (it includes a network) from "
-                '<a href="https://lczero.org/play/download/">lczero.org</a>, then press “Check again” '
-                "or choose the file."
-            )
-            get.setWordWrap(True)
-            get.setOpenExternalLinks(True)
-            lay.addWidget(get)
-            self.dl = None
-            self._buttons(lay)
-            return
-
         get_box = QGroupBox("Don't have it? Get Stockfish")
         gl = QVBoxLayout(get_box)
         self.options = ki.package_options()
@@ -168,26 +145,25 @@ class EngineDialog(QDialog):
             for e in found:
                 self.found.addItem(f"{e.name}  ({e.found_in}: {e.path})", e.path)
             if not found:
-                self.status.setText(f"Not found. Install {LABEL[self.kind]}, or choose its file.")
+                self.status.setText("Not found. Install Stockfish, or choose its file.")
                 return
             self.status.setText(f"{len(found)} found.")
             idx = next((i for i, e in enumerate(found) if e.path == current), 0)
             self.found.setCurrentIndex(idx)
             self.path = found[idx].path
 
-        _bg(lambda: kd.discover(str(settings.ENGINES_DIR), self.path or None, kind=self.kind), done)
+        _bg(lambda: kd.discover(str(settings.ENGINES_DIR), self.path or None), done)
 
     def browse(self) -> None:
-        name = LABEL[self.kind]
-        path, _ = QFileDialog.getOpenFileName(self, f"Choose the {name} program")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the Stockfish program")
         if not path:
             return
         d = kd.probe_details(path)
         if not d:
             showWarning("That file doesn't answer as a UCI chess engine.", parent=self)
             return
-        if kd.kind_of(d[0]) != self.kind:
-            showWarning(f"That is {d[0]}, not {name}. Knightly Review supports Stockfish and Lc0 only.", parent=self)
+        if not kd.is_stockfish(d[0]):
+            showWarning(f"That is {d[0]}, not Stockfish. Knightly Review supports Stockfish only.", parent=self)
             return
         if not d[1]:
             showWarning(
@@ -310,13 +286,8 @@ class SettingsDialog(QDialog):
         self.depth = QSpinBox()
         self.depth.setRange(8, 60)
         self.depth.setValue(int(self.cfg.get("sf_depth", 13)))
-        self.depth.setToolTip("Every position is searched to this depth. Higher is slower.")
-        drow = QHBoxLayout()
-        drow.addWidget(self.depth)
-        hint = QLabel("20+ recommended if your computer can take it")
-        hint.setStyleSheet("color: gray")
-        drow.addWidget(hint, 1)
-        sff.addRow("Depth:", drow)
+        self.depth.setToolTip("Every position is searched to this depth, with every move scored. Higher is slower.")
+        sff.addRow("Depth:", self.depth)
         self.threads = QSpinBox()
         self.threads.setRange(0, 256)
         self.threads.setSpecialValueText("half the CPU cores")
@@ -330,25 +301,6 @@ class SettingsDialog(QDialog):
         self.hash.setToolTip("Memory for Stockfish's hash table. More helps deeper searches.")
         sff.addRow("Hash (RAM):", self.hash)
         lay.addWidget(sf)
-
-        lc = QGroupBox("Lc0 (optional, best with a graphics card)")
-        lcf = QFormLayout(lc)
-        self.use_lc0 = QCheckBox("Also analyse with Lc0; its judgement is used except in mate positions")
-        self.use_lc0.setChecked(bool(self.cfg.get("use_lc0", False)))
-        lcf.addRow(self.use_lc0)
-        self.lc0_label = QLabel()
-        self.lc0_label.setWordWrap(True)
-        lc0_change = QPushButton("Change…")
-        lc0_change.clicked.connect(self.pick_lc0)
-        lrow2 = QHBoxLayout()
-        lrow2.addWidget(self.lc0_label, 1)
-        lrow2.addWidget(lc0_change)
-        lcf.addRow(lrow2)
-        lc0_note = QLabel("Runs after Stockfish on each position, for as long as Stockfish took.")
-        lc0_note.setWordWrap(True)
-        lc0_note.setStyleSheet("color: gray")
-        lcf.addRow(lc0_note)
-        lay.addWidget(lc)
 
         work = QGroupBox("Cards and updates")
         wf = QFormLayout(work)
@@ -411,22 +363,17 @@ class SettingsDialog(QDialog):
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
         self.engine_path = self.cfg.get("stockfish_path") or self.cfg.get("engine_path", "")
-        self.lc0_path = self.cfg.get("lc0_path", "")
         self._show_engine()
-        self._show_lc0()
         self._show_login()
-        if not self.engine_path or not self.lc0_path:
-            # Pick found engines silently if there are some.
+        if not self.engine_path:
+            # Pick a found Stockfish silently if there is one.
             _bg(lambda: kd.discover(str(settings.ENGINES_DIR)), self._auto_engines, lambda e: None)
 
     def _auto_engines(self, found) -> None:
         for e in found:
-            if e.kind == kd.STOCKFISH and not self.engine_path:
+            if not self.engine_path:
                 self.engine_path = e.path
                 self._show_engine(e.name)
-            if e.kind == kd.LC0 and not self.lc0_path:
-                self.lc0_path = e.path
-                self._show_lc0(e.name)
 
     def _show_engine(self, name: str = "") -> None:
         if self.engine_path:
@@ -434,23 +381,11 @@ class SettingsDialog(QDialog):
         else:
             self.engine.setText("<b>Not found.</b> Press “Change…” to find or install Stockfish.")
 
-    def _show_lc0(self, name: str = "") -> None:
-        self.lc0_label.setText(f"{name or 'Lc0'}: {self.lc0_path}" if self.lc0_path else "Not found.")
-        self.use_lc0.setEnabled(bool(self.lc0_path))
-        if not self.lc0_path:
-            self.use_lc0.setChecked(False)
-
     def pick_engine(self) -> None:
-        d = EngineDialog(self, self.engine_path, kd.STOCKFISH)
+        d = EngineDialog(self, self.engine_path)
         if d.exec() and d.path:
             self.engine_path = d.path
             self._show_engine()
-
-    def pick_lc0(self) -> None:
-        d = EngineDialog(self, self.lc0_path, kd.LC0)
-        if d.exec() and d.path:
-            self.lc0_path = d.path
-            self._show_lc0()
 
     # Lichess login
     def _show_login(self) -> None:
@@ -514,7 +449,7 @@ class SettingsDialog(QDialog):
             keep != "off"
             and self.cfg.get("keep_running", "off") == "off"
             and not askUser(
-                "Keeping the analysis running uses the CPU (and the GPU with Lc0) at full load, for as long as "
+                "Keeping the analysis running uses the CPU at full load, for as long as "
                 "you chose.\n\n• Laptops: the battery drains fast.\n• Heat, fan noise, and possible thermal "
                 "throttling.\n• Other programs get slower; lower “Threads” to leave room.\n\n"
                 "It stops with Cancel in the progress "
@@ -523,7 +458,8 @@ class SettingsDialog(QDialog):
             )
         ):
             return
-        self.cfg.pop("engine_path", None)  # replaced by stockfish_path
+        for old in ("engine_path", "use_lc0", "lc0_path"):  # replaced by stockfish_path / no longer used
+            self.cfg.pop(old, None)
         self.cfg.update(
             lichess_user=self.lichess.text().strip(),
             chesscom_user=self.chesscom.text().strip(),
@@ -531,8 +467,6 @@ class SettingsDialog(QDialog):
             stockfish_path=self.engine_path,
             sf_depth=self.depth.value(),
             hash_mb=self.hash.value(),
-            use_lc0=self.use_lc0.isChecked() and bool(self.lc0_path),
-            lc0_path=self.lc0_path,
             deck=self.deck.text().strip() or "Knightly Review",
             max_new_cards=self.max_cards.value(),
             analysis_minutes=self.minutes.value(),
@@ -605,20 +539,17 @@ class ProgressWindow(QDialog):
         grid.addWidget(self.step_label, 1, 0)
         grid.addWidget(self.step_bar, 1, 1)
         grid.addWidget(self.step_info, 2, 1)
-        # One row per engine (Lc0's only when it is enabled): live depth or time of the search in progress.
-        self.engine_rows: dict[str, tuple[QLabel, QProgressBar, QLabel]] = {}
-        for i, kind in enumerate(("stockfish", "lc0")):
-            name, bar, info = QLabel(), QProgressBar(), QLabel()
-            bar.setRange(0, 1000)
-            bar.setTextVisible(False)
-            info.setStyleSheet("color: gray")
-            self.engine_rows[kind] = (name, bar, info)
-            grid.addWidget(name, 3 + 2 * i, 0)
-            grid.addWidget(bar, 3 + 2 * i, 1)
-            grid.addWidget(info, 4 + 2 * i, 1)
+        # The engine's row: live depth of the search in progress.
+        self.engine_name, self.engine_bar, self.engine_info = QLabel(), QProgressBar(), QLabel()
+        self.engine_bar.setRange(0, 1000)
+        self.engine_bar.setTextVisible(False)
+        self.engine_info.setStyleSheet("color: gray")
+        grid.addWidget(self.engine_name, 3, 0)
+        grid.addWidget(self.engine_bar, 3, 1)
+        grid.addWidget(self.engine_info, 4, 1)
         self.position_info = QLabel()
         self.position_info.setStyleSheet("color: gray")
-        grid.addWidget(self.position_info, 7, 1)
+        grid.addWidget(self.position_info, 5, 1)
         lay.addLayout(grid)
 
         self.log = QPlainTextEdit()
@@ -677,15 +608,13 @@ class ProgressWindow(QDialog):
             self.step_bar.setValue(int(1000 * d["stage_ratio"]))
             self.step_label.setText(d["step"] or "Step")
         self.step_info.setText(" · ".join(x for x in (d["stage"], d["ply"], d["budget"], d["elapsed"]) if x))
-        for kind, (name, bar, info) in self.engine_rows.items():
-            e = d["engines"].get(kind)
-            for w in (name, bar, info):
-                w.setVisible(bool(e))
-            if not e:
-                continue
-            name.setText(e["label"])
-            bar.setValue(int(1000 * (e["ratio"] or 0)))
-            info.setText(f"{e['detail']} · {e['counts']}")
+        e = d["engines"].get("stockfish")
+        for w in (self.engine_name, self.engine_bar, self.engine_info):
+            w.setVisible(bool(e))
+        if e:
+            self.engine_name.setText(e["label"])
+            self.engine_bar.setValue(int(1000 * (e["ratio"] or 0)))
+            self.engine_info.setText(f"{e['detail']} · {e['counts']}")
         self.position_info.setText(d["position"])
         self.position_info.setVisible(bool(d["position"]))
 

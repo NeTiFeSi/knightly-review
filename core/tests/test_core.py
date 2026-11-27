@@ -126,46 +126,36 @@ class ModelTest(unittest.TestCase):
 def _writer(path: str, worker: int) -> None:
     c = SqliteCache(path)
     for i in range(150):
-        c.put_eval(f"pos{worker}-{i}", "stockfish", 13, Eval(10, [Line(Score(cp=i), ["e2e4"])]))
+        c.put_eval(f"pos{worker}-{i}", 13, Eval(10, [Line(Score(cp=i), ["e2e4"])]))
         c.set(f"k{worker}-{i}", i)
     c.close()
 
 
 class CacheTest(unittest.TestCase):
-    def test_harder_search_wins_per_engine(self):
+    def test_harder_search_wins(self):
         c = tmpcache(self)
-        c.put_eval("p", "stockfish", 20, Eval(20, [Line(S(10, 1, 998, 1), ["e2e4"])]))
-        c.put_eval("p", "stockfish", 13, Eval(13, [Line(S(99, 1, 998, 1), ["d2d4"])]))
-        self.assertEqual(c.get_eval("p", "stockfish", min_effort=13).score, S(10, 1, 998, 1))
-        self.assertIsNone(c.get_eval("p", "stockfish", min_effort=21))
-        self.assertIsNone(c.get_eval("p", "stockfish", multipv=2))
-        self.assertIsNone(c.get_eval("p", "lc0"))  # engines never share entries
-        c.put_eval("p", "lc0", 500, Eval(5, [Line(S(30, 200, 650, 150), ["d2d4"])]))
-        self.assertEqual(c.get_eval("p", "lc0", min_effort=500).score, S(30, 200, 650, 150))
-        self.assertIsNone(c.get_eval("p", "lc0", min_effort=1000))  # searched for less time than asked
-        c.put_eval("p", "stockfish", 25, Eval(25, [Line(S(5, 1, 998, 1), ["e2e4"]), Line(S(1, 1, 998, 1), ["d2d4"])]))
-        self.assertEqual(len(c.get_eval("p", "stockfish", multipv=2).lines), 2)
-        self.assertEqual(len(c.get_eval("p", "stockfish", multipv=1).lines), 1)  # trimmed to what was asked
-        # The deepest eval of each position, whatever its number of lines.
-        c.put_eval("q", "stockfish", 1, Eval(1, [Line(S(0, 0, 1000, 0), ["e2e4"])]))
-        best = c.best_evals(["p", "q", "none"], "stockfish")
-        self.assertEqual({k: e for k, (e, _) in best.items()}, {"p": 25, "q": 1})
-        self.assertEqual(best["p"][1].score, S(5, 1, 998, 1))
+        c.put_eval("p", 20, Eval(20, [Line(S(10, 1, 998, 1), ["e2e4"])]))
+        c.put_eval("p", 13, Eval(13, [Line(S(99, 1, 998, 1), ["d2d4"])]))  # a shallower search never replaces it
+        self.assertEqual(c.get_eval("p", min_effort=13).score, S(10, 1, 998, 1))
+        self.assertIsNone(c.get_eval("p", min_effort=21))  # searched less deep than asked
+        self.assertIsNone(c.get_eval("none"))
+        c.put_eval("p", 25, Eval(25, [Line(S(5, 1, 998, 1), ["e2e4"]), Line(S(1, 1, 998, 1), ["d2d4"])]))
+        self.assertEqual(len(c.get_eval("p", min_effort=25).lines), 2)
 
-    def test_old_cache_without_wdl_is_dropped(self):
+    def test_old_cache_is_dropped(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         path = Path(d.name) / "old.sqlite"
         c = SqliteCache(path)
         g = scholar_game()
         c.put_games([g], "knightlyme")
-        c.put_eval("p", "stockfish", 30, Eval(30, [Line(Score(cp=10), ["e2e4"])]))
+        c.put_eval("p", 30, Eval(30, [Line(Score(cp=10), ["e2e4"])]))
         c.put_analysis(g, [{"cp": 1}])
-        c.set("schema", 1)
+        c.set("schema", 3)  # the version before Stockfish-only, full-multipv searches
         c.close()
         c = SqliteCache(path)
         self.addCleanup(c.close)
-        self.assertIsNone(c.get_eval("p", "stockfish"))
+        self.assertIsNone(c.get_eval("p"))  # searches of the old kind can't stand for the new ones
         self.assertIsNone(c.get_analysis(g))
         self.assertEqual(c.games("lichess", "knightlyme"), [g])  # games are kept
 
@@ -195,7 +185,7 @@ class CacheTest(unittest.TestCase):
         self.addCleanup(c.close)
         for w in range(4):
             self.assertEqual(c.get(f"k{w}-149"), 149)
-            self.assertEqual(c.get_eval(f"pos{w}-7", "stockfish").score.cp, 7)
+            self.assertEqual(c.get_eval(f"pos{w}-7").score.cp, 7)
 
 
 class HttpTest(unittest.TestCase):
@@ -860,7 +850,7 @@ class JobsTest(unittest.TestCase):
         ev.set()
 
         class Cancelling(FakeAnalyser):
-            def score(self, board, depth):
+            def evaluate(self, board):
                 raise http.Cancelled()
 
         self.assertTrue(
@@ -873,13 +863,6 @@ class JobsTest(unittest.TestCase):
 class PipelineTest(unittest.TestCase):
     """The ply-by-ply mining (pipeline.py)."""
 
-    def test_depth_steps(self):
-        self.assertEqual(pipeline.depth_steps(13), [5, 9, 13])
-        self.assertEqual(pipeline.depth_steps(20), [8, 14, 20])
-        self.assertEqual(pipeline.depth_steps(3), [3])
-        self.assertEqual(pipeline.scan_steps(13), [5, 9])
-        self.assertEqual(pipeline.scan_steps(3), [3])
-
     def mine(self, games, script, cfg=None, **kw):
         cfg = cfg or Config(sf_depth=13, max_new_cards=9)
         an = ScriptedAnalyser(games, script)
@@ -889,29 +872,32 @@ class PipelineTest(unittest.TestCase):
         m.run()
         return m, an
 
-    def test_the_biggest_losses_are_promoted_first_and_small_ones_dropped(self):
+    def test_the_biggest_losses_come_first_and_small_ones_are_dropped(self):
         g1 = game_from(SICILIAN, white=False, id="g1", end_ts=300)
         g2 = game_from(["d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"], white=False, id="g2", end_ts=200)
         g3 = game_from(["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"], white=False, id="g3", end_ts=100)
         m, an = self.mine([g1, g2, g3], {"g1": {5: 30}, "g2": {5: 15}, "g3": {5: 0.2}})
-        child = lambda g: fen_key(board_at(g.moves, 6).fen())
-        at = lambda k, d: [i for i, s in enumerate(an.searched) if s == (k, d)]
-        self.assertTrue(all(at(child(g), 5) for g in (g1, g2, g3)))  # every move of every position, first
-        self.assertTrue(at(child(g1), 9) and at(child(g2), 9))
-        self.assertLess(at(child(g1), 9)[0], at(child(g2), 9)[0])  # the bigger loss first
-        self.assertEqual(at(child(g3), 9), [])  # 0.2 % is nothing: dropped at the first step
+        key = lambda g: fen_key(board_at(g.moves, 5).fen())
+        self.assertTrue(all(key(g) in an.searched for g in (g1, g2, g3)))  # every position is searched, once in full
         self.assertEqual(
             [n.key for n in m.notes][:2], [puzzles.puzzle_key(board_at(g.moves, 5).fen(), 5) for g in (g1, g2)]
-        )
-        self.assertEqual(len(m.notes), 2)
+        )  # the bigger loss first
+        self.assertEqual(len(m.notes), 2)  # 0.2 % is nothing: no puzzle for g3
+
+    def test_one_search_per_position_and_ply(self):
+        g = game_from(SICILIAN, white=False, id="g1", end_ts=300)
+        m, an = self.mine([g], {"g1": {}})
+        mine_plies = [fen_key(board_at(g.moves, p).fen()) for p in range(len(g.moves)) if p % 2 == 1]
+        self.assertEqual(an.searched, mine_plies)  # your positions only, each searched once, nothing else
+        self.assertEqual((m.analysed, m.notes), (len(mine_plies), []))
 
     def test_time_budget(self):
         t = [0.0]
 
         class Slow(ScriptedAnalyser):
-            def score(self, board, depth):
-                t[0] += 10  # seconds per position
-                return super().score(board, depth)
+            def evaluate(self, board):
+                t[0] += 25  # seconds per position
+                return super().evaluate(board)
 
         sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
         cfg = Config(sf_depth=13, analysis_minutes=1, max_new_cards=5)
@@ -919,7 +905,7 @@ class PipelineTest(unittest.TestCase):
             [sic], Slow([sic], {"s1": {5: 30}}), cfg, puzzles.Store(tmpcache(self)), want=5, clock=lambda: t[0]
         )
         m.run()
-        self.assertEqual((m.analysed, m.notes, m.finished), (6, [], False))
+        self.assertEqual((m.analysed, m.notes, m.finished), (3, [], False))
 
 
 def _ev(*lines, depth=20):
@@ -953,7 +939,7 @@ class FollowTest(unittest.TestCase):
         card = self.card(alternatives, mate)
         an = FakeAnalyser(table=table)
         follow.follow_puzzle(
-            board or chess.Board(), card, an, Config(), solver=solver, seen=kw.pop("seen", set()), quick_depth=5, **kw
+            board or chess.Board(), card, an, Config(), solver=solver, seen=kw.pop("seen", set()), **kw
         )
         return card, an
 
@@ -1122,23 +1108,17 @@ class ProgressTest(unittest.TestCase):
     def test_engine_rows(self):
         t = Tracker()
         t.engine("stockfish", "Stockfish 17", True)
-        t.engine("lc0", "Lc0 0.31", True)
         t.search_start("stockfish", chess.STARTING_FEN, 0, 20, 13)
         t.search_progress("stockfish", depth=9, nodes=10**6, nps=1_200_000, ms=800)
         d = progress.describe(t.snapshot())["engines"]
         self.assertEqual(d["stockfish"]["detail"], "ply 0 · depth 9 of 13 · 20 lines · 1200 knps")
         self.assertAlmostEqual(d["stockfish"]["ratio"], 9 / 13)
-        self.assertEqual(d["lc0"]["detail"], "idle")
         t.search_end("stockfish", ms=900)
         t.search_end("stockfish", cached=True)
         self.assertEqual(
             progress.describe(t.snapshot())["engines"]["stockfish"]["counts"], "1 searched · 1 from the cache"
         )
-        t.search_start("lc0", chess.STARTING_FEN, 3, 1, 900)
-        t.search_progress("lc0", ms=450)
-        self.assertEqual(progress.describe(t.snapshot())["engines"]["lc0"]["detail"], "ply 3 · 0.5 of 0.9 s")
-        # A disabled engine is not described.
-        self.assertNotIn("lc0", progress.describe(Tracker().snapshot())["engines"])
+        self.assertEqual(progress.describe(t.snapshot())["engines"]["stockfish"]["detail"], "idle")
 
     def test_legacy_listener(self):
         calls = []
@@ -1165,16 +1145,16 @@ class ProgressTest(unittest.TestCase):
                 )
 
         c = tmpcache(self)
-        eng = Engine("stockfish", "x", Config(sf_depth=13), c, tracker=t)
+        eng = Engine("x", Config(sf_depth=13), c, tracker=t)
         eng._proc = Proc()
         b = chess.Board()
-        ev = eng.evaluate(b, 1)
+        ev = eng.evaluate(b)
         self.assertEqual(seen, [0, 5, 9])  # the depth shown while each info arrives (the last one is current after)
         self.assertEqual(t.snapshot().engines["stockfish"].depth, 13)
         self.assertEqual(ev.lines[0].moves, ["e2e4"])
         e = t.snapshot().engines["stockfish"]
         self.assertEqual((e.searches, e.cached, e.busy), (1, 0, False))
-        eng.evaluate(b, 1)  # from the cache
+        eng.evaluate(b)  # from the cache
         e = t.snapshot().engines["stockfish"]
         self.assertEqual((e.searches, e.cached), (1, 1))
 
@@ -1192,10 +1172,10 @@ class ProgressTest(unittest.TestCase):
                 made.append(a)
                 return a
 
-        eng = Engine("stockfish", "x", Config(sf_depth=13), tmpcache(self), cancel=cancel)
+        eng = Engine("x", Config(sf_depth=13), tmpcache(self), cancel=cancel)
         eng._proc = Proc()
         with self.assertRaises(http.Cancelled):
-            eng.evaluate(chess.Board(), 1)
+            eng.evaluate(chess.Board())
         self.assertTrue(made[0].stopped)
 
     def test_a_run_reports_consistent_stages(self):
@@ -1470,84 +1450,71 @@ class SimilarTest(unittest.TestCase):
 
 
 class AnalyserTest(unittest.TestCase):
-    """Combining Stockfish and Lc0, with the engine processes replaced by scripted answers."""
+    """The analyser and the engine wrapper, with the engine process replaced by scripted answers."""
 
-    def analyser(self, sf: Eval, lc: Eval, use_lc0=True):
-        from knightly.engine import analyse
-
-        cfg = Config(stockfish_path="sf", use_lc0=use_lc0, lc0_path="lc0")
-        an = analyse.Analyser(cfg, tmpcache(self))
-        self.addCleanup(an.close)
-        self.lc0_ms = []
-        an.sf.evaluate = lambda board, n, moves=None, **kw: sf
-        if an.lc0:
-            an.lc0.evaluate = lambda board, n, moves=None, ms=None, **kw: self.lc0_ms.append(ms) or lc
-        return an
-
-    SF = Eval(13, [Line(S(40, 300, 650, 50), ["e2e4"])], "stockfish", ms=840)
-    LC = Eval(5, [Line(S(20, 200, 650, 150), ["d2d4"])], "lc0")
-    SF_MATE = Eval(13, [Line(Score(mate=3, wdl=(1000, 0, 0)), ["e2e4"])], "stockfish")
-    LC_MATE = Eval(5, [Line(Score(mate=5, wdl=(990, 10, 0)), ["d2d4"])], "lc0")
-
-    def test_lc0_answers_unless_mate(self):
-        b = chess.Board()
-        self.assertIs(self.analyser(self.SF, self.LC).evaluate(b), self.LC)
-        self.assertIs(self.analyser(self.SF_MATE, self.LC).evaluate(b), self.SF_MATE)
-        self.assertIs(self.analyser(self.SF, self.LC_MATE).evaluate(b), self.SF)  # Stockfish decides mates
-        an = self.analyser(self.SF, self.LC)
-        an.evaluate(b)
-        an.evaluate(b)
-        self.assertEqual(an.picked, {"stockfish": 0, "lc0": 2})
-        self.assertEqual(self.lc0_ms, [840, 840])  # Lc0 searches as long as Stockfish took
-
-    def test_sf_only_skips_lc0(self):
-        an = self.analyser(self.SF, self.LC)
-        self.assertIs(an.evaluate(chess.Board(), sf_only=True), self.SF)
-        self.assertEqual(an.picked, {"stockfish": 1, "lc0": 0})
-
-    def test_stockfish_alone(self):
-        an = self.analyser(self.SF, self.LC, use_lc0=False)
-        self.assertIsNone(an.lc0)
-        self.assertIs(an.evaluate(chess.Board()), self.SF)
-
-    def test_limits(self):
-        from knightly.engine.analyse import Engine
-
-        cfg = Config(sf_depth=22)
-        sf, lc = Engine("stockfish", "x", cfg, None), Engine("lc0", "x", cfg, None)
-        self.assertEqual((sf.limit()[0].depth, sf.limit()[1]), (22, 22))
-        self.assertEqual(sf.limit(depth=3)[0].depth, 3)
-        self.assertEqual((lc.limit(ms=750)[0].time, lc.limit(ms=750)[1]), (0.75, 750))
-        with self.assertRaises(ValueError):
-            lc.limit()
-
-    def test_search_time_is_stored_and_old_results_rerun(self):
+    def engine(self, cache, depth=13):
         from knightly.engine.analyse import Engine
 
         class Proc:
-            calls = 0
+            def __init__(self):
+                self.searches = []
 
             def analysis(self, board, limit, multipv, root_moves=None):
-                Proc.calls += 1
+                self.searches.append((limit.depth, multipv))
                 return FakeAnalysis([sf_info(limit.depth)])
 
+        eng = Engine("x", Config(sf_depth=depth), cache)
+        eng._proc = proc = Proc()
+        return eng, proc
+
+    def test_every_legal_move_is_searched_at_the_fixed_depth(self):
+        eng, proc = self.engine(tmpcache(self), depth=18)
+        eng.evaluate(chess.Board())
+        self.assertEqual(proc.searches, [(18, 20)])  # depth 18, one line per legal move (20 at the start)
+        b = chess.Board("rnbqkbnr/pppp1ppp/8/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR b KQkq - 1 2")
+        eng.evaluate(b)
+        self.assertEqual(proc.searches[-1], (18, 26))
+
+    def test_cached_search_is_reused_when_deep_enough(self):
         c = tmpcache(self)
+        eng, proc = self.engine(c, depth=13)
         b = chess.Board()
-        k = fen_key(b.fen())
-        c.put_eval(k, "stockfish", 13, Eval(13, [Line(S(1, 1, 998, 1), ["d2d4"])], "stockfish"))  # no time
-        eng = Engine("stockfish", "x", Config(sf_depth=13), c)
-        eng._proc = Proc()
-        self.assertEqual(eng.evaluate(b, 1).lines[0].moves, ["d2d4"])  # cached is fine untimed
-        ev = eng.evaluate(b, 1, timed=True)  # but not when its time is needed
-        self.assertEqual((Proc.calls, ev.lines[0].moves), (1, ["e2e4"]))
-        self.assertGreater(ev.ms, 0)
-        self.assertEqual(c.get_eval(k, "stockfish", min_effort=13).ms, ev.ms)  # stored with the result
-        eng.evaluate(b, 1, timed=True)
-        self.assertEqual(Proc.calls, 1)
+        c.put_eval(fen_key(b.fen()), 13, Eval(13, [Line(S(1, 1, 998, 1), ["d2d4"])], "stockfish"))
+        self.assertEqual(eng.evaluate(b).lines[0].moves, ["d2d4"])  # as deep as asked: no search
+        self.assertEqual(proc.searches, [])
+        deeper, proc2 = self.engine(c, depth=20)
+        self.assertEqual(deeper.evaluate(b).lines[0].moves, ["e2e4"])  # asked for more: searched again
+        self.assertEqual(proc2.searches, [(20, 20)])
+        self.assertEqual(c.get_eval(fen_key(b.fen()), min_effort=20).lines[0].moves, ["e2e4"])  # and kept
+
+    def test_finished_games_are_not_searched(self):
+        from knightly.engine.analyse import Analyser
+
+        an = Analyser(Config(stockfish_path="x"), tmpcache(self))
+        mated = chess.Board("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+        ev = an.evaluate(mated)
+        self.assertEqual((ev.source, ev.lines[0].moves, ev.lines[0].score.cp), ("rules", [], -10000))
+        self.assertIsNone(an.sf._proc)  # no engine process was needed
+
+    def test_cached_never_searches(self):
+        from knightly.engine.analyse import Analyser
+
+        c = tmpcache(self)
+        an = Analyser(Config(stockfish_path="x", sf_depth=13), c)
+        b = chess.Board()
+        self.assertIsNone(an.cached(b))
+        c.put_eval(fen_key(b.fen()), 12, Eval(12, [Line(S(1, 1, 998, 1), ["d2d4"])]))
+        self.assertIsNone(an.cached(b))  # shallower than the configured depth
+        c.put_eval(fen_key(b.fen()), 13, Eval(13, [Line(S(1, 1, 998, 1), ["d2d4"])]))
+        self.assertEqual(an.cached(b).lines[0].moves, ["d2d4"])
 
     def test_old_engine_path_setting(self):
         self.assertEqual(Config.from_dict({"engine_path": "/usr/bin/stockfish"}).stockfish_path, "/usr/bin/stockfish")
         self.assertEqual(Config.from_dict({"engine_path": "a", "stockfish_path": "b"}).stockfish_path, "b")
+
+    def test_removed_settings_are_ignored(self):
+        cfg = Config.from_dict({"use_lc0": True, "lc0_path": "/x", "deep_multipv": 3, "sf_depth": 18})
+        self.assertEqual(cfg.sf_depth, 18)  # the old Lc0 and line-count keys are simply dropped
 
 
 class EngineTest(unittest.TestCase):
@@ -1604,9 +1571,9 @@ class EngineTest(unittest.TestCase):
         found = [(e.name, e.found_in) for e in discover.discover(engines_dir=str(d))]
         self.assertIn(("stockfish-wdl", "downloaded"), found)
         self.assertNotIn(("stockfish-old", "downloaded"), found)
-        self.assertIsNone(discover.probe(str(other)))  # only Stockfish and Lc0 are supported
-        self.assertEqual(discover.kind_of("Lc0 v0.32.1"), "lc0")
-        self.assertEqual(discover.kind_of("Stockfish 19"), "stockfish")
+        self.assertIsNone(discover.probe(str(other)))  # only Stockfish is supported
+        self.assertFalse(discover.is_stockfish("Lc0 v0.32.1"))
+        self.assertTrue(discover.is_stockfish("Stockfish 19"))
         not_engine = d / "nope"
         not_engine.write_text("#!/bin/sh\necho hello\n")
         not_engine.chmod(0o755)

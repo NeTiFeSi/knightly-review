@@ -1,7 +1,4 @@
-"""Find the supported engines already on this computer: Stockfish (required) and Lc0 (optional).
-
-Only these two are supported. Both must report win/draw/loss (UCI_ShowWDL).
-"""
+"""Find Stockfish on this computer. It is the only supported engine and must report win/draw/loss (UCI_ShowWDL)."""
 
 from __future__ import annotations
 
@@ -14,18 +11,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-NAMES = ("stockfish", "lc0")
-STOCKFISH, LC0 = "stockfish", "lc0"
+NAME = "stockfish"
 
 
-def kind_of(name: str) -> str | None:
-    """ "stockfish" or "lc0" from an engine's `id name`, else None (unsupported)."""
-    n = name.lower()
-    if "stockfish" in n:
-        return STOCKFISH
-    if n.startswith("lc0") or "leela" in n:
-        return LC0
-    return None
+def is_stockfish(name: str) -> bool:
+    """Whether an engine's `id name` is Stockfish."""
+    return "stockfish" in name.lower()
 
 
 @dataclass
@@ -33,7 +24,6 @@ class EngineInfo:
     path: str
     name: str  # from the engine's `id name`, e.g. "Stockfish 19"
     found_in: str  # "PATH", "Homebrew", "winget", "downloaded", "custom", …
-    kind: str = STOCKFISH  # "stockfish" | "lc0"
 
 
 def popen_kwargs() -> dict:
@@ -47,9 +37,9 @@ WDL_OPTION = "option name UCI_ShowWDL"
 
 
 def probe(path: str, timeout: float = 10.0) -> str | None:
-    """The engine's `id name` if `path` is Stockfish or Lc0 and reports win/draw/loss, else None."""
+    """The engine's `id name` if `path` is Stockfish and reports win/draw/loss, else None."""
     d = probe_details(path, timeout)
-    return d[0] if d and d[1] and kind_of(d[0]) else None
+    return d[0] if d and d[1] and is_stockfish(d[0]) else None
 
 
 def probe_details(path: str, timeout: float = 10.0) -> tuple[str, bool] | None:
@@ -85,14 +75,12 @@ def _candidates(engines_dir: str | None) -> Iterable[tuple[str, str]]:
         for p in sorted(glob.glob(os.path.join(engines_dir, "**", f"stockfish*{exe}"), recursive=True), reverse=True):
             if os.path.isfile(p) and (exe or os.access(p, os.X_OK)):
                 yield p, "downloaded"
-    for name in NAMES:
-        p = shutil.which(name)
-        if p:
-            yield p, "PATH"
+    p = shutil.which(NAME)
+    if p:
+        yield p, "PATH"
     if sys.platform == "darwin":
         for prefix in ("/opt/homebrew/bin", "/usr/local/bin"):
-            for name in NAMES:
-                yield os.path.join(prefix, name), "Homebrew"
+            yield os.path.join(prefix, NAME), "Homebrew"
     elif sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA", "")
         if local:
@@ -100,22 +88,18 @@ def _candidates(engines_dir: str | None) -> Iterable[tuple[str, str]]:
                 os.path.join(local, "Microsoft", "WinGet", "Packages", "Stockfish*", "**", "*.exe"), recursive=True
             ):
                 yield p, "winget"
-            for name in NAMES:
-                yield os.path.join(local, "Microsoft", "WinGet", "Links", f"{name}.exe"), "winget"
+            yield os.path.join(local, "Microsoft", "WinGet", "Links", f"{NAME}.exe"), "winget"
         for base in (os.environ.get("ProgramFiles", ""), os.environ.get("ProgramFiles(x86)", "")):
             if base:
                 for p in glob.glob(os.path.join(base, "Stockfish*", "**", "stockfish*.exe"), recursive=True):
                     yield p, "Program Files"
-                for p in glob.glob(os.path.join(base, "lc0*", "lc0.exe")):
-                    yield p, "Program Files"
     else:
         for d in ("/usr/games", "/usr/local/games", "/snap/bin", os.path.expanduser("~/.local/bin")):
-            for name in NAMES:
-                yield os.path.join(d, name), "system"
+            yield os.path.join(d, NAME), "system"
 
 
-def discover(engines_dir: str | None = None, custom: str | None = None, kind: str | None = None) -> list[EngineInfo]:
-    """Supported engines (of `kind`, if given), best guess first: a custom path, then downloaded, then installed."""
+def discover(engines_dir: str | None = None, custom: str | None = None) -> list[EngineInfo]:
+    """The Stockfish builds found, best guess first: a custom path, then downloaded, then installed."""
     seen: set[str] = set()
     found: list[EngineInfo] = []
     pairs = ([(custom, "custom")] if custom else []) + list(_candidates(engines_dir))
@@ -127,8 +111,7 @@ def discover(engines_dir: str | None = None, custom: str | None = None, kind: st
             continue
         seen.add(real)
         name = probe(path)
-        k = kind_of(name) if name else None
-        if k and (kind is None or k == kind):
-            found.append(EngineInfo(path=path, name=name, found_in=where, kind=k))
-    found.sort(key=lambda e: (e.found_in != "custom", e.kind != STOCKFISH))
+        if name:
+            found.append(EngineInfo(path=path, name=name, found_in=where))
+    found.sort(key=lambda e: e.found_in != "custom")
     return found

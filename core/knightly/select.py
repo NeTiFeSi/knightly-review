@@ -113,7 +113,7 @@ def line_material(board: chess.Board, moves: list[str], plies: int, analyser=Non
             and analyser is not None
             and (done < plies or (last and not _settled(b, last, captured, None, owed is not None)))
         ):
-            ev = analyser.evaluate(b, multipv=1)
+            ev = analyser.evaluate(b)
             seq += ev.lines[0].moves if ev.lines else []
         if done >= len(seq):
             break
@@ -189,9 +189,6 @@ def quick_nag(loss: float, inaccuracy: float) -> int:
     return MISTAKE if loss <= 20 else BLUNDER
 
 
-GAME_LINES = 3  # enough to tell an only good move (the second line is worse) and the good moves apart
-
-
 def game_nags(
     game: Game, analyser, cfg: Config, skip: Iterable[int] = (), progress: Callable[[int, int], None] | None = None
 ) -> dict[int, int]:
@@ -199,7 +196,7 @@ def game_nags(
 
     Plies in `skip` (the puzzle cards, graded in full there) and positions with a single legal move are left
     out. A plain good move (!) is not marked: nearly every move would be. !!, □ and !? and the bad grades are.
-    Uses `GAME_LINES` lines per position (cached by the analyser), so it is cheaper than a puzzle's full look.
+    Every position is searched in full by the analyser (and cached), like a puzzle position.
     `progress(done, total)` is called before each position.
     """
     skip = set(skip)
@@ -209,7 +206,7 @@ def game_nags(
         if progress:
             progress(ply, len(game.moves))
         if ply not in skip and not board.is_game_over() and board.legal_moves.count() > 1:
-            graded, _ = grade_position(board, analyser, cfg, u, ply, GAME_LINES)
+            graded, _ = grade_position(board, analyser, cfg)
             played = next((g for g in graded if g.move == u), None)
             if played is not None and played.nag not in (NEUTRAL, GOOD):
                 out[ply] = played.nag
@@ -217,29 +214,12 @@ def game_nags(
     return out
 
 
-def grade_position(
-    board: chess.Board,
-    analyser,
-    cfg: Config,
-    extra: str | None = None,
-    ply: int = 99,
-    lines: int | None = None,
-    sf_only: bool = False,
-) -> tuple[list[Graded], dict[str, Line]]:
-    """Deep multi-line analysis of `board`, graded. `extra` (e.g. the move played) is analysed too.
-
-    `lines`: how many lines to analyse instead of the configured number. `sf_only`: Stockfish alone
-    (the analyser's `evaluate` normally lets Lc0 judge, except in mates)."""
-    multipv = lines or (cfg.deep_multipv if cfg.deep_multipv > 0 else board.legal_moves.count())  # 0 = every legal move
-    ev = analyser.evaluate(board, multipv=multipv, ply=ply, **({"sf_only": True} if sf_only else {}))
+def grade_position(board: chess.Board, analyser, cfg: Config) -> tuple[list[Graded], dict[str, Line]]:
+    """Every legal move of `board` graded, from the analyser's one full search of it (`analyser.evaluate`)."""
+    ev = analyser.evaluate(board)
     by_move = {l.moves[0]: l for l in ev.lines if l.moves}
     if not by_move:
         return [], {}
-    if extra and extra not in by_move:
-        after = board.copy(stack=False)
-        after.push_uci(extra)
-        pe = analyser.evaluate(after, ply=ply + 1)
-        by_move[extra] = Line(pe.score, [extra] + (pe.lines[0].moves if pe.lines else []))
     white = board.turn == chess.WHITE
     best = max(l.score.win_pct(white) for l in by_move.values())
     graded = [
@@ -312,7 +292,7 @@ def build_card(
     """
     if board.legal_moves.count() < 2:
         return None
-    graded, by_move = grade_position(board, analyser, cfg, played, ply)
+    graded, by_move = grade_position(board, analyser, cfg)
     if not graded:
         return None
     if decided(board, by_move) is not None:  # no move can change the result: nothing to learn here
@@ -370,7 +350,7 @@ def build_punish(
     """
     if board.is_game_over() or board.legal_moves.count() < 2:
         return None
-    graded, by_move = grade_position(board, analyser, cfg, None, ply)
+    graded, by_move = grade_position(board, analyser, cfg)
     if not graded or decided(board, by_move) is not None:  # no move can change the result: no second card
         return None
     best = min(graded, key=lambda g: g.loss).move

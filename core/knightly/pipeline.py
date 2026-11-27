@@ -1,18 +1,17 @@
-"""The one way puzzles are made: ply by ply, the biggest suspected mistakes analysed deepest first.
+"""The one way puzzles are made: ply by ply, the biggest mistakes confirmed first.
 
 For ply 0, 1, 2… (half-moves already played), the user's positions first and then, with
 `cfg.include_opponent`, the opponents':
 
-1. Every legal move of every position at that ply is searched at a low depth (`scan_steps`), and
-   each position gets the loss of the worst move a player actually played there: how far its
-   win rate falls below the best move's (engine WDL).
-2. The position with the biggest loss is promoted: its played moves and its most promising
-   alternatives are searched at the next depth, and it goes back in line with its new loss.
-   A position whose loss drops under the limit is eliminated.
-3. A position that has climbed every step gets the full setup (`select.build_card`, the configured
-   depth, every move graded). If the played move is not a good move, it is a puzzle: one note with
-   two puzzles, the position before the mistake and the position after it (the punishment).
-4. Then the biggest loss among the rest is promoted, until none is left; then the next ply.
+1. Every position at that ply is searched once, to the fixed depth `cfg.sf_depth` with one line per legal
+   move (`Analyser.evaluate`), so every move has an exact score from the same search. Each position gets the
+   loss of the worst move a player actually played there: how far its win rate falls below the best move's
+   (engine WDL).
+2. The positions where that loss is more than `min_loss` are taken biggest first. Each gets the full setup
+   (`select.build_card`; the search is cached, so it costs nothing more): if the played move is not a good
+   move, it is a puzzle: one note with two puzzles, the position before the mistake and the position after
+   it (the punishment).
+3. Then the next ply.
 
 A puzzle very similar to one already made is not a note of its own: the old puzzle's note gets a
 comment for each correct answer instead (`similar.py`). How often each move was played in a
@@ -23,11 +22,10 @@ Every search is cached by position and depth, so a run carries on where the last
 
 from __future__ import annotations
 
-import heapq
 import math
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import chess
 
@@ -35,31 +33,16 @@ from . import notes as notes_mod
 from . import similar, stats, statsview
 from .cache import fen_key
 from .config import Config
-from .engine.analyse import terminal
 from .follow import Decision, follow_puzzle, trimmed
-from .model import CardSpec, Game, NoteSpec, Score
+from .model import CardSpec, Eval, Game, NoteSpec, Score
 from .progress import Tracker
 from .puzzles import Puzzle, Store, puzzle_id
 from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
 
-DONE = 10_000  # depth given to finished positions (mate, stalemate…): nothing to search
 UNBOUNDED = 10**6  # `want` at or above this: no cap, keep confirming (pre-calculating)
-EXTRA_LINES = 3  # at each step after the first, the best moves by current score searched besides the played ones
 CONFIRM_TRIES = 3  # worst moves of a position tried at full strength before giving up on it
 
 Progress = Callable[[str, int, int, str], None]
-
-
-def depth_steps(full: int) -> list[int]:
-    """The depths a position climbs, ending at the configured one: two or three steps (13 → 5, 9, 13)."""
-    full = max(1, full)
-    return sorted({min(full, max(4, round(full * 0.4))), min(full, max(4, round(full * 0.7))), full})
-
-
-def scan_steps(full: int) -> list[int]:
-    """The depths before the full setup: all of `depth_steps` but the last (the last alone when it is the only one)."""
-    steps = depth_steps(full)
-    return steps[:-1] or steps
 
 
 class _Stop(Exception):
@@ -74,8 +57,7 @@ class Unit:
     mine: bool
     board: chess.Board
     played: dict[str, stats.MoveStat]
-    child: dict[str, str] = field(default_factory=dict)  # legal move → full FEN after it
-    level: int = 0
+    ev: Eval | None = None  # the position searched: every legal move with its score
 
 
 class Miner:
@@ -111,8 +93,6 @@ class Miner:
         self.merged = {bid for p in self.known.values() for bid in p.links}
         self.by_ply = stats.collect(self.games)
         self.by_fen = stats.collect_positions(self.games)  # for the Notes field: matched whatever the ply
-        self.scan = scan_steps(cfg.sf_depth)
-        self.sc: dict[str, tuple[Score, int]] = {}  # fen key → (score, depth), White's view
         self._graded: dict[str, dict[int, int]] = {}
         self.notes: list[NoteSpec] = []
         self.made: set[str] = set()  # keys of the notes made in this run
@@ -148,29 +128,12 @@ class Miner:
         self.tracker.message(self._msg(step), step=detail, force=step != self._step)
         self._step = step
 
-    def _score(self, fen: str, depth: int) -> None:
-        k = fen_key(fen)
-        cur = self.sc.get(k)
-        if cur and cur[1] >= depth:
-            self.tracker.advance()
-            return
-        self._tick()
-        board = chess.Board(fen)
-        if board.is_game_over():
-            self.sc[k] = (terminal(board), DONE)
-        else:
-            s, d = self.an.score(board, depth)
-            self.analysed += 1
-            self.sc[k] = (s, d)
-        self.tracker.advance()
-
-    def _pct(self, u: Unit, move: str) -> float | None:
-        cur = self.sc.get(fen_key(u.child[move]))
-        return None if cur is None else cur[0].win_pct(u.board.turn == chess.WHITE)
-
     def _losses(self, u: Unit) -> dict[str, float]:
-        """Loss of each played move that has a score, against the best scored move."""
-        pcts = {m: p for m in u.child if (p := self._pct(u, m)) is not None}
+        """Loss of each played move against the best move, from the unit's search."""
+        if u.ev is None:
+            return {}
+        white = u.board.turn == chess.WHITE
+        pcts = {l.moves[0]: l.score.win_pct(white) for l in u.ev.lines if l.moves}
         if not pcts:
             return {}
         best = max(pcts.values())
@@ -178,22 +141,6 @@ class Miner:
 
     def loss(self, u: Unit) -> float:
         return max(self._losses(u).values(), default=0.0)
-
-    def _search(self, u: Unit, level: int) -> None:
-        """Search the unit's moves at the depth of `level`: all of them first, then the played ones and the
-        best by current score."""
-        depth = self.scan[level]
-        if level == 0:
-            moves = list(u.child)
-        else:
-            by_score = sorted(
-                (m for m in u.child if self._pct(u, m) is not None), key=lambda m: -(self._pct(u, m) or 0)
-            )
-            moves = list(dict.fromkeys([*u.played, *by_score[:EXTRA_LINES]]))
-        if level:
-            self.tracker.plan(len(moves))
-        for m in moves:
-            self._score(u.child[m], depth)
 
     # --- the loop
     def run(self) -> None:
@@ -219,12 +166,7 @@ class Miner:
             board = chess.Board(pos.fen)
             if board.legal_moves.count() < 2:
                 continue
-            u = Unit(pos, mine, board, played)
-            for mv in board.legal_moves:
-                b = board.copy(stack=False)
-                b.push(mv)
-                u.child[mv.uci()] = b.fen()
-            out.append(u)
+            out.append(Unit(pos, mine, board, played))
         return out
 
     def _ply(self, ply: int, mine: bool) -> None:
@@ -232,58 +174,38 @@ class Miner:
         if not units:
             return
         who = "your moves" if mine else "your opponents' moves"
-        step = f"Ply {ply}, {who}: grading {len(units)} positions at depth {self.scan[0]} of {self.cfg.sf_depth}"
+        depth = self.cfg.sf_depth
+        step = f"Ply {ply}, {who}: analysing {len(units)} positions at depth {depth}"
         self._step = step
         self.tracker.plies(ply, max(self.by_ply, default=0))
         self.tracker.found(self.cards if self.make else self.found, 0 if self.want >= UNBOUNDED else self.want)
         self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
-        self.tracker.stage(
-            "analyse",
-            self._msg(step),
-            total=sum(len(u.child) for u in units),
-            unit="moves",
-            step=f"depth {self.scan[0]} of {self.cfg.sf_depth}",
-        )
+        self.tracker.stage("analyse", self._msg(step), total=len(units), unit="positions", step=f"depth {depth}")
         for i, u in enumerate(units):
-            self.tracker.position(f"ply {ply}: position {i + 1} of {len(units)}")
-            self._search(u, 0)
-        floor = self.cfg.min_loss_at(ply) / 2  # the low depths only rule out the clearly fine moves
-        heap = [(-self.loss(u), i, u) for i, u in enumerate(units)]
-        heapq.heapify(heap)
-        n = len(units)
-        while heap:
             self._tick()
-            neg, _, u = heapq.heappop(heap)
-            if -neg <= floor:
-                break  # the heap is ordered: everything left is below too
-            if u.level < len(self.scan) - 1:
-                u.level += 1
-                self._say(
-                    f"Ply {ply}, {who}: checking the biggest losses at depth {self.scan[u.level]} "
-                    f"of {self.cfg.sf_depth}",
-                    f"depth {self.scan[u.level]} of {self.cfg.sf_depth}",
-                    f"ply {ply}: a move losing {-neg:.0f} % · {len(heap) + 1} candidates",
-                )
-                self._search(u, u.level)
-                n += 1
-                heapq.heappush(heap, (-self.loss(u), n, u))
-            else:
-                self._confirm(u, ply)
+            self.tracker.position(f"ply {ply}: position {i + 1} of {len(units)}")
+            u.ev = self.an.evaluate(u.board)
+            self.analysed += 1
+            self.tracker.advance()
+        floor = self.cfg.min_loss_at(ply)
+        for u in sorted((u for u in units if self.loss(u) > floor), key=lambda u: -self.loss(u)):
+            self._tick()
+            self._confirm(u, ply)
             if self.make and self.cards >= self.want:
                 raise _Stop()
 
     def _confirm(self, u: Unit, ply: int) -> None:
-        """Full-strength look at the position's worst played moves; the first that is no good move makes the puzzle."""
+        """Look at the position's worst played moves; the first that is no good move makes the puzzle."""
         self._say(
-            f"Ply {ply}: making a puzzle at full strength",
-            f"depth {self.cfg.sf_depth} of {self.cfg.sf_depth}, every move",
+            f"Ply {ply}: making a puzzle",
+            f"depth {self.cfg.sf_depth}, every move",
             f"ply {ply}: a move losing {self.loss(u):.0f} %",
         )
         self.tracker.plan(1)
         game_opponent = ""
         worst = sorted(self._losses(u).items(), key=lambda kv: -kv[1])[:CONFIRM_TRIES]
         for move, loss in worst:
-            if loss <= self.cfg.min_loss_at(ply) / 2:
+            if loss <= self.cfg.min_loss_at(ply):
                 break
             st = u.played[move]
             game = (st.mine_game if u.mine else st.opp_game) or self.games[0]
@@ -301,13 +223,22 @@ class Miner:
 
     # --- making notes
     def _scores_of(self, game: Game) -> list[Score | None]:
-        keys, b = [], chess.Board()
-        keys.append(fen_key(b.fen()))
+        """The engine's score of each position of the game (White's view), from the searches in the cache: a
+        position searched itself, else the score of the move played from the position before it."""
+        boards = [chess.Board()]
         for m in game.moves:
+            b = boards[-1].copy(stack=False)
             b.push_uci(m)
-            keys.append(fen_key(b.fen()))
-        known = self.an.known(keys)
-        return [(self.sc[k][0] if k in self.sc else (known[k][1] if k in known else None)) for k in keys]
+            boards.append(b)
+        evs = [self.an.cached(b) for b in boards]
+        out: list[Score | None] = []
+        for i, ev in enumerate(evs):
+            score = ev.lines[0].score if ev and ev.lines else None
+            if score is None and i and evs[i - 1]:
+                before = evs[i - 1]
+                score = next((l.score for l in before.lines if l.moves and l.moves[0] == game.moves[i - 1]), None)
+            out.append(score)
+        return out
 
     def _nags(self, game: Game, skip: set[int]) -> dict[int, int]:
         """The NAGs of a game's other moves, graded once per run (the analyser caches the searches)."""
@@ -349,10 +280,7 @@ class Miner:
         after.push_uci(card.played.move)
         second = build_punish(after.copy(stack=False), ply + 1, played_san, self.an, self.cfg, mine=card.mine)
         seen = {fen_key(hist.fen()), fen_key(after.fen())}
-        quick = self.scan[0]
-        decisions = follow_puzzle(
-            hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick, tracker=self.tracker
-        )
+        decisions = follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, tracker=self.tracker)
         if second is not None:
             decisions += follow_puzzle(
                 after,
@@ -361,7 +289,6 @@ class Miner:
                 self.cfg,
                 solver=after.turn,
                 seen=seen,
-                quick_depth=quick,
                 include_played=True,
                 tracker=self.tracker,
             )
@@ -460,7 +387,6 @@ class Miner:
                 self.cfg,
                 solver=after.turn,
                 seen=set(),
-                quick_depth=self.scan[0],
                 include_played=True,
                 tracker=self.tracker,
                 max_plies=2,
@@ -499,7 +425,7 @@ class Miner:
     def _merge(self, p: Puzzle, u: Unit, ply: int) -> None:
         """Instead of a new note: `p`'s note gets a comment for each of its correct answers (and the mistake)."""
         old = chess.Board(p.fen)
-        graded, _ = grade_position(u.board, self.an, self.cfg, None, ply)
+        graded, _ = grade_position(u.board, self.an, self.cfg)
         nag_here = {g.move: g.nag for g in graded}
         why = similar.describe(old, u.board)
         out = []

@@ -20,13 +20,10 @@ from .model import Eval, Game
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS evals (
-  fen_key TEXT NOT NULL,
-  engine TEXT NOT NULL,      -- "stockfish" | "lc0"
-  multipv INTEGER NOT NULL,
-  effort INTEGER NOT NULL,   -- Stockfish: depth; Lc0: milliseconds
+  fen_key TEXT PRIMARY KEY,
+  effort INTEGER NOT NULL,   -- the Stockfish depth the position was searched to (one line per legal move)
   data TEXT NOT NULL,
-  updated INTEGER NOT NULL,
-  PRIMARY KEY (fen_key, engine, multipv)
+  updated INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS games (
   source TEXT NOT NULL,
@@ -51,7 +48,7 @@ CREATE TABLE IF NOT EXISTS kv (
 """
 
 
-SCHEMA_VERSION = 3  # 2: evals carry WDL; 3: evals are kept per engine (Stockfish, Lc0)
+SCHEMA_VERSION = 4  # 2: evals carry WDL; 3: evals per engine; 4: Stockfish only, every legal move searched together
 
 
 def fen_key(fen: str) -> str:
@@ -60,11 +57,10 @@ def fen_key(fen: str) -> str:
 
 
 class Cache(Protocol):
-    def get_eval(self, key: str, engine: str, multipv: int = 1, min_effort: int = 0) -> Eval | None: ...
-    def put_eval(self, key: str, engine: str, effort: int, ev: Eval) -> None: ...
+    def get_eval(self, key: str, min_effort: int = 0) -> Eval | None: ...
+    def put_eval(self, key: str, effort: int, ev: Eval) -> None: ...
     def put_games(self, games: Iterable[Game], user: str) -> int: ...
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]: ...
-    def best_evals(self, keys: list[str], engine: str) -> dict[str, tuple[int, Eval]]: ...
     def get_analysis(self, game: Game) -> list[dict | None] | None: ...
     def put_analysis(self, game: Game, analysis: list[dict | None]) -> None: ...
     def get_http(self, url: str) -> tuple[str | None, str | None]: ...
@@ -107,45 +103,19 @@ class SqliteCache:
             self._local.conn = None
 
     # evals
-    def get_eval(self, key: str, engine: str, multipv: int = 1, min_effort: int = 0) -> Eval | None:
-        row = (
-            self._conn()
-            .execute(
-                "SELECT data FROM evals WHERE fen_key=? AND engine=? AND multipv>=? AND effort>=? "
-                "ORDER BY effort DESC LIMIT 1",
-                (key, engine, multipv, min_effort),
-            )
-            .fetchone()
-        )
-        if not row:
-            return None
-        ev = Eval.from_json(json.loads(row[0]))
-        ev.lines = ev.lines[: max(multipv, 1)] if multipv > 0 else ev.lines
-        return ev
+    def get_eval(self, key: str, min_effort: int = 0) -> Eval | None:
+        """The position's search, if it went at least to depth `min_effort`."""
+        row = self._conn().execute("SELECT data FROM evals WHERE fen_key=? AND effort>=?", (key, min_effort)).fetchone()
+        return Eval.from_json(json.loads(row[0])) if row else None
 
-    def best_evals(self, keys: list[str], engine: str) -> dict[str, tuple[int, Eval]]:
-        """The most searched eval of each position (any number of lines): key → (effort, eval)."""
-        best: dict[str, tuple[int, str]] = {}
-        conn = self._conn()
-        for i in range(0, len(keys), 500):
-            chunk = keys[i : i + 500]
-            rows = conn.execute(
-                f"SELECT fen_key, effort, data FROM evals WHERE engine=? AND fen_key IN ({','.join('?' * len(chunk))})",
-                (engine, *chunk),
-            )
-            for k, effort, data in rows:
-                if k not in best or effort > best[k][0]:
-                    best[k] = (effort, data)
-        return {k: (e, Eval.from_json(json.loads(d))) for k, (e, d) in best.items()}
-
-    def put_eval(self, key: str, engine: str, effort: int, ev: Eval) -> None:
+    def put_eval(self, key: str, effort: int, ev: Eval) -> None:
         with self._conn() as c:
             c.execute(
-                """INSERT INTO evals (fen_key, engine, multipv, effort, data, updated) VALUES (?,?,?,?,?,?)
-                   ON CONFLICT (fen_key, engine, multipv) DO UPDATE SET
+                """INSERT INTO evals (fen_key, effort, data, updated) VALUES (?,?,?,?)
+                   ON CONFLICT (fen_key) DO UPDATE SET
                      effort=excluded.effort, data=excluded.data, updated=excluded.updated
                    WHERE excluded.effort >= evals.effort""",
-                (key, engine, len(ev.lines), effort, json.dumps(ev.to_json()), int(time.time())),
+                (key, effort, json.dumps(ev.to_json()), int(time.time())),
             )
 
     # games
