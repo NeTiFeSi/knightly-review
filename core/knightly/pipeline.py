@@ -19,26 +19,32 @@ comment for each correct answer instead (`similar.py`). How often each move was 
 position (`stats.py`) goes in the note's Notes field and is refreshed when the games change.
 
 Every search is cached by position and depth, so a run carries on where the last one stopped.
+
+Notes built under older rules (`puzzles.RULES`) are rebuilt first (`Miner.repair`): each is edited in place,
+keeping its cards, and gets whatever the old rules left out. A card is never removed.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import io
 import math
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import chess
+import chess.pgn
 
 from . import notes as notes_mod
 from . import similar, stats, statsview
 from .cache import fen_key
 from .config import Config
 from .follow import Decision, follow_puzzle, trimmed
-from .model import CardSpec, Game, Line, NoteSpec, Score
+from .model import CardSpec, Choice, Game, Line, NoteSpec, Score
 from .progress import Tracker
-from .puzzles import Puzzle, Store, puzzle_id
-from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
+from .puzzles import RULES, Puzzle, Store, puzzle_id
+from .select import ACCEPTED, GOOD, build_card, build_punish, game_nags, grade_position
 
 UNBOUNDED = 10**6  # `want` at or above this: no cap, keep confirming (pre-calculating)
 CONFIRM_TRIES = 3  # worst moves of a position tried at full strength before giving up on it
@@ -48,6 +54,11 @@ Progress = Callable[[str, int, int, str], None]
 
 class _Stop(Exception):
     """The time is up or enough puzzles are made."""
+
+
+def _from_a_tree(p: Puzzle) -> bool:
+    """A note of a position inside a tree starts from that position, not from the game's first move."""
+    return '[FEN "' in p.pgn
 
 
 @dataclass(eq=False)
@@ -85,13 +96,15 @@ class Miner:
         self.by_key = {g.key: g for g in self.games}
         self.an, self.cfg, self.store, self.want, self.make = analyser, cfg, store, want, make
         self.claimed = set(claimed)
-        self.existing = existing or {}
+        self.existing = dict(existing or {})
         self.tracker = tracker or Tracker()
         self.on_note = on_note or (lambda spec: None)
         self.clock = clock
         self.deadline = clock() + cfg.analysis_minutes * 60 if cfg.analysis_minutes > 0 else math.inf
         self.known: dict[str, Puzzle] = {p.id: p for p in known}
         self.merged = {bid for p in self.known.values() for bid in p.links}
+        # Notes in the collection built under older rules, by note key, until they are rebuilt.
+        self.stale = {p.key: p for p in self.known.values() if p.stored and p.rules < RULES and p.key in self.existing}
         self.by_ply = stats.collect(self.games)
         self.by_fen = stats.collect_positions(self.games)  # for the Notes field: matched whatever the ply
         self._graded: dict[str, dict[int, int]] = {}
@@ -145,6 +158,7 @@ class Miner:
     def run(self) -> None:
         try:
             self.refresh_all()
+            self.repair()
             for ply in range(max(self.by_ply, default=-1) + 1):
                 for mine in (True, False):
                     if mine or self.cfg.include_opponent:
@@ -272,6 +286,11 @@ class Miner:
         if similar_to is not None:
             self._merge(similar_to, u, ply)
             return
+        self._grow(u.board.fen(), game, card)
+
+    def _grow(self, fen: str, game: Game, card: CardSpec) -> None:
+        """`_add` without the similarity check, for the mistake at `fen`."""
+        ply = card.ply
         # The boards carry the game's moves up to the puzzle, for the repetition and fifty-move rules.
         hist = chess.Board()
         for m in game.moves[:ply]:
@@ -297,10 +316,12 @@ class Miner:
             self._sub_note(d, game)
             if self.cards >= self.want:
                 raise _Stop()
-        self._root_note(u, game, card, second, after)
+        self._root_note(fen, game, card, second, after)
 
-    def _root_note(self, u: Unit, game: Game, card: CardSpec, second: CardSpec | None, after: chess.Board) -> None:
+    def _root_note(self, fen: str, game: Game, card: CardSpec, second: CardSpec | None, after: chess.Board) -> None:
         ply = card.ply
+        key = notes_mod.puzzle_key(card.fen_key, ply)
+        self._release(key)
         if second is not None and fen_key(after.fen()) in self.claimed:
             second = None  # that position is a card already
         # A card is a move and the reply to it: what the trees hold below is the notes of its own.
@@ -308,8 +329,8 @@ class Miner:
         if second is not None:
             second.played, second.alternatives = trimmed(second.played, 1), [trimmed(c, 1) for c in second.alternatives]
         p = Puzzle(
-            key=notes_mod.puzzle_key(card.fen_key, ply),
-            fen=u.board.fen(),
+            key=key,
+            fen=fen,
             ply=ply,
             moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},
             played=card.played.move,
@@ -318,7 +339,7 @@ class Miner:
             head=notes_mod.puzzle_head(game, card),
             after_moves=self._moves_of(second),
         )
-        p.notes = self._notes_of(p)
+        self._write_notes_field(p)
         spec = notes_mod.build_puzzle(
             game, self._scores_of(game), card, second, p.notes, self.cfg.inaccuracy, self._nags(game, {ply})
         )
@@ -328,30 +349,61 @@ class Miner:
     def _moves_of(card: CardSpec | None) -> dict[str, int]:
         return {} if card is None else {card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}}
 
+    def _write_notes_field(self, p: Puzzle) -> None:
+        if p.key in self.stale:  # the comments from similar positions stay
+            p.links = dict(self.stale[p.key].links)
+        p.notes = self._notes_of(p)
+
+    def _release(self, key: str) -> None:
+        """The positions of a note being rebuilt are free for it again."""
+        if key in self.stale:
+            self.claimed.difference_update(self.stale[key].card_ids)
+
     def _emit(self, p: Puzzle, spec: NoteSpec) -> None:
         p.tags, p.pgn, p.cards, p.card_ids = spec.tags, spec.pgn, spec.cards, spec.card_ids
+        p.rules = RULES
+        old = self.stale.pop(p.key, None)
+        if old is not None:
+            have = notes_mod.card_ids(self.existing[p.key])  # the cards the note in the collection has
+            self.claimed.update(have)
+            if set(have) - set(spec.card_ids):  # it would lose a card: the note stays as it is, to be tried again
+                return
+            spec.new_cards = len(set(spec.card_ids) - set(have))
+            if spec.pgn != self.existing[p.key]:
+                # Written below, but only the next run sees whether it reached the collection: until then
+                # the record stays on the old rules.
+                p.rules = old.rules
         self.store.put(p)
         self.known[p.id] = p
-        self.made.add(p.key)
         self.claimed.update(spec.card_ids)
+        if old is not None:
+            if spec.pgn == self.existing[p.key]:
+                return  # the note is as the current rules make it
+            self.existing[p.key] = spec.pgn
+        self.made.add(p.key)
         self.cards += spec.new_cards
         self.notes.append(spec)
-        self.tracker.found(self.cards, 0 if self.want >= UNBOUNDED else self.want)
         self.on_note(spec)
+        self.tracker.found(self.cards, 0 if self.want >= UNBOUNDED else self.want)
 
     def _sub_note(self, d: Decision, game: Game) -> None:
         """The note of a decision position X: find the best move there (with the opponent's reply), and punish the
         best move that is not good (the position after it). Not made when X is a card already; the second card
         is left out when its position is a card already or the game is decided there."""
         key = fen_key(d.fen)
+        pkey = notes_mod.puzzle_key(key, d.ply)
+        old = self.stale.get(pkey)
+        rebuild = old is not None and _from_a_tree(old)
         mistake = next((c for c in d.choices if c.move not in d.good), None)  # the best move that is not good
-        if key in self.claimed or mistake is None:
+        if (key in self.claimed and not rebuild) or mistake is None:
             return
         seen = self.by_fen.get(key)
         if seen is not None:  # a move that is not good and that our games played there is the better mistake
             played = [c for c in d.choices if c.move not in d.good and c.move in seen.moves]
             if played:
                 mistake = max(played, key=lambda c: seen.moves[c.move].games)
+        if rebuild:  # the note keeps asking about its own mistake, whatever the games played since
+            mistake = next((c for c in d.choices if c.move == old.played and c.move not in d.good), mistake)
         board = chess.Board(d.fen)
         user = chess.WHITE if game.user_is_white else chess.BLACK
         mine = board.turn == user
@@ -375,6 +427,7 @@ class Miner:
             comment=comment,
             mine=mine,
         )
+        self._release(pkey)
         after = board.copy(stack=False)
         after.push_uci(mistake.move)
         second = None
@@ -395,7 +448,7 @@ class Miner:
             second.played = trimmed(second.played, 1)
             second.alternatives = [trimmed(c, 1) for c in second.alternatives]
         p = Puzzle(
-            key=notes_mod.puzzle_key(key, d.ply),
+            key=pkey,
             fen=d.fen,
             ply=d.ply,
             moves={mistake.move: mistake.nag, **{c.move: c.nag for c in others}},
@@ -405,7 +458,7 @@ class Miner:
             head=notes_mod.puzzle_head(game, first),
             after_moves=self._moves_of(second),
         )
-        p.notes = self._notes_of(p)
+        self._write_notes_field(p)
         spec = notes_mod.build_puzzle(
             game, [], first, second, p.notes, self.cfg.inaccuracy, lead=(d.before_fen, trimmed(d.reply, 0))
         )
@@ -445,6 +498,62 @@ class Miner:
         self._refresh(p)
 
     # --- keeping existing notes up to date
+    def repair(self) -> None:
+        """Rebuild the notes made under older rules, the mistakes from our games first: growing their trees
+        again also rebuilds the notes of the positions inside them and makes the ones that were missing. The
+        notes of tree positions not reached that way are then rebuilt one by one. A note that cannot be
+        rebuilt (its game is gone, or it is no puzzle under the current settings) stays."""
+        if not self.make or not self.stale:
+            return
+        by_url = {g.url: g for g in self.games if g.url}
+        todo = sorted(self.stale.values(), key=lambda p: (_from_a_tree(p), p.ply))
+        step = "Updating the notes made by an older version"
+        self._step = step
+        self.tracker.stage("analyse", self._msg(step), total=len(todo), unit="notes", step="updating notes")
+        for p in todo:
+            if p.key in self.stale:  # not rebuilt along with an earlier one
+                self._tick()
+                headers = chess.pgn.read_headers(io.StringIO(p.pgn))
+                game = by_url.get(headers.get("Site", "")) if headers else None
+                if game is not None:
+                    (self._repair_tree_note if _from_a_tree(p) else self._repair_mistake)(p, game)
+                if self.cards >= self.want:
+                    raise _Stop()
+            self.tracker.advance()
+
+    def _repair_mistake(self, p: Puzzle, game: Game) -> None:
+        board = chess.Board(p.fen)
+        mine = (board.turn == chess.WHITE) == game.user_is_white
+        opponent = "" if mine else ((game.black if game.user_is_white else game.white) or "Your opponent")
+        card = build_card(board.copy(stack=False), p.ply, p.played, self.an, self.cfg, opponent)
+        if card is not None:
+            self._grow(p.fen, game, card)
+
+    def _repair_tree_note(self, p: Puzzle, game: Game) -> None:
+        """Grow the tree again from the position before the opponent's move, the note's first position."""
+        pg = chess.pgn.read_game(io.StringIO(p.pgn))
+        first = pg.next() if pg else None
+        if pg is None or first is None:
+            return
+        board = pg.board()
+        _, by_move = grade_position(board.copy(stack=False), self.an, self.cfg)
+        line = by_move.get(first.move.uci())
+        if line is None:
+            return
+        reply = Choice(move=first.move.uci(), nag=next(iter(first.nags), 0), score=line.score)
+        start = CardSpec(fen_key=fen_key(board.fen()), ply=board.ply(), played=reply, alternatives=[reply], loss=0.0)
+        after = chess.Board(p.fen)
+        graded, _ = grade_position(after, self.an, self.cfg)
+        start.mate = any(g.mate is not None and g.mate > 0 for g in graded)
+        start.alternatives = [Choice(move=reply.move, nag=GOOD, score=reply.score)]  # a followed move
+        decisions = follow_puzzle(
+            board, start, self.an, self.cfg, solver=not board.turn, seen=set(), tracker=self.tracker, max_plies=3
+        )
+        for d in decisions:
+            if notes_mod.puzzle_key(fen_key(d.fen), d.ply) == p.key:
+                d.reply = dataclasses.replace(d.reply, nag=reply.nag)
+                self._sub_note(d, game)
+
     def _refresh(self, p: Puzzle) -> None:
         """Write `p`'s note again when its Notes field would now read differently (new games, new comments)."""
         if not self.make or (p.key not in self.existing and p.key not in self.made):
@@ -454,13 +563,15 @@ class Miner:
             return
         p.notes = text
         self.store.put(p)
+        pgn = self.existing.get(p.key) or p.pgn
+        ids = notes_mod.card_ids(pgn) or p.card_ids  # of the PGN written: the record may be ahead of the note
         spec = NoteSpec(
             key=p.key,
-            pgn=self.existing.get(p.key) or p.pgn,
-            cards=p.cards,
+            pgn=pgn,
+            cards=notes_mod.clozes(ids.values()),
             notes=text,
             tags=p.tags,
-            card_ids=p.card_ids,
+            card_ids=ids,
             new_cards=0,
         )
         self.notes.append(spec)

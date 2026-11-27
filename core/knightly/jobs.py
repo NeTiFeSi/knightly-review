@@ -47,10 +47,11 @@ STATE_KEY = "last_run"
 
 
 def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
-    """Hash of everything a run depends on: the settings (minus tokens), the games used, the positions on cards."""
+    """Hash of everything a run depends on: the rules, the settings (minus tokens), the games used, the positions
+    on cards."""
     d = cfg.to_dict()
     d.pop("lichess_token", None)
-    blob = json.dumps([d, sorted(game_keys), sorted(exclude)], sort_keys=True)
+    blob = json.dumps([puzzles.RULES, d, sorted(game_keys), sorted(exclude)], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 

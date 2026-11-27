@@ -1396,6 +1396,89 @@ class SubNoteTest(unittest.TestCase):
         self.assertEqual([n.new_cards for n in again.notes], [2])  # only the mistake's own note
 
 
+class RepairTest(unittest.TestCase):
+    """Notes made under older rules are rebuilt in place by the next update."""
+
+    def run_with(self, c, table, existing=None, **kw):
+        an = lambda *a: FakeAnalyser(table=table)
+        return run_update(Config(**CFG, **kw), c, fetch=False, existing=existing or {}, analyser_factory=an)
+
+    def age(self, c):
+        """As an older version left them: no rules number."""
+        store = puzzles.Store(c)
+        for key in store:
+            p = store.get(key)
+            p.rules = 0
+            store.put(p)
+
+    def test_a_missing_second_card_is_added_to_the_note(self):
+        c = seed(self, [recent(url="https://lichess.org/test0001")])
+        (first,) = self.run_with(c, {PUZZLE_FEN: PUNISH_TABLE[PUZZLE_FEN]}).notes  # no punishment: one card
+        self.assertEqual(first.new_cards, 1)
+        self.age(c)
+        res = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn})
+        (note,) = res.notes
+        self.assertEqual((note.key, note.cards, note.new_cards), (first.key, "{{c1::1::1}} {{c2::2::2}}", 1))
+        self.assertEqual(res.new_cards, 1)
+        # The write never reached the collection (cancelled, say): the next run offers it again.
+        lost = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn})
+        self.assertEqual([(n.pgn, n.new_cards) for n in lost.notes], [(note.pgn, 1)])
+        again = self.run_with(c, PUNISH_TABLE, {note.key: note.pgn})
+        self.assertTrue(again.skipped or not again.notes)
+
+    def test_an_unaffected_note_is_not_written_again(self):
+        c = seed(self, [recent(url="https://lichess.org/test0001")])
+        (first,) = self.run_with(c, PUNISH_TABLE).notes
+        self.age(c)
+        res = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn})
+        self.assertEqual((res.skipped, res.notes), (False, []))
+        self.assertEqual(puzzles.Store(c).get(first.key).rules, puzzles.RULES)
+
+    def test_a_card_is_never_removed(self):
+        c = seed(self, [recent(url="https://lichess.org/test0001")])
+        (first,) = self.run_with(c, PUNISH_TABLE).notes
+        self.age(c)
+        res = self.run_with(c, {PUZZLE_FEN: PUNISH_TABLE[PUZZLE_FEN]}, {first.key: first.pgn})
+        self.assertEqual(res.notes, [])
+        kept = puzzles.Store(c).get(first.key)
+        self.assertEqual((kept.cards, kept.rules), ("{{c1::1::1}} {{c2::2::2}}", 0))  # to be tried again
+
+    def test_notes_inside_a_tree_are_rebuilt_and_added(self):
+        tree = SubNoteTest("pos")
+        table = tree.table()
+        c = seed(self, [recent(url="https://lichess.org/test0001")])
+        made = self.run_with(c, table, max_new_cards=40).notes
+        sub_note, root = made
+        self.age(c)
+        # The sub note is gone, as if the old rules had cut the line before it: the repair makes it.
+        res = self.run_with(c, table, {root.key: root.pgn}, max_new_cards=40)
+        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [(sub_note.key, 2)])
+        # Both there, the sub note with a stale PGN: it is rewritten with no new card.
+        self.age(c)
+        store = puzzles.Store(c)
+        p = store.get(sub_note.key)
+        p.pgn = p.pgn.replace("[%kr 1]", "[%kr 1] The game is decided: White is winning.")
+        store.put(p)
+        res = self.run_with(c, table, {sub_note.key: p.pgn, root.key: root.pgn}, max_new_cards=40)
+        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [(sub_note.key, 0)])
+        self.assertNotIn("decided", res.notes[0].pgn)
+
+    def test_a_tree_note_without_its_mistakes_note_is_rebuilt_on_its_own(self):
+        table = SubNoteTest("pos").table()
+        c = seed(self, [recent(url="https://lichess.org/test0001")])
+        (sub_note,) = self.run_with(c, table, max_new_cards=1).notes  # the limit: the mistake's note waits
+        self.age(c)
+        store = puzzles.Store(c)
+        p = store.get(sub_note.key)
+        p.pgn = p.pgn.replace("[%kr 1]", "[%kr 1] The game is decided: White is winning.")
+        store.put(p)
+        res = self.run_with(c, table, {sub_note.key: p.pgn}, max_new_cards=40)
+        rebuilt = next(n for n in res.notes if n.key == sub_note.key)
+        self.assertEqual(rebuilt.new_cards, 0)
+        self.assertNotIn("decided", rebuilt.pgn)
+        self.assertEqual(notes.card_ids(rebuilt.pgn), notes.card_ids(sub_note.pgn))
+
+
 class StatsTest(unittest.TestCase):
     def test_collect_counts_moves_by_side(self):
         a = game_from(SICILIAN, white=False, id="s1", end_ts=200)

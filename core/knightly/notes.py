@@ -6,6 +6,7 @@ import html
 import io
 import re
 import time
+from collections.abc import Iterable
 
 import chess
 import chess.pgn
@@ -192,9 +193,9 @@ def _tags(entries: list[tuple[Game, CardSpec]]) -> list[str]:
     return [f"{NOTE_TAG}::{x}" for x in sorted(t)]
 
 
-def _clozes(ids: dict[str, int], cards: list[CardSpec]) -> str:
-    numbers = sorted({ids[c.fen_key] for c in cards})
-    return " ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in numbers)
+def clozes(numbers: Iterable[int]) -> str:
+    """The Cards field of a note whose cards have these cloze numbers."""
+    return " ".join(f"{{{{c{n}::{n}::{n}}}}}" for n in sorted(set(numbers)))
 
 
 def puzzle_head(game: Game, card: CardSpec) -> str:
@@ -239,7 +240,7 @@ def build_puzzle(
     return NoteSpec(
         key=key,
         pgn=_puzzle_pgn(game, scores, first, inaccuracy, nags, lead).strip(),
-        cards=_clozes(ids, cards),
+        cards=clozes(ids[c.fen_key] for c in cards),
         notes=notes,
         tags=[NOTE_TAG, note_key_tag(key)] + _tags([(game, first)]),
         card_ids=ids,
