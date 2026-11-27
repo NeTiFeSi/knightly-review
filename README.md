@@ -5,7 +5,7 @@ Your nightly chess reps, made from your own games. knightly-review pulls your Li
 
 You need [Anki](https://apps.ankiweb.net/) 25.07 or newer on a computer (Windows, macOS or Linux). Older versions run Python 3.9, which the add-on no longer supports. Cards are made on the computer, and reach AnkiDroid, AnkiMobile and AnkiWeb through normal Anki sync.
 
-1. Install the add-on: download `knightly_review.ankiaddon` from the [latest release](https://github.com/NeTiFeSi/knightly-review/releases/latest), then double-click it, or in Anki use **Tools → Add-ons → Install from file…**. Restart Anki. (A sample deck, `knightly-sample.apkg`, is on the same page if you want to see the cards first.)
+1. Install the add-on. The easy way: in Anki, **Tools → Add-ons → Get Add-ons…**, paste the code `208769069` (the [AnkiWeb page](https://ankiweb.net/shared/info/208769069)) and press OK. Or download `knightly_review.ankiaddon` from the [latest release](https://github.com/NeTiFeSi/knightly-review/releases/latest) and double-click it, or use **Tools → Add-ons → Install from file…**. Then restart Anki (it only loads an add-on's code at startup, so an update needs a restart too). A sample deck, `knightly-sample.apkg`, is on the release page if you want to see the cards first.
 2. A welcome window opens. Enter your Lichess and/or Chess.com username.
 3. Check that Stockfish was found (it's required). If it isn't installed, its window offers two ways to get it:
 
