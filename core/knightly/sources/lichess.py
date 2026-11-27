@@ -68,10 +68,20 @@ def parse_game(d: dict, user: str) -> Game | None:
     )
 
 
+ONGOING = ("created", "started")  # a game still being played
+
+
 def _keys(user: str) -> tuple[str, str]:
-    """Cache keys: the cursor (createdAt of the newest stored game + 1, in ms) and the floor
-    (where the stored, gap-free run of games starts: 0 = all time)."""
+    """Cache keys: the cursor (where the next fetch starts: createdAt of the newest stored game + 1, but never
+    past a game still being played, in ms) and the floor (where the stored, gap-free run of games starts:
+    0 = all time)."""
     return f"cursor:lichess:{user.lower()}", f"floor:lichess:{user.lower()}"
+
+
+def _refetched_key(user: str) -> str:
+    """Set once the look-back was fetched again after the fix for games still being played during a fetch
+    (earlier versions moved the cursor past them, so they were never stored)."""
+    return f"refetched_ongoing:lichess:{user.lower()}"
 
 
 def _start_ms(history_days: int) -> int:
@@ -102,19 +112,23 @@ def fetch(
     `history_days` 0 or negative fetches the whole history. When the look-back grows, the next
     fetch starts over from the new start date (games already stored are skipped). Games are
     saved as they stream in, so a cancelled or failed download resumes where it stopped.
+    Games still being played are asked for too, only so the cursor stays at the first of them: a
+    correspondence game started long ago is stored once it ends.
     """
     cursor_key, floor_key = _keys(user)
     start = _start_ms(history_days)
     floor = cache.get(floor_key)
     cursor = int(cache.get(cursor_key, 0))
-    if floor is None or start < int(floor) or not cursor:
+    if floor is None or start < int(floor) or not cursor or not cache.get(_refetched_key(user)):
         cursor = start
         cache.set(cursor_key, cursor)
         cache.set(floor_key, start)
+        cache.set(_refetched_key(user), True)
     params = {
         "since": cursor,
         "moves": "true",
         "finished": "true",
+        "ongoing": "true",
         "sort": "dateAsc",
     }
     if max_games:
@@ -139,10 +153,12 @@ def fetch(
     r.raise_for_status()
     batch: list[Game] = []
     newest, seen, n = cursor, 0, 0
+    ongoing: int | None = None  # createdAt of the first game still being played
 
     def save() -> int:
         k = cache.put_games(batch, user)
-        cache.set(cursor_key, newest)  # dateAsc: everything before `newest` is stored
+        # dateAsc: everything before `newest` is stored, except the games still being played
+        cache.set(cursor_key, newest if ongoing is None else min(newest, ongoing))
         batch.clear()
         return k
 
@@ -153,8 +169,12 @@ def fetch(
             if not line:
                 continue
             d = json.loads(line)
-            newest = max(newest, int(d.get("createdAt", 0)) + 1)
+            created = int(d.get("createdAt", 0))
+            newest = max(newest, created + 1)
             seen += 1
+            if d.get("status") in ONGOING:
+                ongoing = created if ongoing is None else min(ongoing, created)
+                continue
             g = parse_game(d, user)
             if g:
                 batch.append(g)

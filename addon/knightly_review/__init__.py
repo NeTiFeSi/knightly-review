@@ -5,7 +5,8 @@
 - Lets the card's settings dialog (⚙) save its settings into the note type's
   templates, so they sync to every device. The card talks to it with
   pycmd('kr:hello') and pycmd('kr:config:{json}'). It also keeps which replies a card showed
-  (pycmd('kr:visits:<card key>|{json}')) in the note's Visits field, so other devices show others.
+  (pycmd('kr:visits:<card key>|{json}')) in the note's Visits field, so other devices show others; they are
+  written when the card is answered, as part of its undo step.
 """
 
 from __future__ import annotations
@@ -69,27 +70,65 @@ def _save(card, cfg: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "updated": replaced}
 
 
-def _save_visits(card: Any, payload: str) -> dict:
-    """`payload` is '<card key>|<json counts>'. Merged into the note's Visits field ({card key: counts}); the
-    larger count of each position wins, so a device never lowers what another saved. Written without an
-    undo step or a reviewer refresh (the card on screen must not redraw)."""
+def _merge_counts(a: dict, b: dict) -> dict[str, int]:
+    """The larger count of each position, so a device never lowers what another saved."""
+    return {k: max(int(a.get(k, 0)), int(b.get(k, 0))) for k in set(a) | set(b)}
+
+
+# Visit counts the card reported, by card id, until the card is answered: {card key: counts}.
+_pending_visits: dict[int, dict[str, dict[str, int]]] = {}
+
+
+def _queue_visits(card: Any, payload: str) -> dict:
+    """`payload` is '<card key>|<json counts>'. Kept in memory until the card is answered (`_flush_visits`):
+    a write now would be an undo step of its own, and Ctrl+Z would undo it instead of the last answer."""
     key, _, raw = payload.partition("|")
     counts = json.loads(raw)
-    note = card.note()
-    if "Visits" not in note or not key or not isinstance(counts, dict):
+    if not key or not isinstance(counts, dict):
         return {"ok": False}
+    counts = {str(k): int(v) for k, v in counts.items()}
+    by_key = _pending_visits.setdefault(card.id, {})
+    by_key[key] = _merge_counts(by_key.get(key, {}), counts)
+    return {"ok": True}
+
+
+def _flush_visits(col: Any, card: Any) -> bool:
+    """Write the card's queued counts into the note's Visits field ({card key: counts}), right after the card
+    was answered, merged into the "Answer Card" undo step: undoing the answer undoes them too, and the undo
+    history is otherwise unchanged. True when the note changed. No reviewer refresh (the field is hidden)."""
+    pending = _pending_visits.pop(card.id, None)
+    note = card.note()
+    if not pending or "Visits" not in note:
+        return False
     try:
         stored = json.loads(note["Visits"] or "{}")
     except ValueError:
         stored = {}
-    mine = stored.get(key, {})
-    merged = {k: max(int(counts.get(k, 0)), int(mine.get(k, 0))) for k in set(counts) | set(mine)}
-    if merged == mine:
-        return {"ok": True, "same": True}
-    stored[key] = merged
+    if not isinstance(stored, dict):
+        stored = {}
+    changed = False
+    for key, counts in pending.items():
+        mine = stored.get(key, {})
+        merged = _merge_counts(counts, mine)
+        if merged != mine:
+            stored[key] = merged
+            changed = True
+    if not changed:
+        return False
+    status = col.undo_status()
+    after_answer = status.undo == col.tr.actions_answer_card()
     note["Visits"] = json.dumps(stored, separators=(",", ":"))
-    card.col.update_note(note)
-    return {"ok": True}
+    col.update_note(note)
+    if after_answer:  # anything else on top (rare): the write stays a step of its own rather than swallow it
+        col.merge_undo_entries(status.last_step)
+    return True
+
+
+def _on_answer(_reviewer: Any, card: Any, _ease: int) -> None:
+    try:
+        _flush_visits(mw.col, card)
+    except Exception:
+        log.exception("could not save the visits")
 
 
 def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tuple[bool, Any]:
@@ -104,7 +143,7 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
         return True, {"kr": 1, "version": __version__}
     if message.startswith("kr:visits:"):  # which replies this card showed: kept in the note, so it syncs
         try:
-            return True, _save_visits(card, message[len("kr:visits:") :])
+            return True, _queue_visits(card, message[len("kr:visits:") :])
         except Exception as e:
             log.exception("could not save the visits")
             return True, {"ok": False, "error": str(e)}
@@ -123,6 +162,7 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
 
 if gui_hooks is not None:
     gui_hooks.webview_did_receive_js_message.append(on_js_message)
+    gui_hooks.reviewer_did_answer_card.append(_on_answer)
 
 
 if mw is not None:  # not when imported by tests

@@ -248,6 +248,32 @@ class LichessTest(unittest.TestCase):
         self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 0)  # already stored
         self.assertEqual(s.requests[1][1]["params"]["since"], newest + 1)
 
+    def test_game_still_being_played_is_fetched_once_it_ends(self):
+        c = tmpcache(self)
+        older, newer = sorted((json.loads(l) for l in self.lines), key=lambda d: d["createdAt"])
+        playing = {**older, "status": "started"}
+        first = (json.dumps(playing) + "\n" + json.dumps(newer) + "\n").encode()
+        both = (json.dumps(older) + "\n" + json.dumps(newer) + "\n").encode()
+        s = FakeSession([("/api/games/user/", [FakeResponse(200, first), FakeResponse(200, both)])])
+        self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 1)  # only the finished one
+        self.assertEqual(s.requests[0][1]["params"]["ongoing"], "true")
+        self.assertEqual(c.get("cursor:lichess:knightlyme"), older["createdAt"])  # not past the game in play
+        self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 1)  # it ended: stored now
+        self.assertEqual(s.requests[1][1]["params"]["since"], older["createdAt"])
+        self.assertEqual(c.get("cursor:lichess:knightlyme"), newer["createdAt"] + 1)
+
+    def test_cursor_from_an_older_version_is_fetched_again_once(self):
+        c = tmpcache(self)
+        body = ("\n".join(self.lines) + "\n").encode()
+        s = FakeSession([("/api/games/user/", FakeResponse(200, body))])
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30)
+        floor = c.get("floor:lichess:knightlyme")
+        c.set("refetched_ongoing:lichess:knightlyme", None)  # as an older version left it
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30)
+        self.assertLessEqual(abs(s.requests[1][1]["params"]["since"] - floor), 5000)  # the whole look-back again
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30)
+        self.assertGreater(s.requests[2][1]["params"]["since"], floor + 5000)  # then incremental
+
     def test_all_time_and_growing_look_back(self):
         c = tmpcache(self)
         body = ("\n".join(self.lines) + "\n").encode()

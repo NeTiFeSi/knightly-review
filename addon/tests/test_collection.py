@@ -138,7 +138,7 @@ class CollectionTest(unittest.TestCase):
         import json
         from types import SimpleNamespace
 
-        from knightly_review import _save_visits
+        from knightly_review import _flush_visits, _queue_visits
 
         self.kc.ensure_installed(self.col, self.card_dir)
         mm = self.col.models
@@ -148,13 +148,43 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("Visits field added", self.kc.ensure_installed(self.col, self.card_dir))
         self.kc.apply_notes(self.col, [self.spec()], "KR")
         note = self.col.get_note(self.col.find_notes('"note:Knightly Review"')[0])
-        card = SimpleNamespace(note=lambda: self.col.get_note(note.id), col=self.col)
-        self.assertEqual(_save_visits(card, 'k1:1|{"r1":2,"r2":1}'), {"ok": True})
-        self.assertEqual(_save_visits(card, 'k1:1|{"r1":1,"r3":4}'), {"ok": True})  # the larger count per position wins
-        self.assertEqual(_save_visits(card, 'k2:2|{"r1":9}'), {"ok": True})  # another card of the note
-        self.assertEqual(_save_visits(card, 'k2:2|{"r1":9}'), {"ok": True, "same": True})
+        card = SimpleNamespace(id=1, note=lambda: self.col.get_note(note.id))
+        self.assertEqual(_queue_visits(card, 'k1:1|{"r1":2,"r2":1}'), {"ok": True})
+        self.assertEqual(_queue_visits(card, 'k1:1|{"r1":1,"r3":4}'), {"ok": True})  # the larger count wins
+        self.assertEqual(_queue_visits(card, 'k2:2|{"r1":9}'), {"ok": True})  # another card of the note
+        self.assertEqual(self.col.get_note(note.id)["Visits"], "")  # nothing written before the answer
+        self.assertTrue(_flush_visits(self.col, card))
         stored = json.loads(self.col.get_note(note.id)["Visits"])
         self.assertEqual(stored, {"k1:1": {"r1": 2, "r2": 1, "r3": 4}, "k2:2": {"r1": 9}})
+        _queue_visits(card, 'k2:2|{"r1":3}')
+        self.assertFalse(_flush_visits(self.col, card))  # lower counts change nothing
+        self.assertFalse(_flush_visits(self.col, card))  # nothing queued
+
+    def test_visits_join_the_answer_undo_step(self):
+        import json
+        from types import SimpleNamespace
+
+        from anki.scheduler.v3 import CardAnswer
+        from knightly_review import _flush_visits, _queue_visits
+
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.kc.apply_notes(self.col, [self.spec()], "KR")
+        before = self.col.undo_status().undo
+        c = self.col.get_card(self.col.find_cards('"note:Knightly Review"')[0])
+        c.start_timer()
+        states = self.col._backend.get_scheduling_states(c.id)
+        self.col.sched.answer_card(self.col.sched.build_answer(card=c, states=states, rating=CardAnswer.GOOD))
+        answered = self.col.undo_status().undo
+        note = lambda: self.col.get_note(c.nid)
+        card = SimpleNamespace(id=c.id, note=note)
+        _queue_visits(card, 'k1:1|{"r1":1}')
+        self.assertTrue(_flush_visits(self.col, card))
+        self.assertEqual(json.loads(note()["Visits"]), {"k1:1": {"r1": 1}})
+        self.assertEqual(self.col.undo_status().undo, answered)  # still "Answer Card", no step of its own
+        self.col.undo()  # undoes the answer and the counts together
+        self.assertEqual(self.col.get_card(c.id).reps, 0)
+        self.assertEqual(note()["Visits"], "")
+        self.assertEqual(self.col.undo_status().undo, before)
 
     def test_existing_notes_lists_puzzles_by_key_and_older_notes_as_legacy(self):
         self.kc.ensure_installed(self.col, self.card_dir)
