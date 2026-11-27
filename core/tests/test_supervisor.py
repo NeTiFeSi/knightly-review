@@ -195,13 +195,13 @@ class TablesTest(unittest.TestCase):
 class ChainTest(unittest.TestCase):
     def test_stages_run_on_their_threads_in_a_chain(self):
         ran: list[str] = []
-        done = threading.Event()
+        done = {"build": threading.Event(), "manage": threading.Event()}  # the two ends of the chain
 
         def worker(name, progressed=True):
             def run(ctx, tracker, manual):
                 ran.append(name)
-                if name == "build":
-                    done.set()
+                if name in done:
+                    done[name].set()
                 return Outcome(progressed)
 
             return run
@@ -209,7 +209,7 @@ class ChainTest(unittest.TestCase):
         cfg = Config.from_dict({**CFG, "update_on_startup": True})
         sup = Supervisor(context(seed(self, []), cfg, None), workers={n: worker(n) for n in STAGES})
         sup.start()
-        self.assertTrue(done.wait(5))
+        self.assertTrue(all(e.wait(5) for e in done.values()))
         sup.stop(wait=5)
         self.assertEqual(ran[0], "extract")
         self.assertLess(ran.index("annotate"), ran.index("select"))
