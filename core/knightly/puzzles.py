@@ -21,6 +21,9 @@ from .select import ACCEPTED
 
 KEY_PREFIX = "puzzle:"
 INDEX = "puzzle-index"
+# Raised when a change to the analysis rules can make notes already written wrong: the next update rebuilds them
+# (pipeline.Miner.repair). 1: a game is decided only when every move is a likely win or loss.
+RULES = 1
 
 
 def puzzle_id(fen: str, ply: int) -> str:
@@ -59,6 +62,7 @@ class Puzzle:
     links: dict[str, list[str]] = field(default_factory=dict)  # id of a similar position → comments on our answers
     notes: str = ""  # the Notes field as last written
     stored: bool = True  # False: rebuilt from a note's PGN only (tags and the rest unknown), not ours to rewrite
+    rules: int = 0  # `RULES` when the note was last built
 
     @property
     def id(self) -> str:

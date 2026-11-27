@@ -277,7 +277,7 @@ class Updater:
             self.keeping = False
             self._emit("done", 0, 0, "Cancelled. " + summary, force=True)
             return
-        hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, len(res.notes))
+        hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, sum(n.new_cards > 0 for n in res.notes))
         self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
         if not round_:
             if res.notes:

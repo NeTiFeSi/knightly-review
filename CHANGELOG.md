@@ -10,7 +10,12 @@ and the project follows [Semantic Versioning](https://semver.org/).
 - **"The game is decided" on equal positions.** A game now counts as decided only when after every legal move the
   same side wins more than half the time, by Stockfish's win/draw/loss estimate. Before, an expected score just
   under or over 50 % was enough, which cut solution trees short, dropped real mistakes and left out punishment
-  cards. Notes made before this fix are not changed.
+  cards.
+- **Notes made before this fix are repaired** by the next update, before any new puzzles: they are edited in place
+  (your review history stays), and missing punishment cards and positions are added, within the usual limit of new
+  cards per update. No card is removed. Mistakes that were wrongly dropped are looked at again. Left as they are:
+  notes whose game is older than the history setting, notes made on another computer (this one has no record of
+  them), and notes that would lose a card under your current settings.
 
 ## [0.2.0] - 2026-11-27
 

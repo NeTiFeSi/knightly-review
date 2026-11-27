@@ -47,10 +47,11 @@ STATE_KEY = "last_run"
 
 
 def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
-    """Hash of everything a run depends on: the settings (minus tokens), the games used, the positions on cards."""
+    """Hash of everything a run depends on: the rules, the settings (minus tokens), the games used, the positions
+    on cards."""
     d = cfg.to_dict()
     d.pop("lichess_token", None)
-    blob = json.dumps([d, sorted(game_keys), sorted(exclude)], sort_keys=True)
+    blob = json.dumps([puzzles.RULES, d, sorted(game_keys), sorted(exclude)], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -201,7 +202,8 @@ def run_update(
             result.finished = miner.finished
             # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and
             # if they never reach the collection (cancelled, write failed) the next run must try again.
-            if miner.finished and not result.new_cards and not precalculate:
+            # The same goes for repaired notes, which the next run has yet to see in the collection.
+            if miner.finished and not result.new_cards and not miner.unconfirmed and not precalculate:
                 cache.set(STATE_KEY, {"fingerprint": fp, "finished": True, "ts": time.time()})
     except http.Cancelled:
         result.cancelled = True
