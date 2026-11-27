@@ -114,6 +114,7 @@ class Miner:
         self.cards = 0  # cards made in this run (what `want` limits)
         self.analysed = 0  # positions searched by the engine in this run
         self.finished = False  # nothing left to continue: the run ended by itself, not out of time
+        self.unconfirmed = False  # a repaired note was written that only the next run can see arrived
         self._step = ""
 
     # --- helpers
@@ -373,6 +374,7 @@ class Miner:
                 # Written below, but only the next run sees whether it reached the collection: until then
                 # the record stays on the old rules.
                 p.rules = old.rules
+                self.unconfirmed = True
         self.store.put(p)
         self.known[p.id] = p
         self.claimed.update(spec.card_ids)

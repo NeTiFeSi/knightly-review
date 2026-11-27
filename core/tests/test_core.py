@@ -1462,6 +1462,9 @@ class RepairTest(unittest.TestCase):
         res = self.run_with(c, table, {sub_note.key: p.pgn, root.key: root.pgn}, max_new_cards=40)
         self.assertEqual([(n.key, n.new_cards) for n in res.notes], [(sub_note.key, 0)])
         self.assertNotIn("decided", res.notes[0].pgn)
+        # Only text changed: the run is still not "finished", so one with the same inputs offers it again.
+        res = self.run_with(c, table, {sub_note.key: p.pgn, root.key: root.pgn}, max_new_cards=40)
+        self.assertEqual((res.skipped, [n.key for n in res.notes]), (False, [sub_note.key]))
 
     def test_a_tree_note_without_its_mistakes_note_is_rebuilt_on_its_own(self):
         table = SubNoteTest("pos").table()

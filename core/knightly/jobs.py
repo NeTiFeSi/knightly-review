@@ -202,7 +202,8 @@ def run_update(
             result.finished = miner.finished
             # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and
             # if they never reach the collection (cancelled, write failed) the next run must try again.
-            if miner.finished and not result.new_cards and not precalculate:
+            # The same goes for repaired notes, which the next run has yet to see in the collection.
+            if miner.finished and not result.new_cards and not miner.unconfirmed and not precalculate:
                 cache.set(STATE_KEY, {"fingerprint": fp, "finished": True, "ts": time.time()})
     except http.Cancelled:
         result.cancelled = True
