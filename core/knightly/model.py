@@ -98,7 +98,6 @@ class Eval:
     depth: int
     lines: list[Line]  # best first
     source: str = "engine"
-    ms: int = 0  # how long the search took; 0 = not known (results cached before it was stored)
 
     @property
     def score(self) -> Score:
@@ -109,7 +108,6 @@ class Eval:
             "depth": self.depth,
             "source": self.source,
             "lines": [{"score": l.score.to_json(), "moves": l.moves} for l in self.lines],
-            **({"ms": self.ms} if self.ms else {}),
         }
 
     @classmethod
@@ -118,7 +116,6 @@ class Eval:
             depth=d["depth"],
             source=d.get("source", "engine"),
             lines=[Line(Score.from_json(l["score"]), list(l["moves"])) for l in d["lines"]],
-            ms=int(d.get("ms", 0)),
         )
 
 

@@ -35,7 +35,7 @@ def load() -> dict[str, Any]:
         cfg.pop("opening_min_loss", None)
         cfg["min_loss"] = defaults["min_loss"]
         cfg["config_version"] = defaults["config_version"]
-    if cfg.get("engine_path") and not cfg.get("stockfish_path"):  # settings from before Lc0 support
+    if cfg.get("engine_path") and not cfg.get("stockfish_path"):  # settings from an early version
         cfg["stockfish_path"] = cfg["engine_path"]
     return cfg
 

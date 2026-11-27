@@ -72,7 +72,6 @@ class _Ctx:
     solver: chess.Color
     mate: bool  # a mate puzzle: Stockfish alone, followed to the end
     seen: set[str]  # positions written in this note
-    quick_depth: int
     start: int  # length of the move stack at the puzzle position
     tracker: Tracker | None = None
     nodes: int = 0  # positions analysed so far in the note's trees
@@ -112,20 +111,19 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx, before_fen: str = "") -> 
         return
     if len(board.move_stack) - ctx.start >= SAFETY_PLIES:
         return
-    if not ctx.mate:  # a quick Stockfish look: a forced mate ends the line (Lc0 never runs on it)
-        s, _ = ctx.an.score(board, ctx.quick_depth)
-        if s.mate is not None:
-            ch.comment = _join(ch.comment, f"Mate in {abs(s.mate)} according to Stockfish.")
-            return
     tr = ctx.tracker
     if tr:
         ctx.nodes += 1
         tr.plan(1)
         tr.message(f"Solution tree: {ctx.nodes} positions so far", step=f"ply {board.ply()}", force=False)
-    graded, by_move = grade_position(board, ctx.an, ctx.cfg, None, board.ply(), sf_only=ctx.mate)
+    graded, by_move = grade_position(board, ctx.an, ctx.cfg)
     if tr:
         tr.advance()
     if not graded:
+        return
+    best_mate = next(iter(by_move.values())).score.mate if by_move else None
+    if not ctx.mate and best_mate is not None:  # in a puzzle that is not a mate, a forced mate ends the line
+        ch.comment = _join(ch.comment, f"Mate in {abs(best_mate)} according to Stockfish.")
         return
     if not ctx.mate:
         verdict = decided(board, by_move)
@@ -184,7 +182,6 @@ def follow_puzzle(
     *,
     solver: chess.Color,
     seen: set[str],
-    quick_depth: int,
     include_played: bool = False,
     tracker: Tracker | None = None,
     max_plies: int = 0,
@@ -200,7 +197,6 @@ def follow_puzzle(
         solver=solver,
         mate=card.mate,
         seen=seen,
-        quick_depth=quick_depth,
         start=len(board.move_stack),
         tracker=tracker,
         max_plies=max_plies,

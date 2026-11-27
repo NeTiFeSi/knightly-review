@@ -6,6 +6,7 @@ Knightly Review window with sample data and saves a picture of it (Qt's own widg
 screen capture and no window decorations).
 """
 
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -13,14 +14,26 @@ from urllib.parse import parse_qs, urlparse
 from aqt import gui_hooks, mw
 
 PORT = 8767
+log = logging.getLogger(__name__)
 
 SAMPLE_LOG = [
     "Fetching games from Lichess…",
     "12 new games from Lichess, 3 from Chess.com",
-    "Analysing 12 games (depth 13)…",
-    "Game 4 of 12: 2 mistakes found",
-    "Game 9 of 12: 1 mistake found",
+    "Collecting the positions of 15 games…",
+    "Ply 3, your moves: analysing 15 positions at depth 13",
+    "Ply 4, your moves: analysing 14 positions at depth 13",
+    "Ply 5, your moves: analysing 12 positions at depth 13",
 ]
+
+SAMPLE_CONFIG = {  # what the settings window shows in the README: the defaults, with made-up names
+    "lichess_user": "your-lichess-name",
+    "chesscom_user": "your-chesscom-name",
+    "deck": "Knightly Review",
+    "stockfish_path": "/usr/bin/stockfish",
+    "sf_depth": 13,
+    "threads": 0,
+    "hash_mb": 64,
+}
 
 
 def _make(what: str):
@@ -28,15 +41,42 @@ def _make(what: str):
     from knightly_review.runner import updater
 
     if what == "settings":
-        return ui.SettingsDialog(mw)
+        from knightly_review import settings
+
+        real = settings.load
+        settings.load = lambda: {**real(), **SAMPLE_CONFIG, "analysis_minutes": 10, "max_new_cards": 10}
+        try:
+            return ui.SettingsDialog(mw)
+        finally:
+            settings.load = real
     if what == "engine":
         return ui.EngineDialog(mw)
     if what == "live":  # a real update on the test profile's settings, grabbed while it runs
         ui.start_update()
         return ui._progress
     if what == "progress":
-        updater.last = ("analyse", 7, 20, "Looking for puzzles in game 9 of 12…")
-        updater.positions = (31, 64, "Checking the best alternatives (deep analysis)")
+        # A run in the middle of ply 5, as the real tracker reports it: about 3.7 s per position at depth 13.
+        from knightly_review.vendor.knightly.progress import Tracker
+
+        now = [0.0]
+        t = updater.tracker = Tracker(clock=lambda: now[0])
+        fen = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 5 4"
+        step = "Ply 5, your moves: analysing 12 positions at depth 13"
+        message = f"{step} (7 of 20 cards made · 6 min left)"
+        updater.last = ("analyse", 7, 20, message)
+        t.engine("stockfish", "Stockfish 19", True)
+        t.plies(5, 38)
+        t.found(7, 20)
+        t.budget(6.0)
+        t.stage("analyse", message, total=12, unit="positions", step="depth 13")
+        for _ in range(7):
+            t.search_start("stockfish", fen, 5, 28, 13)
+            now[0] += 3.7
+            t.search_end("stockfish", ms=3700)
+            t.advance()
+        t.position("ply 5: position 8 of 12")
+        t.search_start("stockfish", fen, 5, 28, 13)
+        t.search_progress("stockfish", depth=10, nodes=3_000_000, nps=1_400_000, ms=2100)
         for line in SAMPLE_LOG:
             updater.log(line)
         return ui.ProgressWindow(mw)
@@ -83,7 +123,8 @@ def _grab(what: str, file: str, done: dict, wait: int = 1500) -> None:
 
         # Give it a moment to lay out and for background scans (the engine search) to finish.
         mw.progress.single_shot(wait, snap)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
+        log.exception("could not take the picture of %s", what)
         done["error"] = repr(e)
         done["event"].set()
 

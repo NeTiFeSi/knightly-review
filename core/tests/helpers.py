@@ -87,15 +87,20 @@ def positions_scored(moves: list[str], scores: list[Score]) -> dict[str, Score]:
 
 
 class FakeAnalyser:
-    """Scripted evals instead of an engine; other positions are a dead draw with no line."""
+    """Scripted evals instead of an engine; other positions are a dead draw with no line.
+
+    `evaluate` is the full search of the position (every legal move a line), `scan` the cheap look (the best line
+    and the line of each asked move). `scores` holds position scores that `cached` replays (the eval bar of a
+    note); `searched` and `scanned` list the fen key of each `evaluate` and `scan` call."""
 
     def __init__(self, cfg=None, cache=None, cancel=None, table: dict[str, Eval] | None = None):
         self.table = {PUZZLE_FEN: PUZZLE_EVAL} if table is None else table
         self.stats = {"fake": 0}
         self.calls = 0
-        # Step-by-step scores (any depth): the scholar's mate game as scripted.
-        self.scores = positions_scored(SCHOLAR_MOVES, SCHOLAR_SCORES)
-        self.searched: list[tuple[str, int]] = []  # (fen key, depth) of each score() call
+        self.scores = positions_scored(SCHOLAR_MOVES, SCHOLAR_SCORES)  # the scholar's mate game as scripted
+        self.searched: list[str] = []
+        self.scanned: list[str] = []
+        self.topped: list[str] = []
 
     def __enter__(self):
         return self
@@ -103,26 +108,43 @@ class FakeAnalyser:
     def __exit__(self, *a):
         pass
 
-    def evaluate(self, board, *, multipv=1, ply=99, sf_only=False) -> Eval:
+    def evaluate(self, board) -> Eval:
         self.calls += 1
-        ev = self.table.get(fen_key(board.fen()))
+        key = fen_key(board.fen())
+        self.searched.append(key)
+        ev = self.table.get(key)
         if ev:
-            return Eval(ev.depth, ev.lines[:multipv], "fake")
+            return Eval(ev.depth, list(ev.lines), "fake")
         if board.is_checkmate():
             lost = (0, 0, 1000) if board.turn else (1000, 0, 0)
             return Eval(99, [Line(Score(cp=-10000 if board.turn else 10000, wdl=lost), [])], "fake")
         return Eval(10, [Line(S(0, 0, 1000, 0), [])], "fake")
 
-    def known(self, keys):
-        return {}
+    def scan(self, board, moves):
+        key = fen_key(board.fen())
+        self.scanned.append(key)
+        ev = self.table.get(key)
+        if ev and ev.lines:
+            by = {l.moves[0]: l for l in ev.lines if l.moves}
+            return ev.lines[0], {m: by[m] for m in moves if m in by}
+        flat = Line(S(0, 0, 1000, 0), [])  # a dead draw: no move loses anything
+        return flat, {m: flat for m in moves}
 
-    def score(self, board, depth):
-        k = fen_key(board.fen())
-        self.searched.append((k, depth))
-        if k in self.table and self.table[k].lines:
-            return self.table[k].lines[0].score, depth
-        s = self.scores.get(k)
-        return (s if s is not None else self.evaluate(board).lines[0].score), depth
+    def top(self, board, lines):
+        key = fen_key(board.fen())
+        self.topped.append(key)
+        ev = self.table.get(key)
+        if ev and ev.lines:
+            return Eval(ev.depth, ev.lines[:lines], "fake")
+        flat = S(0, 0, 1000, 0)  # a dead draw: every move is as good as the next
+        return Eval(10, [Line(flat, [m.uci()]) for m in list(board.legal_moves)[:lines]], "fake")
+
+    def cached(self, board) -> Eval | None:
+        key = fen_key(board.fen())
+        if key in self.table and key in self.searched:  # the full search has run
+            return self.table[key]
+        s = self.scores.get(key)
+        return Eval(10, [Line(s, [])], "fake") if s is not None else None
 
 
 class FakeResponse:
@@ -199,7 +221,7 @@ def score_for(white_pct: float) -> Score:
 
 
 def scores_with(losses: dict[int, float], n_moves: int) -> list[Score]:
-    """Quick-pass scores where the move at each ply in `losses` loses that much for its side."""
+    """Position scores along a game where the move at each ply in `losses` loses that much for its side."""
     e = 50.0
     out = [score_for(e)]
     for ply in range(n_moves):
@@ -210,11 +232,8 @@ def scores_with(losses: dict[int, float], n_moves: int) -> list[Score]:
 
 
 class ScriptedAnalyser(FakeAnalyser):
-    """Quick pass from `script` (game id → {ply: loss}); the deep pass agrees with it.
-
-    At each scripted position another legal move holds the balance and the played
-    move loses what the script says.
-    """
+    """Searches from `script` (game id → {ply: loss}): at each scripted position another legal move holds
+    the balance and the played move loses what the script says."""
 
     def __init__(self, games: list[Game], script: dict[str, dict[int, float]]):
         super().__init__(table={})

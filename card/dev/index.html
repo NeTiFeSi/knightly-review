@@ -41,6 +41,9 @@
     back: await (await fetch('/dist/templates/back.html')).text(),
   };
   $('pgn').value = await (await fetch('/dev/samples.pgn')).text();
+  // Illustrative explorer stats (made by tools/sample_stats.py), shown in the Notes field like a real note.
+  const notesRes = await fetch('/dev/samples-notes.html');
+  window.__notesHtml = notesRes.ok ? await notesRes.text() : '<b>Notes field:</b> example note.';
 
   function cards() {
     const ids = new Set();
@@ -89,7 +92,7 @@
       .replace('(function () {', 'Object.assign(window.KR_CONFIG, window.__harnessCfg || {});\n(function () {')
       .replace('{{cloze:Cards}}', active + ' ' + others)
       .replace('{{PGN}}', esc($('pgn').value).replace(/\n/g, '<br>'))
-      .replace(/\{\{#Notes\}\}[\s\S]*?\{\{\/Notes\}\}/, '<div class="kr-notes"><b>Notes field:</b> example note.</div>');
+      .replace(/\{\{#Notes\}\}[\s\S]*?\{\{\/Notes\}\}/, '<div class="kr-notes">' + window.__notesHtml + '</div>');
     if ($('rebuild').checked && side === 'back') {
       // Simulate a client that reloads the page: drop in-memory state (sessionStorage survives).
       delete window.__krResults;

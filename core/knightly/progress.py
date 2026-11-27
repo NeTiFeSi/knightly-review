@@ -5,8 +5,8 @@ and what was taken out and finished (`advance`, done):
 
 - the **stage** (`stage`): a step with a message, a unit (moves, positions…) and a total that grows as work is
   planned, like a tqdm bar; each change is a *forced* update for the listeners, while `advance` is throttled;
-- the **engines** (`search_start/progress/end`, fed by `engine.analyse.Engine`): per engine the searches run, the
-  ones answered from the cache, and the position being searched with its live depth (or elapsed time for Lc0);
+- the **engine** (`search_start/progress/end`, fed by `engine.analyse.Engine`): the searches run, the
+  ones answered from the cache, and the position being searched with its live depth;
 - the **run**: puzzles found of wanted, the ply being worked on, the time budget.
 
 `snapshot()` is an immutable copy that can be read from any thread (the window polls it); `describe()` turns one
@@ -22,7 +22,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
-STOCKFISH, LC0 = "stockfish", "lc0"
+STOCKFISH = "stockfish"
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class EngineStats:
     fen: str = ""  # the position being searched
     ply: int = -1
     multipv: int = 0
-    target: int = 0  # Stockfish: the depth; Lc0: the time in ms
+    target: int = 0  # the depth being searched to
     depth: int = 0
     nodes: int = 0
     nps: int = 0
@@ -74,7 +74,7 @@ class Tracker:
         self._t0 = clock()
         self._last_emit = -1e9
         self._listeners: list[Listener] = []
-        self._s = Snapshot(engines={STOCKFISH: EngineStats(), LC0: EngineStats()})
+        self._s = Snapshot(engines={STOCKFISH: EngineStats()})
         self._samples: deque[tuple[float, int]] = deque(maxlen=30)
 
     # --- listeners
@@ -223,15 +223,11 @@ def _clock_text(seconds: float | None) -> str:
 
 def describe_engine(kind: str, e: EngineStats) -> dict:
     """One engine as the window shows it: a label, a ratio (0..1 or None) and the detail line."""
-    label = e.name or ("Stockfish" if kind == STOCKFISH else "Lc0")
+    label = e.name or "Stockfish"
     if e.busy and e.target:
-        ratio = min(1.0, (e.depth / e.target) if kind == STOCKFISH else (e.elapsed_ms / e.target))
+        ratio = min(1.0, e.depth / e.target)
         where = f"ply {e.ply} · " if e.ply >= 0 else ""
-        now = (
-            f"depth {e.depth} of {e.target}"
-            if kind == STOCKFISH
-            else f"{e.elapsed_ms / 1000:.1f} of {e.target / 1000:.1f} s"
-        )
+        now = f"depth {e.depth} of {e.target}"
         lines = f" · {e.multipv} lines" if e.multipv > 1 else ""
         speed = f" · {e.nps / 1000:.0f} knps" if e.nps else ""
         detail = f"{where}{now}{lines}{speed}"

@@ -45,4 +45,3 @@ If a diff against upstream looks large, that is the formatting. When porting ups
 
 - [Stockfish](https://stockfishchess.org/) (GPL-3.0). The add-on can download the official build from the Stockfish
   GitHub releases into its own folder, or use one you installed. Source: <https://github.com/official-stockfish/Stockfish>.
-- [Lc0](https://lczero.org/) (GPL-3.0), optional and installed by the user.

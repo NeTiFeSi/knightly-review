@@ -5,6 +5,34 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Analysis is a cheap scan, then a full search of the suspects.** Every position first gets a scan at a fixed low
+  depth (10) with the fewest lines that can measure a loss: one line for the best move, and each move the games
+  played searched on its own. Only the positions where a played move looks worse than half of `min_loss` get the
+  full search, to the configured depth with one line per legal move (Stockfish's MultiPV set to the number of legal
+  moves). With a single line, Stockfish prunes the moves it thinks are worse and only bounds their scores;
+  searching them all gives every move an exact score from the same search, so a move's loss against the best move is
+  comparable. This replaces the old ladder of increasing depths (5, 9, 13). On a 10-thread desktop a scan takes
+  about 0.02 s, a full search about 4 s at depth 13 and about 20 s at depth 16.
+- **Grades on the game's other moves** (`!!`, `□`, `!?`, `?!`, `?`, `??`) come from a cheap look (the three best lines
+  and the move played, at the scan depth), or from the full search where there already is one.
+- The analysis cache is rebuilt on the first update (its searches are of a different kind now); games are kept.
+- The progress window shows the position being analysed and one Stockfish row.
+
+### Removed
+
+- **Lc0.** It overrode Stockfish's judgement, but on 5 % of moves each engine said "mistake" where the other said
+  "good", with no sign that Lc0 was the one that was right. It needed a separate install and added a second engine
+  path, settings and analysis time. The `use_lc0` and `lc0_path` settings and the `--lc0` option are gone; old
+  settings are ignored.
+
+### Fixed
+
+- The settings window no longer says "20+ recommended" next to the depth.
+- The README's grade thresholds match the code (Good move 1 %, `?!` from 5 %).
+- The README pictures show the current windows and cards, including the explorer-style stats.
+
 ## [0.1.0] - 2026-11-26
 
 First public release.
