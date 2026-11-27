@@ -6,5 +6,5 @@ Internal imports are relative; `chess` is imported by name and rewritten by the
 add-on's build when vendored.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 USER_AGENT = f"knightly-review/{__version__} (+https://github.com/NeTiFeSi/knightly-review)"
