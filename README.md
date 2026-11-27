@@ -21,9 +21,7 @@ You need [Anki](https://apps.ankiweb.net/) 25.07 or newer on a computer (Windows
 
    **Download Stockfish for me** fetches the official build from the Stockfish GitHub releases, checks it, and keeps it inside the add-on's folder. No admin rights needed.
 
-   Stockfish searches every position to a fixed depth (in the same box as its hash table size, in RAM).
-
-   Optional: **Lc0** as a second engine (much faster with a graphics card; get it from [lczero.org](https://lczero.org/play/download/)). When it's on, Lc0 analyses each position after Stockfish, for as long as Stockfish took there. Lc0's judgement is used, except in mate positions, where Stockfish's is. Only Stockfish and Lc0 are supported.
+   Stockfish searches every position to a fixed depth, scoring every legal move (the depth is in the same box as its threads and hash size). A higher depth judges more accurately and takes longer. Stockfish is the only supported engine.
 4. Save. The first update fetches your recent games and analyses them in the background (a few minutes; Anki stays usable). New cards appear in the **Knightly Review** deck.
 
 After that, updates run when Anki starts and every few hours while it's open. **Tools → Knightly Review → Update now** runs one right away. Lichess: logging in (optional, in Settings) makes downloads faster; your password stays on lichess.org. Chess.com refreshes its game lists only a few times a day, so new Chess.com games can take a few hours to show up.
@@ -93,9 +91,8 @@ There are two places for settings. **Tools → Knightly Review → Settings…**
 |---|---|---|
 | Lichess / Chess.com | empty | Whose games to fetch. Either can be empty. Logging in to Lichess (optional) makes downloads faster. |
 | Look back | 90 days | How far back to fetch games. **All time** fetches everything; raising it later downloads the older games on the next update. |
-| Stockfish: depth | 13 | Every position is searched to this depth. |
+| Stockfish: depth | 13 | Every position is searched to this depth, with every legal move scored. Higher is more accurate and slower. |
 | Stockfish: threads, hash | half the cores, 64 MB | CPU threads and RAM for the engine. |
-| Lc0 | off | Second engine. It analyses after Stockfish, and its judgement is used except in mate positions, where Stockfish's is. |
 | Deck | Knightly Review | Where the new cards go. |
 | New cards per update | 10 | An update stops after this many new cards (between two notes, so it may go a little over). A mistake from a game can make several notes; if the limit stops one halfway, the next update finishes it. |
 | Analysis per update | 10 min | …or after this much engine time (0 = until the cards are found). The next update carries on from there. |
@@ -106,7 +103,7 @@ There are two places for settings. **Tools → Knightly Review → Settings…**
 
 Not in the window, but in the add-on's config (**Tools → Add-ons → Knightly Review → Config**): `time_classes` (which time controls to fetch), `rated_only`, and `min_loss` (default 1 %: a move you played must lose more than this, in win rate, to become a puzzle). See [addon/knightly_review/config.md](addon/knightly_review/config.md) for every key.
 
-**How puzzles are made:** one way, ply by ply. For ply 0, 1, 2, … (half-moves played), your positions first and then, with *Opponents' mistakes*, your opponents' (each position once, however many games reached it). Every move of each position is searched at a low depth; the positions with the biggest win-rate loss for a move you played are searched deeper, in two or three steps up to *Stockfish depth*, until each is a confirmed puzzle (the played move is more than `min_loss` worse than the best) or ruled out. The next ply starts when none is left.
+**How puzzles are made:** one way, ply by ply. For ply 0, 1, 2, … (half-moves played), your positions first and then, with *Opponents' mistakes*, your opponents' (each position once, however many games reached it). Every position is searched once, to *Stockfish depth*, with one line per legal move, so every move has an exact score from the same search. Where a move you played loses more than `min_loss` win rate against the best move, it becomes a puzzle, the biggest losses first. The next ply starts when none is left.
 
 - **A card is one move and the reply to it.** A note has at most two cards: find the best move at a position (the opponent's reply is shown), and punish the mistake (the best move that is not good; the position after it, where you find the punishing move). A mistake from your games makes one such note for its own position and one for every later position of its solution tree where you must find a move, made from the end of the line towards the start (so new cards come due that way). A position that is a card already is never made again, whatever game or line reached it. The note's tags describe the first card only. A punishment card is left out when the game is already decided there.
 - **Stats from your games**, like an opening explorer, on the back of each card (the position of the card you are reviewing): in how many of your games the position came up, how they ended (White / draw / Black, as on Lichess) and, for each move played from it (the six most played, the rest together), how many games it was played in and the same bar. Moves the analysis graded carry their mark (`!`, `??`…) and a green or red accent. Shown only for positions that came up in at least two different games, and refreshed on every update as games are added.
@@ -156,8 +153,8 @@ card/      the interactive card (TypeScript), built into one media file
 ```
 
 - Games come from the Lichess API (incremental, one request at a time) and the Chess.com archive API (each finished month downloaded once; the current month re-checked with ETags).
-- Every position is analysed by Stockfish (fixed depth), and by Lc0 too when it's on (fixed time), always with win/draw/loss output (`UCI_ShowWDL`). "Win rate" everywhere means the engine's expected score: wins + draws / 2. Evals are cached in a SQLite file, shared by threads and processes.
-- A move becomes a puzzle when it loses more than `min_loss` (1 %) of win rate against the best move. The engine's WDL treats a position about 2 pawns up or down as already decided, so mistakes there barely register: puzzles come from the moments where the result was still in play. Positions are taken ply by ply, the biggest suspected mistakes analysed deepest first. Each pick is checked with a full multi-line analysis, which grades every candidate move (`!!`, `□`, `!?`, `!`, `?!`, `?`, `??`; see [card/README.md](card/README.md)) and gives the accepted alternatives on the back of the card.
+- Every position is analysed by Stockfish to a fixed depth with one line per legal move (MultiPV = every move: with one line Stockfish prunes the moves it thinks are worse and only bounds their scores), always with win/draw/loss output (`UCI_ShowWDL`). "Win rate" everywhere means the engine's expected score: wins + draws / 2. Evals are cached in a SQLite file, shared by threads and processes.
+- A move becomes a puzzle when it loses more than `min_loss` (1 %) of win rate against the best move. The engine's WDL treats a position about 2 pawns up or down as already decided, so mistakes there barely register: puzzles come from the moments where the result was still in play. Positions are taken ply by ply, the biggest mistakes first. The same search grades every candidate move (`!!`, `□`, `!?`, `!`, `?!`, `?`, `??`; see [card/README.md](card/README.md)) and gives the accepted alternatives on the back of the card.
 - One note per position where you must find a move (at most two cards: the move, and punishing the mistake). Notes are tagged by phase, site, colour, time control, result, opening and how bad the mistake was (`knightly::…`). Optionally (off by default), your opponents' mistakes become cards too, played from their side.
 - The analysis follows the good moves of both sides, branch by branch, until the game is decided, drawn, a mate is in sight or the good moves stop being clearly better than the rest; every position of yours on the way where the choice matters becomes a note of its own. There is no engine on the card.
 
@@ -182,7 +179,8 @@ Command-line use, tests and the development setup are in [CONTRIBUTING.md](CONTR
 - Needs Anki 25.07 or newer on a computer. Cards are made on the computer only.
 - The author develops and tests on Linux. The core's unit tests also run on Windows and macOS in CI, but the add-on's windows have not been tried by the author there. Please report problems.
 - Tested on AnkiDroid 2.25. AnkiMobile and AnkiWeb get the cards through sync and have not been tested by the author.
-- Only Stockfish and Lc0 are supported as engines.
+- Only Stockfish is supported as an engine.
+- Every move of every position is searched, so analysis is slow. On a 10-thread desktop a position takes about 4 s at depth 13, about 20 s at depth 16 and about 27 s at depth 18 (the hardest positions take over a minute), and fewer threads are slower still. Updates carry on where the last one stopped, and every search is cached.
 - New Chess.com games can take a few hours to appear, because Chess.com refreshes its game lists only a few times a day.
 - Deleting a puzzle card does not remove the puzzle: it is made again at the next update. Suspend a card you don't want to see instead.
 

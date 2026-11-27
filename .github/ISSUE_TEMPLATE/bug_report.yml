@@ -27,7 +27,7 @@ body:
     id: engine
     attributes:
       label: Engine
-      description: Stockfish version, and Lc0 if enabled (Tools → Knightly Review → Settings).
+      description: The Stockfish version and the depth you use (Tools → Knightly Review → Settings).
   - type: textarea
     id: log
     attributes:

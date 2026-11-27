@@ -21,7 +21,7 @@ mistake and asks you to find a better move on a real board.
 
 - **Your games, your mistakes.** Lichess and Chess.com, fetched in the background; new games are picked up
   automatically.
-- **Judged by an engine.** Stockfish (and optionally Lc0) grade every candidate move, so accepted alternatives count
+- **Judged by an engine.** Stockfish scores every legal move in every position, so accepted alternatives count, so accepted alternatives count
   and forced mates are respected.
 - **Interactive cards.** Hints, move-grade badges, arrows you can draw, optional timed puzzles. Settings on the card
   sync to AnkiDroid, AnkiMobile and AnkiWeb through Anki's normal sync.

@@ -5,6 +5,30 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Every position is searched the same way:** to the configured depth, with one line per legal move (Stockfish's
+  MultiPV set to the number of legal moves). With a single line, Stockfish prunes the moves it thinks are worse and
+  only bounds their scores; searching them all gives every move an exact score from the same search, so a move's
+  loss against the best move is comparable. This replaces the old screening (a quick look at a low depth, deeper
+  only for suspects). It is more accurate and much slower: about 4 s per position at depth 13 on a 10-thread
+  desktop, about 20 s at depth 16. Updates still carry on where the last one stopped.
+- The analysis cache is rebuilt on the first update (its searches are of a different kind now); games are kept.
+- The progress window shows the position being analysed and one Stockfish row.
+
+### Removed
+
+- **Lc0.** It overrode Stockfish's judgement, but on 5 % of moves each engine said "mistake" where the other said
+  "good", with no sign that Lc0 was the one that was right. It needed a separate install and added a second engine
+  path, settings and analysis time. The `use_lc0` and `lc0_path` settings and the `--lc0` option are gone; old
+  settings are ignored.
+
+### Fixed
+
+- The settings window no longer says "20+ recommended" next to the depth.
+- The README's grade thresholds match the code (Good move 1 %, `?!` from 5 %).
+- The README pictures show the current windows and cards, including the explorer-style stats.
+
 ## [0.1.0] - 2026-11-26
 
 First public release.
