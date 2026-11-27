@@ -20,7 +20,7 @@ python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards
 | `sources/lichess_login.py` | "Log in with Lichess" (OAuth PKCE, loopback redirect) |
 | `cache.py` | SQLite (WAL) cache: games, evals, HTTP validators, cursors. Safe across threads and processes |
 | `engine/discover.py`, `engine/install.py` | Find Stockfish (no other engine is supported); package-manager commands; official Stockfish download |
-| `engine/analyse.py` | Stockfish at a fixed depth with one line per legal move (MultiPV = every move), always with WDL; one cached search per position |
+| `engine/analyse.py` | Stockfish at fixed depths, always with WDL: a cheap scan (best move and the moves played, fewest lines) and the full search (one line per legal move, MultiPV = every move); both cached per position |
 | `pipeline.py` | The one way puzzles are made: ply by ply, every move of every position at a low depth, the biggest suspected mistakes promoted through 2–3 depth steps to the configured one, then confirmed (`select.build_card`) or ruled out; one note per mistake; similar positions and repeated moves update an existing note instead |
 | `stats.py`, `similar.py`, `puzzles.py` | How often each move was played at a position and ply; "very similar" positions (same side to move, ≤2 squares differ) and the comments they add; the puzzle records kept in the cache (id = position + ply) |
 | `select.py` | Win-rate loss (engine WDL); whether a position is a puzzle (`build_card`) and its punishment (`build_punish`); good-move and sacrifice tests, NAGs |

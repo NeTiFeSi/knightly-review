@@ -17,10 +17,14 @@ class Config:
     lichess_user: str = ""
     chesscom_user: str = ""
     lichess_token: str = ""
-    # Stockfish is the only engine. Every position is searched to this fixed depth with one line per legal move
-    # (MultiPV = every move), so each move has an exact score from the same search.
+    # Stockfish is the only engine. Two kinds of search, both at a fixed depth:
+    # - the scan (`scan_depth`): a cheap first look at each position with the fewest lines that can measure a
+    #   loss: the best move (one line) and the moves the games played, each searched on its own;
+    # - the full search (`sf_depth`): one line per legal move (MultiPV = every move), so each move has an exact
+    #   score from the same search. Only the positions the scan flags get it.
     stockfish_path: str = ""
     sf_depth: int = 13
+    scan_depth: int = 10
     threads: int = 0  # Stockfish threads; 0 = half the CPU cores
     hash_mb: int = 64  # Stockfish hash table (RAM), in MB
     # What to fetch and how much work one run does.
@@ -53,6 +57,10 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
+
+    def scan_depth_used(self) -> int:
+        """The scan's depth: `scan_depth`, but never deeper than the full search."""
+        return max(1, min(self.scan_depth, self.sf_depth))
 
     def min_loss_at(self, ply: int) -> float:
         """How much win rate a move played at `ply` (half-moves already played) must lose to become a puzzle.

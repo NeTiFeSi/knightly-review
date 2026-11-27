@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS evals (
   data TEXT NOT NULL,
   updated INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scans (
+  fen_key TEXT NOT NULL,
+  move TEXT NOT NULL,        -- the UCI move searched on its own; '' = the best line (one line); '*N' = the top N lines
+  effort INTEGER NOT NULL,   -- the depth of the scan
+  data TEXT NOT NULL,        -- an Eval: one line, or N for '*N'
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (fen_key, move)
+);
 CREATE TABLE IF NOT EXISTS games (
   source TEXT NOT NULL,
   id TEXT NOT NULL,
@@ -48,7 +56,7 @@ CREATE TABLE IF NOT EXISTS kv (
 """
 
 
-SCHEMA_VERSION = 4  # 2: evals carry WDL; 3: evals per engine; 4: Stockfish only, every legal move searched together
+SCHEMA_VERSION = 5  # 2: evals carry WDL; 3: evals per engine; 4: Stockfish only, every move searched together; 5: scans
 
 
 def fen_key(fen: str) -> str:
@@ -59,6 +67,8 @@ def fen_key(fen: str) -> str:
 class Cache(Protocol):
     def get_eval(self, key: str, min_effort: int = 0) -> Eval | None: ...
     def put_eval(self, key: str, effort: int, ev: Eval) -> None: ...
+    def get_scan(self, key: str, names: Iterable[str], min_effort: int) -> dict[str, Eval]: ...
+    def put_scan(self, key: str, effort: int, found: dict[str, Eval]) -> None: ...
     def put_games(self, games: Iterable[Game], user: str) -> int: ...
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]: ...
     def get_analysis(self, game: Game) -> list[dict | None] | None: ...
@@ -80,6 +90,7 @@ class SqliteCache:
             old = not row or int(row[0]) < SCHEMA_VERSION
             if old:
                 c.execute("DROP TABLE IF EXISTS evals")
+                c.execute("DROP TABLE IF EXISTS scans")
             c.executescript(SCHEMA)
             if old:
                 c.execute("UPDATE games SET analysis=NULL")
@@ -117,6 +128,30 @@ class SqliteCache:
                    WHERE excluded.effort >= evals.effort""",
                 (key, effort, json.dumps(ev.to_json()), int(time.time())),
             )
+
+    # scans: the cheap first look at a position (see engine/analyse.py)
+    def get_scan(self, key: str, names: Iterable[str], min_effort: int) -> dict[str, Eval]:
+        """The saved scans called `names` (a UCI move, '' for the best line, '*N' for the top N lines), those
+        searched at least to `min_effort`."""
+        want = list(names)
+        if not want:
+            return {}
+        rows = self._conn().execute(
+            f"SELECT move, data FROM scans WHERE fen_key=? AND effort>=? AND move IN ({','.join('?' * len(want))})",
+            (key, min_effort, *want),
+        )
+        return {m: Eval.from_json(json.loads(d)) for m, d in rows}
+
+    def put_scan(self, key: str, effort: int, found: dict[str, Eval]) -> None:
+        with self._conn() as c:
+            for move, ev in found.items():
+                c.execute(
+                    """INSERT INTO scans (fen_key, move, effort, data, updated) VALUES (?,?,?,?,?)
+                       ON CONFLICT (fen_key, move) DO UPDATE SET
+                         effort=excluded.effort, data=excluded.data, updated=excluded.updated
+                       WHERE excluded.effort >= scans.effort""",
+                    (key, move, effort, json.dumps(ev.to_json()), int(time.time())),
+                )
 
     # games
     def put_games(self, games: Iterable[Game], user: str) -> int:

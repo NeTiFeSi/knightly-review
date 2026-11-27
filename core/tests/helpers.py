@@ -89,8 +89,9 @@ def positions_scored(moves: list[str], scores: list[Score]) -> dict[str, Score]:
 class FakeAnalyser:
     """Scripted evals instead of an engine; other positions are a dead draw with no line.
 
-    `evaluate` is one full search of the position (every legal move a line). `scores` holds position scores that
-    `cached` replays (the eval bar of a note); `searched` lists the fen key of each `evaluate` call."""
+    `evaluate` is the full search of the position (every legal move a line), `scan` the cheap look (the best line
+    and the line of each asked move). `scores` holds position scores that `cached` replays (the eval bar of a
+    note); `searched` and `scanned` list the fen key of each `evaluate` and `scan` call."""
 
     def __init__(self, cfg=None, cache=None, cancel=None, table: dict[str, Eval] | None = None):
         self.table = {PUZZLE_FEN: PUZZLE_EVAL} if table is None else table
@@ -98,6 +99,8 @@ class FakeAnalyser:
         self.calls = 0
         self.scores = positions_scored(SCHOLAR_MOVES, SCHOLAR_SCORES)  # the scholar's mate game as scripted
         self.searched: list[str] = []
+        self.scanned: list[str] = []
+        self.topped: list[str] = []
 
     def __enter__(self):
         return self
@@ -117,9 +120,28 @@ class FakeAnalyser:
             return Eval(99, [Line(Score(cp=-10000 if board.turn else 10000, wdl=lost), [])], "fake")
         return Eval(10, [Line(S(0, 0, 1000, 0), [])], "fake")
 
+    def scan(self, board, moves):
+        key = fen_key(board.fen())
+        self.scanned.append(key)
+        ev = self.table.get(key)
+        if ev and ev.lines:
+            by = {l.moves[0]: l for l in ev.lines if l.moves}
+            return ev.lines[0], {m: by[m] for m in moves if m in by}
+        flat = Line(S(0, 0, 1000, 0), [])  # a dead draw: no move loses anything
+        return flat, {m: flat for m in moves}
+
+    def top(self, board, lines):
+        key = fen_key(board.fen())
+        self.topped.append(key)
+        ev = self.table.get(key)
+        if ev and ev.lines:
+            return Eval(ev.depth, ev.lines[:lines], "fake")
+        flat = S(0, 0, 1000, 0)  # a dead draw: every move is as good as the next
+        return Eval(10, [Line(flat, [m.uci()]) for m in list(board.legal_moves)[:lines]], "fake")
+
     def cached(self, board) -> Eval | None:
         key = fen_key(board.fen())
-        if key in self.table:
+        if key in self.table and key in self.searched:  # the full search has run
             return self.table[key]
         s = self.scores.get(key)
         return Eval(10, [Line(s, [])], "fake") if s is not None else None

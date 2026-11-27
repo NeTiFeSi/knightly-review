@@ -3,14 +3,15 @@
 For ply 0, 1, 2… (half-moves already played), the user's positions first and then, with
 `cfg.include_opponent`, the opponents':
 
-1. Every position at that ply is searched once, to the fixed depth `cfg.sf_depth` with one line per legal
-   move (`Analyser.evaluate`), so every move has an exact score from the same search. Each position gets the
-   loss of the worst move a player actually played there: how far its win rate falls below the best move's
+1. Every position at that ply gets a cheap scan (`Analyser.scan`, at `cfg.scan_depth`): the best move with one
+   line, and each move the games played from the position searched on its own. Each position gets the loss
+   of the worst move a player actually played there: how far its win rate falls below the best move's
    (engine WDL).
-2. The positions where that loss is more than `min_loss` are taken biggest first. Each gets the full setup
-   (`select.build_card`; the search is cached, so it costs nothing more): if the played move is not a good
-   move, it is a puzzle: one note with two puzzles, the position before the mistake and the position after
-   it (the punishment).
+2. The positions where that loss is more than half of `min_loss` (the scan is shallow: it only rules out
+   the clearly fine moves) are taken biggest first. Each gets the full search, to `cfg.sf_depth` with one line
+   per legal move, and the full setup (`select.build_card`): if the played move is more than `min_loss` worse
+   than the best and not a good move, it is a puzzle: one note with two puzzles, the position before the
+   mistake and the position after it (the punishment).
 3. Then the next ply.
 
 A puzzle very similar to one already made is not a note of its own: the old puzzle's note gets a
@@ -34,7 +35,7 @@ from . import similar, stats, statsview
 from .cache import fen_key
 from .config import Config
 from .follow import Decision, follow_puzzle, trimmed
-from .model import CardSpec, Eval, Game, NoteSpec, Score
+from .model import CardSpec, Game, Line, NoteSpec, Score
 from .progress import Tracker
 from .puzzles import Puzzle, Store, puzzle_id
 from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
@@ -57,7 +58,7 @@ class Unit:
     mine: bool
     board: chess.Board
     played: dict[str, stats.MoveStat]
-    ev: Eval | None = None  # the position searched: every legal move with its score
+    scan: tuple[Line, dict[str, Line]] | None = None  # the scan: the best line, and the line of each played move
 
 
 class Miner:
@@ -129,15 +130,13 @@ class Miner:
         self._step = step
 
     def _losses(self, u: Unit) -> dict[str, float]:
-        """Loss of each played move against the best move, from the unit's search."""
-        if u.ev is None:
+        """Loss of each played move against the best move, from the unit's scan."""
+        if u.scan is None:
             return {}
+        best, lines = u.scan
         white = u.board.turn == chess.WHITE
-        pcts = {l.moves[0]: l.score.win_pct(white) for l in u.ev.lines if l.moves}
-        if not pcts:
-            return {}
-        best = max(pcts.values())
-        return {m: best - pcts[m] for m in u.played if m in pcts}
+        top = best.score.win_pct(white)
+        return {m: max(0.0, top - line.score.win_pct(white)) for m, line in lines.items()}
 
     def loss(self, u: Unit) -> float:
         return max(self._losses(u).values(), default=0.0)
@@ -175,19 +174,20 @@ class Miner:
             return
         who = "your moves" if mine else "your opponents' moves"
         depth = self.cfg.sf_depth
-        step = f"Ply {ply}, {who}: analysing {len(units)} positions at depth {depth}"
+        scan_depth = self.cfg.scan_depth_used()
+        step = f"Ply {ply}, {who}: scanning {len(units)} positions at depth {scan_depth} of {depth}"
         self._step = step
         self.tracker.plies(ply, max(self.by_ply, default=0))
         self.tracker.found(self.cards if self.make else self.found, 0 if self.want >= UNBOUNDED else self.want)
         self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
-        self.tracker.stage("analyse", self._msg(step), total=len(units), unit="positions", step=f"depth {depth}")
+        self.tracker.stage("analyse", self._msg(step), total=len(units), unit="positions", step=f"depth {scan_depth}")
         for i, u in enumerate(units):
             self._tick()
             self.tracker.position(f"ply {ply}: position {i + 1} of {len(units)}")
-            u.ev = self.an.evaluate(u.board)
+            u.scan = self.an.scan(u.board, list(u.played))
             self.analysed += 1
             self.tracker.advance()
-        floor = self.cfg.min_loss_at(ply)
+        floor = self.cfg.min_loss_at(ply) / 2  # the scan is shallow: it only rules out the clearly fine moves
         for u in sorted((u for u in units if self.loss(u) > floor), key=lambda u: -self.loss(u)):
             self._tick()
             self._confirm(u, ply)
@@ -195,9 +195,10 @@ class Miner:
                 raise _Stop()
 
     def _confirm(self, u: Unit, ply: int) -> None:
-        """Look at the position's worst played moves; the first that is no good move makes the puzzle."""
+        """Full-strength look at the position's worst played moves; the first that is no good move makes the
+        puzzle."""
         self._say(
-            f"Ply {ply}: making a puzzle",
+            f"Ply {ply}: making a puzzle at full strength",
             f"depth {self.cfg.sf_depth}, every move",
             f"ply {ply}: a move losing {self.loss(u):.0f} %",
         )
@@ -205,7 +206,7 @@ class Miner:
         game_opponent = ""
         worst = sorted(self._losses(u).items(), key=lambda kv: -kv[1])[:CONFIRM_TRIES]
         for move, loss in worst:
-            if loss <= self.cfg.min_loss_at(ply):
+            if loss <= self.cfg.min_loss_at(ply) / 2:
                 break
             st = u.played[move]
             game = (st.mine_game if u.mine else st.opp_game) or self.games[0]

@@ -189,6 +189,9 @@ def quick_nag(loss: float, inaccuracy: float) -> int:
     return MISTAKE if loss <= 20 else BLUNDER
 
 
+GAME_LINES = 3  # lines of a cheap grade: enough to tell an only good move (the second line is worse) apart
+
+
 def game_nags(
     game: Game, analyser, cfg: Config, skip: Iterable[int] = (), progress: Callable[[int, int], None] | None = None
 ) -> dict[int, int]:
@@ -196,7 +199,8 @@ def game_nags(
 
     Plies in `skip` (the puzzle cards, graded in full there) and positions with a single legal move are left
     out. A plain good move (!) is not marked: nearly every move would be. !!, □ and !? and the bad grades are.
-    Every position is searched in full by the analyser (and cached), like a puzzle position.
+    A position that has a full search already is graded from it; every other one gets the cheap grade
+    (`grade_cheap`: the top `GAME_LINES` lines and the played move, at the scan depth).
     `progress(done, total)` is called before each position.
     """
     skip = set(skip)
@@ -206,20 +210,20 @@ def game_nags(
         if progress:
             progress(ply, len(game.moves))
         if ply not in skip and not board.is_game_over() and board.legal_moves.count() > 1:
-            graded, _ = grade_position(board, analyser, cfg)
-            played = next((g for g in graded if g.move == u), None)
+            if analyser.cached(board) is not None:
+                graded, _ = grade_position(board, analyser, cfg)
+                played = next((g for g in graded if g.move == u), None)
+            else:
+                played = grade_cheap(board, u, analyser, cfg)
             if played is not None and played.nag not in (NEUTRAL, GOOD):
                 out[ply] = played.nag
         board.push_uci(u)
     return out
 
 
-def grade_position(board: chess.Board, analyser, cfg: Config) -> tuple[list[Graded], dict[str, Line]]:
-    """Every legal move of `board` graded, from the analyser's one full search of it (`analyser.evaluate`)."""
-    ev = analyser.evaluate(board)
-    by_move = {l.moves[0]: l for l in ev.lines if l.moves}
-    if not by_move:
-        return [], {}
+def _graded(board: chess.Board, by_move: dict[str, Line], cfg: Config, analyser) -> list[Graded]:
+    """The moves of `by_move` graded against the best of them. `analyser`: continues lines too short to count
+    material along (None: the lines are taken as they are)."""
     white = board.turn == chess.WHITE
     best = max(l.score.win_pct(white) for l in by_move.values())
     graded = [
@@ -231,7 +235,30 @@ def grade_position(board: chess.Board, analyser, cfg: Config) -> tuple[list[Grad
         )
         for m, l in by_move.items()
     ]
-    return grade(graded, board.legal_moves.count(), cfg, material(board, board.turn)), by_move
+    return grade(graded, board.legal_moves.count(), cfg, material(board, board.turn))
+
+
+def grade_position(board: chess.Board, analyser, cfg: Config) -> tuple[list[Graded], dict[str, Line]]:
+    """Every legal move of `board` graded, from the analyser's one full search of it (`analyser.evaluate`)."""
+    ev = analyser.evaluate(board)
+    by_move = {l.moves[0]: l for l in ev.lines if l.moves}
+    if not by_move:
+        return [], {}
+    return _graded(board, by_move, cfg, analyser), by_move
+
+
+def grade_cheap(board: chess.Board, move: str, analyser, cfg: Config) -> Graded | None:
+    """The grade of `move` from a cheap look: the `GAME_LINES` best lines at the scan depth, and the line of
+    `move` itself when it is not among them. The best moves are exact, and every move not listed is worse than
+    the last listed, so it can tell an only good move (□, !!) and the good moves (!?) apart as the full search
+    does, except that a good move beyond the listed ones is not seen."""
+    by_move = {l.moves[0]: l for l in analyser.top(board, GAME_LINES).lines if l.moves}
+    if move not in by_move:
+        _, lines = analyser.scan(board, [move])
+        if move not in lines:
+            return None
+        by_move[move] = lines[move]
+    return next((g for g in _graded(board, by_move, cfg, None) if g.move == move), None)
 
 
 def decided(board: chess.Board, by_move: dict[str, Line]) -> bool | None:

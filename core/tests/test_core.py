@@ -142,6 +142,18 @@ class CacheTest(unittest.TestCase):
         c.put_eval("p", 25, Eval(25, [Line(S(5, 1, 998, 1), ["e2e4"]), Line(S(1, 1, 998, 1), ["d2d4"])]))
         self.assertEqual(len(c.get_eval("p", min_effort=25).lines), 2)
 
+    def test_scans(self):
+        c = tmpcache(self)
+        one = lambda cp, mv: Eval(10, [Line(S(cp, 1, 998, 1), [mv])])
+        top2 = Eval(10, [one(10, "e2e4").lines[0], one(5, "d2d4").lines[0]])
+        c.put_scan("p", 10, {"": one(10, "e2e4"), "d2d4": one(5, "d2d4"), "*2": top2})
+        self.assertEqual(set(c.get_scan("p", ["", "d2d4", "a2a3"], 10)), {"", "d2d4"})  # a2a3 was never scanned
+        self.assertEqual(len(c.get_scan("p", ["*2"], 10)["*2"].lines), 2)  # the top two lines are kept together
+        self.assertEqual(c.get_scan("p", ["d2d4"], 11), {})  # scanned less deep than asked
+        c.put_scan("p", 8, {"": one(99, "d2d4")})  # a shallower scan never replaces it
+        self.assertEqual(c.get_scan("p", [""], 10)[""].lines[0].moves, ["e2e4"])
+        self.assertEqual(c.get_scan("p", [], 10), {})
+
     def test_old_cache_is_dropped(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
@@ -151,7 +163,7 @@ class CacheTest(unittest.TestCase):
         c.put_games([g], "knightlyme")
         c.put_eval("p", 30, Eval(30, [Line(Score(cp=10), ["e2e4"])]))
         c.put_analysis(g, [{"cp": 1}])
-        c.set("schema", 3)  # the version before Stockfish-only, full-multipv searches
+        c.set("schema", 4)  # the version before scans
         c.close()
         c = SqliteCache(path)
         self.addCleanup(c.close)
@@ -443,6 +455,49 @@ class SelectTest(unittest.TestCase):
         self.assertEqual([a.move for a in card.alternatives], ["h5h4"])
         mated = board_at(SCHOLAR_MOVES, 7)
         self.assertIsNone(build_punish(mated, 7, "Qxf7#", FakeAnalyser(), self.cfg))  # the game is over
+
+
+class GameNagsTest(unittest.TestCase):
+    """Grading the moves of a game from a cheap look: the top lines and the played move at the scan depth."""
+
+    def fake(self, table=None):
+        an = FakeAnalyser(table=table)
+        an.scores = {}  # no eval-bar replay: `cached` then means "searched in full"
+        return an
+
+    def test_every_move_is_graded_from_the_cheap_look_not_the_full_search(self):
+        from knightly.select import game_nags
+
+        an = self.fake()  # only the position before Nf6?? has lines; elsewhere every move is as good as the next
+        nags = game_nags(scholar_game(), an, Config())
+        self.assertEqual(nags, {5: BLUNDER})
+        self.assertEqual(an.searched, [])  # no full search at all
+        self.assertEqual(len(an.topped), 7)  # but every position got the cheap look, so every move can be graded
+
+    def test_an_only_good_move_is_marked_without_a_full_search(self):
+        from knightly.select import game_nags
+
+        table = {
+            PUZZLE_FEN: Eval(
+                10,
+                [
+                    Line(S(-30, 50, 850, 100), ["g7g6"]),  # the only good move: the second line is 6 points worse
+                    Line(S(30, 100, 850, 50), ["d8e7"]),
+                    Line(S(40, 110, 850, 40), ["d8f6"]),
+                ],
+            )
+        }
+        game = scholar_game(moves=SCHOLAR_MOVES[:5] + ["g7g6"])
+        self.assertEqual(game_nags(game, self.fake(table), Config()), {5: SINGULAR})
+
+    def test_a_position_searched_in_full_already_is_graded_from_it(self):
+        from knightly.select import game_nags
+
+        an = self.fake()
+        an.evaluate(board_at(SCHOLAR_MOVES, 5))  # searched before (e.g. by the pipeline)
+        an.topped.clear()
+        self.assertEqual(game_nags(scholar_game(), an, Config()), {5: BLUNDER})
+        self.assertNotIn(PUZZLE_FEN, an.topped)  # no cheap look needed where the full search is known
 
 
 class PhasesTest(unittest.TestCase):
@@ -878,26 +933,30 @@ class PipelineTest(unittest.TestCase):
         g3 = game_from(["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"], white=False, id="g3", end_ts=100)
         m, an = self.mine([g1, g2, g3], {"g1": {5: 30}, "g2": {5: 15}, "g3": {5: 0.2}})
         key = lambda g: fen_key(board_at(g.moves, 5).fen())
-        self.assertTrue(all(key(g) in an.searched for g in (g1, g2, g3)))  # every position is searched, once in full
+        self.assertTrue(all(key(g) in an.scanned for g in (g1, g2, g3)))  # every position gets the cheap scan
+        self.assertIn(key(g1), an.searched)  # the two real losses get the full search
+        self.assertIn(key(g2), an.searched)
+        self.assertNotIn(key(g3), an.searched)  # 0.2 % is nothing: the scan rules it out, no full search
         self.assertEqual(
             [n.key for n in m.notes][:2], [puzzles.puzzle_key(board_at(g.moves, 5).fen(), 5) for g in (g1, g2)]
         )  # the bigger loss first
-        self.assertEqual(len(m.notes), 2)  # 0.2 % is nothing: no puzzle for g3
+        self.assertEqual(len(m.notes), 2)
 
-    def test_one_search_per_position_and_ply(self):
+    def test_a_game_without_mistakes_is_only_scanned(self):
         g = game_from(SICILIAN, white=False, id="g1", end_ts=300)
         m, an = self.mine([g], {"g1": {}})
         mine_plies = [fen_key(board_at(g.moves, p).fen()) for p in range(len(g.moves)) if p % 2 == 1]
-        self.assertEqual(an.searched, mine_plies)  # your positions only, each searched once, nothing else
+        self.assertEqual(an.scanned, mine_plies)  # your positions only, each scanned once
+        self.assertEqual(an.searched, [])  # nothing is worth the full search
         self.assertEqual((m.analysed, m.notes), (len(mine_plies), []))
 
     def test_time_budget(self):
         t = [0.0]
 
         class Slow(ScriptedAnalyser):
-            def evaluate(self, board):
+            def scan(self, board, moves):
                 t[0] += 25  # seconds per position
-                return super().evaluate(board)
+                return super().scan(board, moves)
 
         sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
         cfg = Config(sf_depth=13, analysis_minutes=1, max_new_cards=5)
@@ -1486,6 +1545,93 @@ class AnalyserTest(unittest.TestCase):
         self.assertEqual(deeper.evaluate(b).lines[0].moves, ["e2e4"])  # asked for more: searched again
         self.assertEqual(proc2.searches, [(20, 20)])
         self.assertEqual(c.get_eval(fen_key(b.fen()), min_effort=20).lines[0].moves, ["e2e4"])  # and kept
+
+    def scan_engine(self, cache, depth=13, scan_depth=10):
+        from knightly.engine.analyse import Engine
+
+        class Proc:
+            def __init__(self):
+                self.searches = []
+
+            def analysis(self, board, limit, multipv, root_moves=None):
+                only = [m.uci() for m in root_moves] if root_moves else None
+                self.searches.append((limit.depth, multipv, only))
+                # the best lines are e2e4, d2d4, g1f3; a restricted search answers with the asked moves only
+                moves = only or ["e2e4", "d2d4", "g1f3"][:multipv]
+                return FakeAnalysis([sf_info(limit.depth, move=m, cp=10 * (i + 1)) for i, m in enumerate(moves)])
+
+        eng = Engine("x", Config(sf_depth=depth, scan_depth=scan_depth), cache)
+        eng._proc = proc = Proc()
+        return eng, proc
+
+    def test_scan_searches_the_best_move_and_each_played_move_on_its_own(self):
+        eng, proc = self.scan_engine(tmpcache(self))
+        best, lines = eng.scan(chess.Board(), ["d2d4", "g1f3"])
+        self.assertEqual(proc.searches, [(10, 1, None), (10, 2, ["d2d4", "g1f3"])])  # the scan depth, fewest lines
+        self.assertEqual(best.moves[0], "e2e4")
+        self.assertEqual(sorted(lines), ["d2d4", "g1f3"])
+
+    def test_scan_does_not_search_the_best_move_twice(self):
+        eng, proc = self.scan_engine(tmpcache(self))
+        best, lines = eng.scan(chess.Board(), ["e2e4"])  # the played move is the engine's best
+        self.assertEqual(proc.searches, [(10, 1, None)])
+        self.assertEqual(lines, {"e2e4": best})
+
+    def test_scan_is_cached_per_move(self):
+        c = tmpcache(self)
+        eng, proc = self.scan_engine(c)
+        eng.scan(chess.Board(), ["d2d4"])
+        eng.scan(chess.Board(), ["d2d4"])  # all cached
+        self.assertEqual(len(proc.searches), 2)
+        eng.scan(chess.Board(), ["d2d4", "g1f3"])  # only the new move is searched
+        self.assertEqual(proc.searches[2:], [(10, 1, ["g1f3"])])
+        deeper, proc2 = self.scan_engine(c, scan_depth=12)
+        deeper.scan(chess.Board(), ["d2d4"])  # shallower scans don't count for a deeper one
+        self.assertEqual(len(proc2.searches), 2)
+
+    def test_a_full_search_answers_a_scan_for_free(self):
+        c = tmpcache(self)
+        eng, proc = self.scan_engine(c)
+        b = chess.Board()
+        c.put_eval(
+            fen_key(b.fen()),
+            13,
+            Eval(
+                13, [Line(S(10, 1, 998, 1), ["e2e4"]), Line(S(5, 1, 998, 1), ["d2d4"]), Line(S(1, 1, 998, 1), ["a2a3"])]
+            ),
+        )
+        best, lines = eng.scan(b, ["d2d4"])
+        self.assertEqual(proc.searches, [])
+        self.assertEqual((best.moves[0], list(lines)), ("e2e4", ["d2d4"]))
+
+    def test_top_lines_are_one_cheap_search_and_cached(self):
+        c = tmpcache(self)
+        eng, proc = self.scan_engine(c)
+        ev = eng.top(chess.Board(), 3)
+        self.assertEqual(proc.searches, [(10, 3, None)])  # the top 3 lines, at the scan depth
+        self.assertEqual([l.moves[0] for l in ev.lines], ["e2e4", "d2d4", "g1f3"])
+        eng.top(chess.Board(), 3)
+        self.assertEqual(len(proc.searches), 1)  # cached
+        eng.top(chess.Board(), 2)
+        self.assertEqual(proc.searches[-1], (10, 2, None))  # another number of lines is another search
+
+    def test_top_lines_come_from_a_full_search_when_there_is_one(self):
+        c = tmpcache(self)
+        eng, proc = self.scan_engine(c)
+        b = chess.Board()
+        c.put_eval(
+            fen_key(b.fen()),
+            13,
+            Eval(
+                13, [Line(S(10, 1, 998, 1), ["e2e4"]), Line(S(5, 1, 998, 1), ["d2d4"]), Line(S(1, 1, 998, 1), ["a2a3"])]
+            ),
+        )
+        self.assertEqual([l.moves[0] for l in eng.top(b, 2).lines], ["e2e4", "d2d4"])
+        self.assertEqual(proc.searches, [])
+
+    def test_scan_depth_is_never_deeper_than_the_full_search(self):
+        self.assertEqual(Config(sf_depth=13, scan_depth=10).scan_depth_used(), 10)
+        self.assertEqual(Config(sf_depth=8, scan_depth=10).scan_depth_used(), 8)
 
     def test_finished_games_are_not_searched(self):
         from knightly.engine.analyse import Analyser
