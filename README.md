@@ -3,7 +3,7 @@ Your nightly chess reps, made from your own games. knightly-review pulls your Li
 
 ## Install
 
-You need [Anki](https://apps.ankiweb.net/) on a computer (Windows, macOS or Linux). Cards are made on the computer, and reach AnkiDroid, AnkiMobile and AnkiWeb through normal Anki sync.
+You need [Anki](https://apps.ankiweb.net/) 25.07 or newer on a computer (Windows, macOS or Linux). Older versions run Python 3.9, which the add-on no longer supports. Cards are made on the computer, and reach AnkiDroid, AnkiMobile and AnkiWeb through normal Anki sync.
 
 1. Install the add-on: double-click `knightly_review.ankiaddon`, or in Anki use **Tools → Add-ons → Install from file…**. Restart Anki.
 2. A welcome window opens. Enter your Lichess and/or Chess.com username.
@@ -167,4 +167,4 @@ See [card/README.md](card/README.md) for the card and its PGN format, [addon/REA
 
 ## Licence
 
-GNU Affero General Public License v3 or later (see `LICENSE`). The motif tagger in `core/knightly/cook.py` and `cookutil.py` is ported from [lichess-puzzler](https://github.com/ornicar/lichess-puzzler) (AGPL-3.0).
+GNU Affero General Public License v3 or later (see `LICENSE`). The motif tagger in `core/knightly/cook.py` and `cookutil.py` is ported from [lichess-puzzler](https://github.com/ornicar/lichess-puzzler) (AGPL-3.0). Third-party code, data and artwork, and how the ported files differ from upstream, are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

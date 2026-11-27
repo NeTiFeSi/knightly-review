@@ -23,7 +23,6 @@ from .config_block import rewrite, validate
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.3.0"
 PREFIX = "kr:"
 
 
@@ -100,7 +99,9 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
     if card is None:
         return handled
     if message == "kr:hello":
-        return True, {"kr": 1, "version": VERSION}
+        from .vendor.knightly import __version__  # the add-on is versioned with the core it bundles
+
+        return True, {"kr": 1, "version": __version__}
     if message.startswith("kr:visits:"):  # which replies this card showed: kept in the note, so it syncs
         try:
             return True, _save_visits(card, message[len("kr:visits:") :])

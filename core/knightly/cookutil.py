@@ -1,6 +1,7 @@
 # Ported from lichess-puzzler (https://github.com/ornicar/lichess-puzzler, tagger/util.py),
 # Copyright (C) the lichess-puzzler authors, licensed under the GNU AGPL v3 or later. Changes: imports,
-# a local Puzzle class, no logging setup.
+# a local Puzzle class, no logging setup, `ruff format` at 120 columns and the style fixes listed in
+# THIRD_PARTY_NOTICES.md. The logic is unchanged.
 from typing import TypeVar
 
 import chess
