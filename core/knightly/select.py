@@ -6,15 +6,15 @@ score falls below the best move's.
 
 Grading (NAGs) of the candidate moves at a puzzle position:
 
-- A **good move** loses at most `cfg.good_move` points. A move that loses
-  more but less than `cfg.inaccuracy` is normal play: no NAG (0). It isn't an
+- A **good move** loses at most `cfg.annotate.good_move` points. A move that loses
+  more but less than `cfg.annotate.inaccuracy` is normal play: no NAG (0). It isn't an
   accepted answer by default; played at a puzzle position it still makes the puzzle (it lost
-  more than `cfg.min_loss`).
+  more than `cfg.select.min_loss`).
 - A **sacrifice** gives up material in the short term while an alternative
-  keeps more: `cfg.sacrifice_plies` plies down the engine's line (followed
+  keeps more: `cfg.annotate.sacrifice_plies` plies down the engine's line (followed
   further while captures or checks are still going on, or a recapture that was
   available right after a capture is still owed past an in-between move), the side that moved has
-  at least `cfg.sacrifice_points` of material (1/3/3/5/9) less than it has now,
+  at least `cfg.annotate.sacrifice_points` of material (1/3/3/5/9) less than it has now,
   and at least that much less than the analysed alternative that keeps the most.
 - In a **forced mate** (the best move mates by force), only moves that keep a
   forced mate count as good; a move that gives it up is ?! at best, even when
@@ -27,8 +27,8 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 | □  ($8) | the only good move, not a sacrifice (a "singular move") |
 | !? ($5) | a good move and a sacrifice, while another good move keeps more material |
 | !  ($1) | any other good move |
-| (none)  | loses more than a good move but less than `cfg.inaccuracy` (5) points |
-| ?! ($6) | loses `cfg.inaccuracy` to 10 points |
+| (none)  | loses more than a good move but less than `cfg.annotate.inaccuracy` (5) points |
+| ?! ($6) | loses `cfg.annotate.inaccuracy` to 10 points |
 | ?  ($2) | loses 10 to 20 points |
 | ?? ($4) | loses more than 20 points |
 
@@ -158,17 +158,17 @@ def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) 
     def is_good(m: Graded) -> bool:
         if mating:  # a forced mate on the board: only moves that keep one
             return m.mate is not None and m.mate > 0
-        return m.loss <= cfg.good_move
+        return m.loss <= cfg.annotate.good_move
 
     good = [m for m in moves if is_good(m)]
     for m in moves:
         if not is_good(m):
             if m.loss <= 10:
-                m.nag = DUBIOUS if m.loss >= cfg.inaccuracy or mating else NEUTRAL
+                m.nag = DUBIOUS if m.loss >= cfg.annotate.inaccuracy or mating else NEUTRAL
             else:
                 m.nag = MISTAKE if m.loss <= 20 else BLUNDER
             continue
-        sacrifice = m.material <= min(current, most) - cfg.sacrifice_points
+        sacrifice = m.material <= min(current, most) - cfg.annotate.sacrifice_points
         if len(good) == 1 and legal_moves > 1:
             m.nag = BRILLIANT if sacrifice else SINGULAR
         elif sacrifice and any(o.material > m.material for o in good if o is not m):
@@ -230,7 +230,7 @@ def _graded(board: chess.Board, by_move: dict[str, Line], cfg: Config, analyser)
         Graded(
             m,
             max(0.0, best - l.score.win_pct(white)),
-            line_material(board, l.moves, cfg.sacrifice_plies, analyser),
+            line_material(board, l.moves, cfg.annotate.sacrifice_plies, analyser),
             mate=None if l.score.mate is None else (l.score.mate if white else -l.score.mate),
         )
         for m, l in by_move.items()
@@ -314,7 +314,7 @@ def build_card(
     """Deep-analyse the puzzle position and grade its candidate moves.
 
     None when the position isn't a fair puzzle: only one legal move, or the deep look says the
-    played move wasn't a mistake (it lost no more than `min_loss`, default `cfg.min_loss_at(ply)`,
+    played move wasn't a mistake (it lost no more than `min_loss`, default `cfg.select.min_loss_at(ply)`,
     or it counts as a correct answer), or no other move is a correct answer, or no move can change the
     result (`decided`). `opponent` is the
     name of the player who made the move when it wasn't the user (an opponent-mistake card).
@@ -328,7 +328,7 @@ def build_card(
     if decided(board, by_move) is not None:  # no move can change the result: nothing to learn here
         return None
     g_played = next(g for g in graded if g.move == played)
-    threshold = cfg.min_loss_at(ply) if min_loss is None else min_loss
+    threshold = cfg.select.min_loss_at(ply) if min_loss is None else min_loss
     if g_played.loss <= threshold or g_played.nag in ACCEPTED:
         return None
     played_choice, choices = _choices(graded, by_move, cfg, played)

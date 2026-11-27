@@ -1,4 +1,4 @@
-"""One update run: fetch → mine the games ply by ply (pipeline.py) → notes.
+"""One update run: extract the games (stages/extract.py) → mine the games ply by ply (pipeline.py) → notes.
 
 `run_update` is the single entry point for the add-on (in a background thread),
 the CLI, and later the companion process and a server. It never touches an
@@ -9,23 +9,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from . import http, notes, pipeline, puzzles, sources
+from . import http, notes, pipeline, puzzles
 from .cache import Cache
 from .config import Config
+from .engine import broker
 from .engine.analyse import Analyser
+from .engine.broker import Pool
 from .model import Game, NoteSpec
 from .progress import Tracker, legacy_listener
-from .sources import chesscom, lichess
+from .stages import extract
 
 # progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
 # of max_new_cards), positions (the current step, emitted often), cards.
-log = logging.getLogger(__name__)
 
 Progress = Callable[[str, int, int, str], None]
 
@@ -41,67 +41,48 @@ class UpdateResult:
     stats: dict = field(default_factory=dict)
     finished: bool = False  # the analysis left nothing to continue (every ply done, or enough puzzles)
     skipped: bool = False  # same inputs as the last finished run: nothing was collected or analysed
+    outdated: list[str] = field(default_factory=list)  # keys of the notes this version can't maintain
 
 
 STATE_KEY = "last_run"
 
 
 def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
-    """Hash of everything a run depends on: the rules, the settings (minus tokens), the games used, the positions
-    on cards."""
-    d = cfg.to_dict()
-    d.pop("lichess_token", None)
-    blob = json.dumps([puzzles.RULES, d, sorted(game_keys), sorted(exclude)], sort_keys=True)
+    """Hash of everything a run depends on: the rules, the settings of the stages it runs (minus secrets; the
+    engine's threads and memory change no result), the games used, the positions on cards."""
+    settings = cfg.fingerprint("extract", "annotate", "select", "build", "manage")
+    blob = json.dumps([puzzles.RULES, settings, sorted(game_keys), sorted(exclude)], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-def fetch_all(
-    cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event, progress: Progress, result: UpdateResult
-) -> None:
-    jobs = []
-    if cfg.lichess_user:
-        jobs.append(("lichess", cfg.lichess_user))
-    if cfg.chesscom_user:
-        jobs.append(("chesscom", cfg.chesscom_user))
-    for source, user in jobs:
-        # A manual update may always ask Lichess (incremental); Chess.com's cache makes
-        # frequent asks pointless, so its cooldown always applies.
-        mod = lichess if source == "lichess" else chesscom
-        # the look-back grew, or the filters let through games they left out
-        backfill = mod.needs_backfill(cache, user, cfg.history_days, cfg.time_classes, cfg.rated_only)
-        if not sources.due(cache, source, user) and not (force and source == "lichess") and not backfill:
-            continue
-        msg = lambda m: progress("fetch", 0, 0, m)
-        msg(f"Fetching games from {'Lichess' if source == 'lichess' else 'Chess.com'}…")
-        try:
-            if source == "lichess":
-                n = lichess.fetch(
-                    cache,
-                    user,
-                    token=cfg.lichess_token,
-                    history_days=cfg.history_days,
-                    time_classes=cfg.time_classes,
-                    rated_only=cfg.rated_only,
-                    cancel=cancel,
-                    progress=msg,
-                )
-            else:
-                n = chesscom.fetch(
-                    cache,
-                    user,
-                    history_days=cfg.history_days,
-                    time_classes=cfg.time_classes,
-                    rated_only=cfg.rated_only,
-                    cancel=cancel,
-                    progress=msg,
-                )
-            result.new_games += n
-            sources.mark_fetched(cache, source, user)
-        except http.Cancelled:
-            raise
-        except Exception as e:  # one site failing shouldn't stop the other
-            log.exception("fetching games from %s failed", source)
-            result.warnings.append(f"{source}: {e}")
+def collection_state(
+    cache: Cache, existing: dict[str, str], prune: bool = True
+) -> tuple[puzzles.Store, list[puzzles.Puzzle], set[str]]:
+    """What is on cards already, from the collection's notes (note key → PGN): the puzzle records, the puzzles of
+    this pipeline (found again by id: position and ply), and the position of every card (never made twice; cards
+    from older versions count too). `prune`: puzzle records whose note is gone from the collection are dropped,
+    so the puzzle may be made again (off when there is no collection to compare with)."""
+    store = puzzles.Store(cache)
+    known: list[puzzles.Puzzle] = []
+    claimed: set[str] = set()
+    for key, pgn in existing.items():
+        claimed |= set(notes.card_ids(pgn))
+        if puzzles.parse_key(key):
+            p = store.get(key) or puzzles.from_pgn(key, pgn)
+            if p is not None:
+                known.append(p)
+    if prune:
+        for key in store:
+            if key not in existing:
+                store.delete(key)
+    return store, known, claimed
+
+
+def _priorities(precalculate: bool) -> dict[str, int]:
+    """Pre-calculating is work for later: it waits behind every other user of the engine."""
+    if precalculate:
+        return {"priority": broker.BACKFILL, "scan_priority": broker.BACKFILL}
+    return {"priority": broker.CONFIRM, "scan_priority": broker.SCAN}
 
 
 def run_update(
@@ -117,6 +98,7 @@ def run_update(
     precalculate: bool = False,
     on_note: Callable[[NoteSpec], None] | None = None,
     tracker: Tracker | None = None,
+    pool: Pool | None = None,
 ) -> UpdateResult:
     """`precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
     the searches in the cache. `analysis_minutes` still bounds it.
@@ -127,7 +109,9 @@ def run_update(
     a similar position). `result.notes` ends with the same specs, and holds those made so far if the run
     is cancelled.
     `tracker`: a progress.Tracker to read the run's progress from (stage, engines, counters) while it goes on;
-    `progress` still gets the older `(stage, done, total, message)` calls."""
+    `progress` still gets the older `(stage, done, total, message)` calls.
+    `pool`: the Stockfish processes shared with other users of the engine (engine/broker.py); None = a pool of
+    this run's own."""
     tracker = tracker or Tracker()
     if progress:
         tracker.listen(legacy_listener(progress))
@@ -138,34 +122,14 @@ def run_update(
     result = UpdateResult()
     try:
         if fetch:
-            fetch_all(cfg, cache, force=force, cancel=cancel, progress=progress, result=result)
+            got = extract.run(cfg, cache, force=force, cancel=cancel, message=lambda m: progress("fetch", 0, 0, m))
+            result.new_games += got.new_games
+            result.warnings += got.warnings
 
-        since = sources.since_ts(cfg.history_days)
-        games: list[Game] = []
-        for source, user in (("lichess", cfg.lichess_user), ("chesscom", cfg.chesscom_user)):
-            if user:
-                games += [
-                    g
-                    for g in cache.games(source, user, since)
-                    if (not cfg.time_classes or g.time_class in cfg.time_classes) and (not cfg.rated_only or g.rated)
-                ]
-        games.sort(key=lambda g: g.end_ts, reverse=True)  # newest first across both sites
+        games: list[Game] = extract.games_of(cfg, cache)  # yours, newest first across the sources
         by_key = {g.key: g for g in games}
 
-        # What is on cards already: puzzles of this pipeline (found again by id: position and ply) and
-        # cards from older versions (their positions are never offered again).
-        store = puzzles.Store(cache)
-        known: list[puzzles.Puzzle] = []
-        claimed: set[str] = set()  # the position of every card in the collection: never made twice
-        for key, pgn in existing.items():
-            claimed |= set(notes.card_ids(pgn))
-            if puzzles.parse_key(key):
-                p = store.get(key) or puzzles.from_pgn(key, pgn)
-                if p is not None:
-                    known.append(p)
-        for key in store:  # puzzles whose note is gone from the collection may be made again
-            if have_collection and key not in existing:
-                store.delete(key)
+        store, known, claimed = collection_state(cache, existing, prune=have_collection)
         exclude = claimed
 
         fp = fingerprint(cfg, by_key, exclude)
@@ -179,7 +143,9 @@ def run_update(
 
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
         an_ctx = (
-            analyser_factory(cfg, cache, cancel) if analyser_factory else Analyser(cfg, cache, cancel, tracker=tracker)
+            analyser_factory(cfg, cache, cancel)
+            if analyser_factory
+            else Analyser(cfg, cache, cancel, tracker=tracker, pool=pool, **_priorities(precalculate))
         )
         with an_ctx as an:
             miner = pipeline.Miner(
@@ -187,13 +153,14 @@ def run_update(
                 an,
                 cfg,
                 store,
-                want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
+                want=pipeline.UNBOUNDED if precalculate else cfg.build.max_new_cards,
                 known=known,
                 claimed=claimed,
                 existing=existing,
                 make=not precalculate,
                 tracker=tracker,
                 on_note=on_note,
+                stored_urls=extract.stored_urls(cfg, cache),
             )
             try:
                 miner.run()
@@ -201,6 +168,7 @@ def run_update(
                 result.notes = miner.notes
                 result.new_cards = sum(sp.new_cards for sp in miner.notes)
                 result.analysed_positions = miner.analysed
+                result.outdated = miner.outdated
             result.stats = dict(an.stats)
             result.finished = miner.finished
             # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and

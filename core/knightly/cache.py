@@ -43,6 +43,40 @@ CREATE TABLE IF NOT EXISTS games (
   PRIMARY KEY (source, id)
 );
 CREATE INDEX IF NOT EXISTS games_user ON games (source, user, end_ts);
+CREATE TABLE IF NOT EXISTS game_players (
+  source TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,        -- lowercase, as the game names the player
+  white INTEGER NOT NULL,    -- 1: played White
+  PRIMARY KEY (source, id, white)
+);
+CREATE INDEX IF NOT EXISTS game_players_name ON game_players (name, source);
+CREATE TABLE IF NOT EXISTS annotations (  -- stage 2: the scan of a position, from one side (stages/annotate.py)
+  fen_key TEXT NOT NULL,
+  ply INTEGER NOT NULL,
+  mine INTEGER NOT NULL,     -- 1: the user's moves, 0: the opponents'
+  depth INTEGER NOT NULL,
+  data TEXT NOT NULL,        -- {"best": line, "lines": {move: line}}
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (fen_key, ply, mine)
+);
+CREATE TABLE IF NOT EXISTS candidates (   -- stage 3: positions worth a puzzle, for stage 4 (stages/candidates.py)
+  fen_key TEXT NOT NULL,
+  ply INTEGER NOT NULL,
+  mine INTEGER NOT NULL,
+  loss REAL NOT NULL,
+  tries TEXT NOT NULL,       -- [[move, loss], ...], worst first
+  status TEXT NOT NULL,      -- pending | made | rejected | skipped
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (fen_key, ply, mine)
+);
+CREATE INDEX IF NOT EXISTS candidates_order ON candidates (status, ply, mine, loss);
+CREATE TABLE IF NOT EXISTS outbox (       -- notes and suspensions waiting to be written into the collection
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,        -- note | suspend
+  data TEXT NOT NULL,
+  created INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS http (
   url TEXT PRIMARY KEY,
   etag TEXT,
@@ -64,19 +98,41 @@ def fen_key(fen: str) -> str:
     return " ".join(fen.split()[:4])
 
 
+def _index_players(c: sqlite3.Connection, source: str, gid: str, white: str, black: str) -> None:
+    for name, is_white in ((white, 1), (black, 0)):
+        if name:
+            c.execute(
+                "INSERT OR IGNORE INTO game_players (source, id, name, white) VALUES (?,?,?,?)",
+                (source, gid, name.lower(), is_white),
+            )
+
+
 class Cache(Protocol):
     def get_eval(self, key: str, min_effort: int = 0) -> Eval | None: ...
     def put_eval(self, key: str, effort: int, ev: Eval) -> None: ...
     def get_scan(self, key: str, names: Iterable[str], min_effort: int) -> dict[str, Eval]: ...
     def put_scan(self, key: str, effort: int, found: dict[str, Eval]) -> None: ...
-    def put_games(self, games: Iterable[Game], user: str) -> int: ...
+    def put_games(self, games: Iterable[Game], user: str = "") -> int: ...
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]: ...
+    def games_from(self, source: str, since_ts: int = 0) -> list[Game]: ...
     def get_analysis(self, game: Game) -> list[dict | None] | None: ...
     def put_analysis(self, game: Game, analysis: list[dict | None]) -> None: ...
     def get_http(self, url: str) -> tuple[str | None, str | None]: ...
     def put_http(self, url: str, etag: str | None, last_modified: str | None) -> None: ...
     def get(self, key: str, default: Any = None) -> Any: ...
     def set(self, key: str, value: Any) -> None: ...
+    def claim(self, key: str, owner: str, seconds: float) -> bool: ...
+    def annotations(self) -> dict[tuple[str, int, bool], tuple[int, dict]]: ...
+    def put_annotation(self, fen_key: str, ply: int, mine: bool, depth: int, data: dict) -> None: ...
+    def add_candidates(self, rows: Iterable[tuple[str, int, bool, float, list]]) -> int: ...
+    def candidates(self, status: str = "pending") -> list[tuple[str, int, bool, float, list]]: ...
+    def candidate_keys(self) -> set[tuple[str, int, bool]]: ...
+    def set_candidate(self, fen_key: str, ply: int, mine: bool, status: str) -> None: ...
+    def clear_candidates(self) -> None: ...
+    def outbox_put(self, kind: str, data: Any) -> int: ...
+    def outbox(self) -> list[tuple[int, str, Any]]: ...
+    def outbox_done(self, seqs: Iterable[int]) -> None: ...
+    def unclaim(self, key: str, owner: str) -> None: ...
 
 
 class SqliteCache:
@@ -96,6 +152,12 @@ class SqliteCache:
                 c.execute("UPDATE games SET analysis=NULL")
                 c.execute("DELETE FROM kv WHERE key LIKE 'cloudmiss:%'")
                 c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+            if not c.execute("SELECT 1 FROM kv WHERE key='players_indexed'").fetchone():
+                # Caches from before game_players: index the players of the games already stored.
+                for source, gid, data in c.execute("SELECT source, id, data FROM games").fetchall():
+                    d = json.loads(data)
+                    _index_players(c, source, gid, d.get("white", ""), d.get("black", ""))
+                c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('players_indexed', '1')")
 
     def _conn(self) -> sqlite3.Connection:
         c = getattr(self._local, "conn", None)
@@ -154,7 +216,9 @@ class SqliteCache:
                 )
 
     # games
-    def put_games(self, games: Iterable[Game], user: str) -> int:
+    def put_games(self, games: Iterable[Game], user: str = "") -> int:
+        """Store new games (one already stored is left as it is). `user`: the account they were fetched for;
+        `games` finds each game by either player's name anyway."""
         n = 0
         with self._conn() as c:
             for g in games:
@@ -163,15 +227,27 @@ class SqliteCache:
                     (g.source, g.id, user.lower(), g.end_ts, json.dumps(g.to_json())),
                 )
                 n += cur.rowcount
+                _index_players(c, g.source, g.id, g.white, g.black)
         return n
 
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]:
+        """The games of `source` that `user` played (either colour), newest first."""
         rows = (
             self._conn()
             .execute(
-                "SELECT data FROM games WHERE source=? AND user=? AND end_ts>=? ORDER BY end_ts DESC",
-                (source, user.lower(), since_ts),
+                """SELECT g.data FROM games g JOIN game_players p ON p.source = g.source AND p.id = g.id
+                   WHERE p.name=? AND g.source=? AND g.end_ts>=? ORDER BY g.end_ts DESC""",
+                (user.lower(), source, since_ts),
             )
+            .fetchall()
+        )
+        return [Game.from_json(json.loads(r[0])) for r in rows]
+
+    def games_from(self, source: str, since_ts: int = 0) -> list[Game]:
+        """Every game of `source`, newest first."""
+        rows = (
+            self._conn()
+            .execute("SELECT data FROM games WHERE source=? AND end_ts>=? ORDER BY end_ts DESC", (source, since_ts))
             .fetchall()
         )
         return [Game.from_json(json.loads(r[0])) for r in rows]
@@ -211,3 +287,96 @@ class SqliteCache:
     def set(self, key: str, value: Any) -> None:
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?,?)", (key, json.dumps(value)))
+
+    # leases: one owner at a time across threads and processes (engine/broker.py)
+    def claim(self, key: str, owner: str, seconds: float) -> bool:
+        """Hold `key` for `seconds` if it is free, expired or held by `owner` already (renewed). One statement,
+        so two processes can't both win."""
+        now = time.time()
+        value = json.dumps({"owner": owner, "until": now + seconds})
+        with self._conn() as c:
+            cur = c.execute(
+                """INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value
+                   WHERE json_extract(kv.value, '$.owner')=? OR json_extract(kv.value, '$.until')<?""",
+                (key, value, owner, now),
+            )
+            return cur.rowcount > 0
+
+    def unclaim(self, key: str, owner: str) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM kv WHERE key=? AND json_extract(value, '$.owner')=?", (key, owner))
+
+    # stage tables (see the stages)
+    def annotations(self) -> dict[tuple[str, int, bool], tuple[int, dict]]:
+        """Every annotated position: (fen key, ply, mine) → (scan depth, data)."""
+        rows = self._conn().execute("SELECT fen_key, ply, mine, depth, data FROM annotations").fetchall()
+        return {(k, ply, bool(mine)): (depth, json.loads(d)) for k, ply, mine, depth, d in rows}
+
+    def put_annotation(self, fen_key: str, ply: int, mine: bool, depth: int, data: dict) -> None:
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO annotations (fen_key, ply, mine, depth, data, updated) VALUES (?,?,?,?,?,?)",
+                (fen_key, ply, int(mine), depth, json.dumps(data), int(time.time())),
+            )
+
+    def add_candidates(self, rows: Iterable[tuple[str, int, bool, float, list]]) -> int:
+        """Pending candidates (fen key, ply, mine, loss, tries), from positions not on a card. One already listed
+        is pending again when it made a puzzle or was skipped (the note never reached the collection, or was
+        deleted from it: it is made again), or when its moves to try changed (new games played others)."""
+        n = 0
+        with self._conn() as c:
+            for k, ply, mine, loss, tries in rows:
+                cur = c.execute(
+                    """INSERT INTO candidates (fen_key, ply, mine, loss, tries, status, updated)
+                       VALUES (?,?,?,?,?,'pending',?)
+                       ON CONFLICT (fen_key, ply, mine) DO UPDATE SET
+                         loss=excluded.loss, tries=excluded.tries, status='pending', updated=excluded.updated
+                       WHERE candidates.status IN ('made', 'skipped') OR candidates.tries != excluded.tries""",
+                    (k, ply, int(mine), loss, json.dumps(tries), int(time.time())),
+                )
+                n += cur.rowcount
+        return n
+
+    def candidates(self, status: str = "pending") -> list[tuple[str, int, bool, float, list]]:
+        """Candidates in the order they are built: ply by ply, yours first, biggest loss first."""
+        rows = (
+            self._conn()
+            .execute(
+                """SELECT fen_key, ply, mine, loss, tries FROM candidates WHERE status=?
+                   ORDER BY ply, mine DESC, loss DESC, fen_key""",
+                (status,),
+            )
+            .fetchall()
+        )
+        return [(k, ply, bool(mine), loss, json.loads(tries)) for k, ply, mine, loss, tries in rows]
+
+    def candidate_keys(self) -> set[tuple[str, int, bool]]:
+        rows = self._conn().execute("SELECT fen_key, ply, mine FROM candidates").fetchall()
+        return {(k, ply, bool(mine)) for k, ply, mine in rows}
+
+    def set_candidate(self, fen_key: str, ply: int, mine: bool, status: str) -> None:
+        with self._conn() as c:
+            c.execute(
+                "UPDATE candidates SET status=?, updated=? WHERE fen_key=? AND ply=? AND mine=?",
+                (status, int(time.time()), fen_key, ply, int(mine)),
+            )
+
+    def clear_candidates(self) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM candidates")
+
+    def outbox_put(self, kind: str, data: Any) -> int:
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO outbox (kind, data, created) VALUES (?,?,?)", (kind, json.dumps(data), int(time.time()))
+            )
+            return int(cur.lastrowid or 0)
+
+    def outbox(self) -> list[tuple[int, str, Any]]:
+        """What waits to be written into the collection, oldest first."""
+        rows = self._conn().execute("SELECT seq, kind, data FROM outbox ORDER BY seq").fetchall()
+        return [(seq, kind, json.loads(d)) for seq, kind, d in rows]
+
+    def outbox_done(self, seqs: Iterable[int]) -> None:
+        with self._conn() as c:
+            c.executemany("DELETE FROM outbox WHERE seq=?", [(s,) for s in seqs])

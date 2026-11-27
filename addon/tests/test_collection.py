@@ -210,6 +210,57 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(json.loads(self.col.get_note(c.nid)["Visits"]), {"k1:1": {"r1": 1}})
         self.assertEqual(_pending_visits, {})
 
+    def test_a_note_can_keep_its_tags(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.kc.apply_notes(self.col, [self.spec(tags=("knightly::severity::mistake",))], "K")
+        again = self.spec(tags=("knightly::severity::blunder",), pgn="1. e4 { [%kr 1] } c5 *")
+        again.retag = False
+        self.kc.apply_notes(self.col, [again], "K")
+        note = self.col.get_note(self.col.find_notes("tag:knightly")[0])
+        self.assertIn("knightly::severity::mistake", note.tags)
+        self.assertNotIn("knightly::severity::blunder", note.tags)
+        self.assertEqual(self.kc.kn.field_to_pgn(note["PGN"]), "1. e4 { [%kr 1] } c5 *")  # the rest is written
+        fresh = self.spec(key="puzzle:6:fedcba654321", tags=("knightly::severity::blunder",))
+        fresh.retag = False
+        self.kc.apply_notes(self.col, [fresh], "K")  # a new note gets its tags anyway
+        self.assertIn("knightly::severity::blunder", self.col.get_note(self.kc.note_ids(self.col, [fresh.key])[0]).tags)
+
+    def test_outdated_notes_are_suspended_in_the_runs_undo_step(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.kc.apply_notes(self.col, [self.spec()], "K")
+        old = self.col.new_note(self.col.models.by_name(self.kc.MODEL))
+        old["PGN"], old["Cards"] = "1. d4 { [%kr 1] } d5 *", "{{c1::1::1}}"
+        old.add_tag("knightly")
+        self.col.add_note(old, self.col.decks.id("K"))
+        w = self.kc.RunWriter(self.col, "K")
+        w.add(self.spec(key="puzzle:6:fedcba654321"))
+        w.suspend([f"legacy:{old.id}", self.KEY, "puzzle:9:not-in-the-collection"])
+        w.suspend([f"legacy:{old.id}"])  # suspended already: nothing more
+        w.finish()
+        self.assertEqual(w.suspended, 2)
+        suspended = set(self.col.find_cards("is:suspended"))
+        self.assertEqual(
+            suspended,
+            set(self.col.find_cards(f"nid:{old.id}"))
+            | set(self.col.find_cards(f"tag:{self.kc.kn.note_key_tag(self.KEY)}")),
+        )
+        self.assertEqual(self.col.undo_status().undo, self.kc.UNDO_NAME)
+        self.col.undo()  # one step: the new note and the suspensions
+        self.assertEqual(self.col.find_cards("is:suspended"), [])
+        self.assertEqual(self.kc.count_notes(self.col), 2)
+
+    def test_suspending_alone_is_an_undo_step(self):
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.kc.apply_notes(self.col, [self.spec()], "K")
+        w = self.kc.RunWriter(self.col, "K")
+        w.suspend(["puzzle:9:not-in-the-collection"])
+        self.assertFalse(w.touched)  # nothing to suspend: no undo step
+        w.suspend([self.KEY])
+        w.finish()
+        self.assertEqual((w.touched, w.suspended), (True, 1))
+        self.col.undo()
+        self.assertEqual(self.col.find_cards("is:suspended"), [])
+
     def test_existing_notes_lists_puzzles_by_key_and_older_notes_as_legacy(self):
         self.kc.ensure_installed(self.col, self.card_dir)
         self.kc.apply_notes(self.col, [self.spec()], "Chess::Knightly")

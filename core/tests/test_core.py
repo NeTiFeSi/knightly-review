@@ -417,7 +417,7 @@ class SelectTest(unittest.TestCase):
 
     def g(self, moves, legal=20, current=0, **cfg):
         """Grade (move, loss, material) triples; returns {move: nag}."""
-        c = Config(**cfg)
+        c = Config.from_dict(dict(**cfg))
         return {m.move: m.nag for m in grade([Graded(*t) for t in moves], legal, c, current)}
 
     def test_brilliant_and_singular(self):
@@ -531,9 +531,11 @@ class SelectTest(unittest.TestCase):
             )
         }
         self.assertIsNone(
-            build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), Config(min_loss=5))
+            build_card(
+                board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), Config.from_dict({"min_loss": 5})
+            )
         )
-        self.assertEqual(Config(min_loss=3).min_loss_at(17), 3)
+        self.assertEqual(Config.from_dict({"min_loss": 3}).select.min_loss_at(17), 3)
 
     def test_build_punish(self):
         after = board_at(SCHOLAR_MOVES, 6)  # Black's Nf6?? allows Qxf7#
@@ -744,7 +746,9 @@ B_TABLE = {
 class JobsTest(unittest.TestCase):
     def test_a_mistake_is_one_note_with_two_puzzles(self):
         c = seed(self, [recent()])
-        res = run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
+        res = run_update(
+            Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE)
+        )
         (note,) = res.notes
         self.assertEqual(
             (note.key, note.new_cards, note.cards), (puzzles.puzzle_key(PUZZLE_FEN, 5), 2, "{{c1::1::1}} {{c2::2::2}}")
@@ -754,7 +758,7 @@ class JobsTest(unittest.TestCase):
         self.assertTrue(note.notes.startswith("Opening · <a href"))
         # Second run: the position is on a card already, and nothing about the note changed.
         again = run_update(
-            Config(**CFG),
+            Config.from_dict(dict(**CFG)),
             c,
             fetch=False,
             existing={note.key: note.pgn},
@@ -765,31 +769,43 @@ class JobsTest(unittest.TestCase):
     def test_rated_only_leaves_out_casual_games_already_downloaded(self):
         an = lambda *a: FakeAnalyser(table=PUNISH_TABLE)
         casual = run_update(
-            Config(**CFG, rated_only=True), seed(self, [recent(rated=False)]), fetch=False, analyser_factory=an
+            Config.from_dict(dict(**CFG, rated_only=True)),
+            seed(self, [recent(rated=False)]),
+            fetch=False,
+            analyser_factory=an,
         )
         self.assertEqual(casual.notes, [])
         rated = seed(self, [recent(rated=True)])
         self.assertEqual(
-            len(run_update(Config(**CFG, rated_only=True), rated, fetch=False, analyser_factory=an).notes), 1
+            len(
+                run_update(
+                    Config.from_dict(dict(**CFG, rated_only=True)), rated, fetch=False, analyser_factory=an
+                ).notes
+            ),
+            1,
         )
 
     def test_without_a_collection_the_puzzle_records_are_kept(self):
         c = seed(self, [recent()])
         store = puzzles.Store(c)
         store.put(puzzles.Puzzle(key="puzzle:9:abcdef123456", fen=chess.STARTING_FEN, ply=9))
-        run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
+        run_update(
+            Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE)
+        )
         self.assertIsNotNone(store.get("puzzle:9:abcdef123456"))  # the CLI: no collection to compare with
-        run_update(Config(**CFG), c, fetch=False, existing={}, analyser_factory=FakeAnalyser)
+        run_update(Config.from_dict(dict(**CFG)), c, fetch=False, existing={}, analyser_factory=FakeAnalyser)
         self.assertIsNone(store.get("puzzle:9:abcdef123456"))  # the collection has no such note
 
     def test_no_second_puzzle_when_the_reply_is_unknown(self):
-        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser)
+        res = run_update(
+            Config.from_dict(dict(**CFG)), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser
+        )
         self.assertEqual([(n.new_cards, n.cards) for n in res.notes], [(1, "{{c1::1::1}}")])
 
     def test_old_cards_keep_their_positions_off_the_list(self):
         old = "1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 { [%kr 1] } 4. Qxf7# *"
         res = run_update(
-            Config(**CFG),
+            Config.from_dict(dict(**CFG)),
             seed(self, [recent()]),
             fetch=False,
             existing={"lichess:test0001:opening": old},
@@ -803,10 +819,14 @@ class JobsTest(unittest.TestCase):
         fr = game_from(FRENCH, white=False, id="f1", end_ts=now - 200)
         script = {"s1": {5: 30}, "f1": {1: 20}}
         an = lambda *a: ScriptedAnalyser([sic, fr], script)
-        res = run_update(Config(**CFG, max_new_cards=5), seed(self, [sic, fr]), fetch=False, analyser_factory=an)
+        res = run_update(
+            Config.from_dict(dict(**CFG, max_new_cards=5)), seed(self, [sic, fr]), fetch=False, analyser_factory=an
+        )
         # Ply 1 (the French game's) before ply 5, though the Sicilian game is newer.
         self.assertEqual([n.key.split(":")[1] for n in res.notes], ["1", "5"])
-        one = run_update(Config(**CFG, max_new_cards=1), seed(self, [sic, fr]), fetch=False, analyser_factory=an)
+        one = run_update(
+            Config.from_dict(dict(**CFG, max_new_cards=1)), seed(self, [sic, fr]), fetch=False, analyser_factory=an
+        )
         self.assertEqual([n.key.split(":")[1] for n in one.notes], ["1"])
         self.assertTrue(one.finished)  # enough puzzles
 
@@ -817,10 +837,13 @@ class JobsTest(unittest.TestCase):
         )
         an = lambda *a: FakeAnalyser(table=table)
         c = seed(self, [recent()])
-        ours = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
+        ours = run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=an)
         self.assertEqual([n.key.split(":")[1] for n in ours.notes], ["5"])
         both = run_update(
-            Config(**CFG, include_opponent=True), seed(self, [recent()]), fetch=False, analyser_factory=an
+            Config.from_dict(dict(**CFG, include_opponent=True)),
+            seed(self, [recent()]),
+            fetch=False,
+            analyser_factory=an,
         )
         self.assertEqual(
             [(n.key.split(":")[1], "knightly::opponent" in n.tags) for n in both.notes], [("2", True), ("5", False)]
@@ -830,11 +853,15 @@ class JobsTest(unittest.TestCase):
         a, b = recent(), recent(id="test0002", end_ts=int(__import__("time").time()) - 60)
         an = lambda *a_: FakeAnalyser(table=PUNISH_TABLE)
         c = seed(self, [a])
-        first = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
+        first = run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=an)
         self.assertNotIn("Played before", first.notes[0].notes)
         c.put_games([b], "knightlyme")
         res = run_update(
-            Config(**CFG), c, fetch=False, existing={first.notes[0].key: first.notes[0].pgn}, analyser_factory=an
+            Config.from_dict(dict(**CFG)),
+            c,
+            fetch=False,
+            existing={first.notes[0].key: first.notes[0].pgn},
+            analyser_factory=an,
         )
         (changed,) = res.notes
         self.assertEqual((changed.key, changed.new_cards, res.new_cards), (first.notes[0].key, 0, 0))
@@ -855,10 +882,12 @@ class JobsTest(unittest.TestCase):
             return f
 
         c = seed(self, [a])
-        first = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
+        first = run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=an)
         key = first.notes[0].key
         c.put_games([b], "knightlyme")
-        res = run_update(Config(**CFG), c, fetch=False, existing={key: first.notes[0].pgn}, analyser_factory=an)
+        res = run_update(
+            Config.from_dict(dict(**CFG)), c, fetch=False, existing={key: first.notes[0].pgn}, analyser_factory=an
+        )
         (changed,) = res.notes
         self.assertEqual((changed.key, res.new_cards), (key, 0))
         self.assertIn("<b>Similar positions</b>", changed.notes)
@@ -866,7 +895,12 @@ class JobsTest(unittest.TestCase):
         self.assertIn("Nf6 would still be a bad move if the white bishop on c4 was on b5.", changed.notes)
         # Remembered: the similar position is not looked at again, nor is anything rewritten.
         again = run_update(
-            Config(**CFG), c, fetch=False, existing={key: first.notes[0].pgn}, force=True, analyser_factory=an
+            Config.from_dict(dict(**CFG)),
+            c,
+            fetch=False,
+            existing={key: first.notes[0].pgn},
+            force=True,
+            analyser_factory=an,
         )
         self.assertEqual(again.notes, [])
 
@@ -879,7 +913,7 @@ class JobsTest(unittest.TestCase):
             f.scores[fen_key(board_at(B_MOVES, 6).fen())] = S(400, 800, 200, 0)
             return f
 
-        res = run_update(Config(**CFG), seed(self, [a, b]), fetch=False, analyser_factory=an)
+        res = run_update(Config.from_dict(dict(**CFG)), seed(self, [a, b]), fetch=False, analyser_factory=an)
         self.assertEqual(
             [(n.key, n.new_cards) for n in res.notes],
             [(puzzles.puzzle_key(PUZZLE_FEN, 5), 2), (puzzles.puzzle_key(PUZZLE_FEN, 5), 0)],
@@ -889,14 +923,14 @@ class JobsTest(unittest.TestCase):
 
     def test_a_note_deleted_from_the_collection_is_made_again(self):
         c = seed(self, [recent()])
-        run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser)
-        again = run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser)
+        run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=FakeAnalyser)
+        again = run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=FakeAnalyser)
         self.assertEqual(again.new_cards, 1)
 
     def test_game_nags_grade_every_move(self):
         from knightly.select import game_nags
 
-        cfg = Config(lichess_user="KnightlyMe", stockfish_path="x")
+        cfg = Config.from_dict({"lichess_user": "KnightlyMe", "stockfish_path": "x"})
         g = scholar_game()
         from helpers import PUZZLE_EVAL, WHITE_MATES
         from knightly.cache import fen_key
@@ -924,12 +958,12 @@ class JobsTest(unittest.TestCase):
 
     def test_run_update_without_fetch(self):
         c = seed(self, [recent()])
-        res = run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser)
+        res = run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=FakeAnalyser)
         self.assertEqual((res.new_cards, len(res.notes)), (1, 1))
 
     def test_skips_when_nothing_changed(self):
         c = seed(self, [recent()])
-        cfg = Config(**CFG)
+        cfg = Config.from_dict(dict(**CFG))
         calls = []
 
         def factory(*a):
@@ -947,20 +981,24 @@ class JobsTest(unittest.TestCase):
         self.assertEqual((len(calls), again.notes, again.analysed_positions), (n, [], 0))
         self.assertFalse(run(existing=existing, force=True).skipped)
         # A setting change or a new game changes the inputs.
-        self.assertFalse(run(Config(**CFG, min_loss=20), existing=existing).skipped)
+        self.assertFalse(run(Config.from_dict(dict(**CFG, min_loss=20)), existing=existing).skipped)
         c.put_games([recent(end_ts=int(__import__("time").time()) - 60, id="other")], "knightlyme")
         self.assertFalse(run(existing=existing).skipped)
 
     def test_on_note_gets_each_note_as_it_is_built(self):
         seen = []
         res = run_update(
-            Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser, on_note=seen.append
+            Config.from_dict(dict(**CFG)),
+            seed(self, [recent()]),
+            fetch=False,
+            analyser_factory=FakeAnalyser,
+            on_note=seen.append,
         )
         self.assertEqual((res.new_cards, seen), (1, res.notes))
         # A cancel after the first note keeps it in the result.
         ev = threading.Event()
         res = run_update(
-            Config(**CFG),
+            Config.from_dict(dict(**CFG)),
             seed(self, [recent()]),
             fetch=False,
             analyser_factory=FakeAnalyser,
@@ -971,21 +1009,25 @@ class JobsTest(unittest.TestCase):
 
     def test_precalculate_only_analyses(self):
         c = seed(self, [recent()])
-        pre = run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser, precalculate=True)
+        pre = run_update(
+            Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=FakeAnalyser, precalculate=True
+        )
         self.assertEqual((pre.new_cards, pre.notes, pre.skipped), (0, [], False))
         self.assertGreater(pre.analysed_positions, 0)
-        self.assertEqual(run_update(Config(**CFG), c, fetch=False, analyser_factory=FakeAnalyser).new_cards, 1)
+        self.assertEqual(
+            run_update(Config.from_dict(dict(**CFG)), c, fetch=False, analyser_factory=FakeAnalyser).new_cards, 1
+        )
 
     def test_unfinished_run_is_not_skipped(self):
         c = seed(self, [recent()])
-        cfg = Config(**CFG, analysis_minutes=1e-9)
+        cfg = Config.from_dict(dict(**CFG, analysis_minutes=1e-9))
         run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser)  # budget ran out at once
         self.assertFalse(run_update(cfg, c, fetch=False, analyser_factory=FakeAnalyser).skipped)
 
     def test_progress_events(self):
         events = []
         run_update(
-            Config(**CFG, max_new_cards=3),
+            Config.from_dict(dict(**CFG, max_new_cards=3)),
             seed(self, [recent()]),
             fetch=False,
             analyser_factory=FakeAnalyser,
@@ -1005,7 +1047,9 @@ class JobsTest(unittest.TestCase):
         c = tmpcache(self)
         c.put_games([old_li], "knightlyme")
         c.put_games([new_cc], "knightlyme")
-        res = run_update(Config(**CFG, chesscom_user="KnightlyMe"), c, fetch=False, analyser_factory=FakeAnalyser)
+        res = run_update(
+            Config.from_dict(dict(**CFG, chesscom_user="KnightlyMe")), c, fetch=False, analyser_factory=FakeAnalyser
+        )
         self.assertEqual(len(res.notes), 1)
         self.assertIn(new_cc.url, res.notes[0].pgn)  # made from the newest game that played it
 
@@ -1019,7 +1063,11 @@ class JobsTest(unittest.TestCase):
 
         self.assertTrue(
             run_update(
-                Config(**CFG), seed(self, [recent()]), fetch=False, cancel=ev, analyser_factory=Cancelling
+                Config.from_dict(dict(**CFG)),
+                seed(self, [recent()]),
+                fetch=False,
+                cancel=ev,
+                analyser_factory=Cancelling,
             ).cancelled
         )
 
@@ -1028,10 +1076,15 @@ class PipelineTest(unittest.TestCase):
     """The ply-by-ply mining (pipeline.py)."""
 
     def mine(self, games, script, cfg=None, **kw):
-        cfg = cfg or Config(sf_depth=13, max_new_cards=9)
+        cfg = cfg or Config.from_dict({"sf_depth": 13, "max_new_cards": 9})
         an = ScriptedAnalyser(games, script)
         m = pipeline.Miner(
-            sorted(games, key=lambda g: -g.end_ts), an, cfg, puzzles.Store(tmpcache(self)), want=cfg.max_new_cards, **kw
+            sorted(games, key=lambda g: -g.end_ts),
+            an,
+            cfg,
+            puzzles.Store(tmpcache(self)),
+            want=cfg.build.max_new_cards,
+            **kw,
         )
         m.run()
         return m, an
@@ -1068,7 +1121,7 @@ class PipelineTest(unittest.TestCase):
                 return super().scan(board, moves)
 
         sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
-        cfg = Config(sf_depth=13, analysis_minutes=1, max_new_cards=5)
+        cfg = Config.from_dict({"sf_depth": 13, "analysis_minutes": 1, "max_new_cards": 5})
         m = pipeline.Miner(
             [sic], Slow([sic], {"s1": {5: 30}}), cfg, puzzles.Store(tmpcache(self)), want=5, clock=lambda: t[0]
         )
@@ -1322,8 +1375,8 @@ class ProgressTest(unittest.TestCase):
                 )
 
         c = tmpcache(self)
-        eng = Engine("x", Config(sf_depth=13), c, tracker=t)
-        eng._proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": 13}), c, tracker=t)
+        eng.pool.inject(Proc())
         b = chess.Board()
         ev = eng.evaluate(b)
         self.assertEqual(seen, [0, 5, 9])  # the depth shown while each info arrives (the last one is current after)
@@ -1349,8 +1402,8 @@ class ProgressTest(unittest.TestCase):
                 made.append(a)
                 return a
 
-        eng = Engine("x", Config(sf_depth=13), tmpcache(self), cancel=cancel)
-        eng._proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": 13}), tmpcache(self), cancel=cancel)
+        eng.pool.inject(Proc())
         with self.assertRaises(http.Cancelled):
             eng.evaluate(chess.Board())
         self.assertTrue(made[0].stopped)
@@ -1361,7 +1414,11 @@ class ProgressTest(unittest.TestCase):
         stages = []
         t.listen(lambda s: stages.append((s.stage, s.done, s.total)))
         res = run_update(
-            Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE), tracker=t
+            Config.from_dict(dict(**CFG)),
+            c,
+            fetch=False,
+            analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE),
+            tracker=t,
         )
         self.assertEqual(res.new_cards, 2)
         self.assertTrue(stages)
@@ -1399,7 +1456,7 @@ class SubNoteTest(unittest.TestCase):
         c = seed(self, games or [recent()])
         table = self.table()
         return c, run_update(
-            Config(**CFG, **kw),
+            Config.from_dict(dict(**CFG, **kw)),
             c,
             fetch=False,
             existing=existing or {},
@@ -1443,7 +1500,10 @@ class SubNoteTest(unittest.TestCase):
         )
         c = seed(self, [recent(), g2])
         res = run_update(
-            Config(**CFG, max_new_cards=40), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=table)
+            Config.from_dict(dict(**CFG, max_new_cards=40)),
+            c,
+            fetch=False,
+            analyser_factory=lambda *a: FakeAnalyser(table=table),
         )
         sub = chess.pgn.read_game(io.StringIO(res.notes[0].pgn))
         self.assertEqual(sub.next().next().san(), "a6")  # played in a game, though b6 is the better mistake
@@ -1479,7 +1539,9 @@ class SubNoteTest(unittest.TestCase):
             return f
 
         c = seed(self, [recent(), g2])
-        res = run_update(Config(**CFG, max_new_cards=40), c, fetch=False, existing=existing, analyser_factory=an)
+        res = run_update(
+            Config.from_dict(dict(**CFG, max_new_cards=40)), c, fetch=False, existing=existing, analyser_factory=an
+        )
         self.assertEqual(res.notes, [])
 
     def test_the_card_limit_counts_cards_and_the_run_resumes(self):
@@ -1488,7 +1550,7 @@ class SubNoteTest(unittest.TestCase):
         existing = {n.key: n.pgn for n in res.notes}
         table = self.table()
         res2 = run_update(
-            Config(**CFG, max_new_cards=1),
+            Config.from_dict(dict(**CFG, max_new_cards=1)),
             c,
             fetch=False,
             existing=existing,
@@ -1510,7 +1572,9 @@ class RepairTest(unittest.TestCase):
 
     def run_with(self, c, table, existing=None, **kw):
         an = lambda *a: FakeAnalyser(table=table)
-        return run_update(Config(**CFG, **kw), c, fetch=False, existing=existing or {}, analyser_factory=an)
+        return run_update(
+            Config.from_dict(dict(**CFG, **kw)), c, fetch=False, existing=existing or {}, analyser_factory=an
+        )
 
     def age(self, c):
         """As an older version left them: no rules number."""
@@ -1589,6 +1653,45 @@ class RepairTest(unittest.TestCase):
         self.assertEqual(rebuilt.new_cards, 0)
         self.assertNotIn("decided", rebuilt.pgn)
         self.assertEqual(notes.card_ids(rebuilt.pgn), notes.card_ids(sub_note.pgn))
+
+
+class ManageTest(unittest.TestCase):
+    """The manage stage's settings: updating notes and tags, and listing the notes no longer maintained."""
+
+    run_with = RepairTest.run_with
+    age = RepairTest.age
+
+    def old_note(self, url="https://lichess.org/test0001"):
+        c = seed(self, [recent(url=url)])
+        (first,) = self.run_with(c, {PUZZLE_FEN: PUNISH_TABLE[PUZZLE_FEN]}).notes  # one card: the repair adds one
+        self.age(c)
+        return c, first
+
+    def test_notes_from_before_puzzle_keys_are_outdated(self):
+        c, first = self.old_note()
+        res = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn, "legacy:42": "1. e4 *"})
+        self.assertEqual([n.key for n in res.notes], [first.key])  # rebuilt
+        self.assertEqual(res.outdated, ["legacy:42"])
+
+    def test_a_note_whose_game_is_gone_is_outdated(self):
+        c, first = self.old_note()
+        gone = seed(self, [recent(url="https://lichess.org/other")])  # the note's game isn't among the games
+        puzzles.Store(gone).put(puzzles.Store(c).get(first.key))
+        res = self.run_with(gone, PUNISH_TABLE, {first.key: first.pgn})
+        self.assertNotIn(first.key, [n.key for n in res.notes])
+        self.assertEqual(res.outdated, [first.key])
+
+    def test_notes_left_alone_when_not_updating(self):
+        c, first = self.old_note()
+        res = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn}, update_notes=False)
+        self.assertEqual((res.notes, res.outdated), ([], [first.key]))  # not rebuilt: from an older version
+
+    def test_tags_kept_when_not_updating_them(self):
+        c, first = self.old_note()
+        (note,) = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn}, update_tags=False).notes
+        self.assertEqual((note.key, note.retag, note.new_cards), (first.key, False, 1))
+        fresh = self.run_with(seed(self, [recent()]), PUNISH_TABLE, update_tags=False).notes
+        self.assertTrue(all(n.retag for n in fresh))  # a new note always gets its tags
 
 
 class StatsTest(unittest.TestCase):
@@ -1726,8 +1829,9 @@ class AnalyserTest(unittest.TestCase):
                 self.searches.append((limit.depth, multipv))
                 return FakeAnalysis([sf_info(limit.depth)])
 
-        eng = Engine("x", Config(sf_depth=depth), cache)
-        eng._proc = proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": depth}), cache)
+        proc = Proc()
+        eng.pool.inject(proc)
         return eng, proc
 
     def test_every_legal_move_is_searched_at_the_fixed_depth(self):
@@ -1764,8 +1868,9 @@ class AnalyserTest(unittest.TestCase):
                 moves = only or ["e2e4", "d2d4", "g1f3"][:multipv]
                 return FakeAnalysis([sf_info(limit.depth, move=m, cp=10 * (i + 1)) for i, m in enumerate(moves)])
 
-        eng = Engine("x", Config(sf_depth=depth, scan_depth=scan_depth), cache)
-        eng._proc = proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": depth, "scan_depth": scan_depth}), cache)
+        proc = Proc()
+        eng.pool.inject(proc)
         return eng, proc
 
     def test_scan_searches_the_best_move_and_each_played_move_on_its_own(self):
@@ -1834,23 +1939,23 @@ class AnalyserTest(unittest.TestCase):
         self.assertEqual(proc.searches, [])
 
     def test_scan_depth_is_never_deeper_than_the_full_search(self):
-        self.assertEqual(Config(sf_depth=13, scan_depth=10).scan_depth_used(), 10)
-        self.assertEqual(Config(sf_depth=8, scan_depth=10).scan_depth_used(), 8)
+        self.assertEqual(Config.from_dict({"sf_depth": 13, "scan_depth": 10}).annotate.scan_depth_used(), 10)
+        self.assertEqual(Config.from_dict({"sf_depth": 8, "scan_depth": 10}).annotate.scan_depth_used(), 8)
 
     def test_finished_games_are_not_searched(self):
         from knightly.engine.analyse import Analyser
 
-        an = Analyser(Config(stockfish_path="x"), tmpcache(self))
+        an = Analyser(Config.from_dict({"stockfish_path": "x"}), tmpcache(self))
         mated = chess.Board("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
         ev = an.evaluate(mated)
         self.assertEqual((ev.source, ev.lines[0].moves, ev.lines[0].score.cp), ("rules", [], -10000))
-        self.assertIsNone(an.sf._proc)  # no engine process was needed
+        self.assertEqual(an.sf.pool.started, 0)  # no engine process was needed
 
     def test_cached_never_searches(self):
         from knightly.engine.analyse import Analyser
 
         c = tmpcache(self)
-        an = Analyser(Config(stockfish_path="x", sf_depth=13), c)
+        an = Analyser(Config.from_dict({"stockfish_path": "x", "sf_depth": 13}), c)
         b = chess.Board()
         self.assertIsNone(an.cached(b))
         c.put_eval(fen_key(b.fen()), 12, Eval(12, [Line(S(1, 1, 998, 1), ["d2d4"])]))
@@ -1858,13 +1963,37 @@ class AnalyserTest(unittest.TestCase):
         c.put_eval(fen_key(b.fen()), 13, Eval(13, [Line(S(1, 1, 998, 1), ["d2d4"])]))
         self.assertEqual(an.cached(b).lines[0].moves, ["d2d4"])
 
+    def test_flat_settings_go_to_their_sections(self):
+        cfg = Config.from_dict({"lichess_user": "me", "sf_depth": 20, "min_loss": 3, "max_new_cards": 4, "hash_mb": 8})
+        self.assertEqual(
+            (cfg.extract.first("lichess"), cfg.annotate.sf_depth, cfg.select.min_loss),
+            ("me", 20, 3),
+        )
+        self.assertEqual((cfg.build.max_new_cards, cfg.engine.hash_mb), (4, 8))
+        self.assertEqual(Config.from_dict(cfg.to_dict()), cfg)  # the sectioned form reads back the same
+        self.assertEqual(Config.from_dict(cfg.flat()), cfg)
+
+    def test_a_section_wins_over_a_flat_key(self):
+        cfg = Config.from_dict({"sf_depth": 12, "annotate": {"sf_depth": 18}})
+        self.assertEqual(cfg.annotate.sf_depth, 18)
+
+    def test_fingerprint_per_section(self):
+        base = Config()
+        deeper = Config.from_dict({"sf_depth": 20})
+        self.assertNotEqual(base.fingerprint("annotate"), deeper.fingerprint("annotate"))
+        self.assertEqual(base.fingerprint("select", "build"), deeper.fingerprint("select", "build"))
+        token = Config.from_dict({"lichess_token": "secret"})
+        self.assertEqual(base.fingerprint(), token.fingerprint())  # secrets never count
+
     def test_old_engine_path_setting(self):
-        self.assertEqual(Config.from_dict({"engine_path": "/usr/bin/stockfish"}).stockfish_path, "/usr/bin/stockfish")
-        self.assertEqual(Config.from_dict({"engine_path": "a", "stockfish_path": "b"}).stockfish_path, "b")
+        self.assertEqual(
+            Config.from_dict({"engine_path": "/usr/bin/stockfish"}).engine.stockfish_path, "/usr/bin/stockfish"
+        )
+        self.assertEqual(Config.from_dict({"engine_path": "a", "stockfish_path": "b"}).engine.stockfish_path, "b")
 
     def test_removed_settings_are_ignored(self):
         cfg = Config.from_dict({"use_lc0": True, "lc0_path": "/x", "deep_multipv": 3, "sf_depth": 18})
-        self.assertEqual(cfg.sf_depth, 18)  # the old Lc0 and line-count keys are simply dropped
+        self.assertEqual(cfg.annotate.sf_depth, 18)  # the old Lc0 and line-count keys are simply dropped
 
 
 class EngineTest(unittest.TestCase):

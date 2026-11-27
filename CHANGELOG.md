@@ -5,6 +5,42 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Several accounts, yours or other players'.** The settings now have a table of accounts: any number of Lichess
+  and Chess.com usernames, each marked as yours or as another player's (a master, a rival, someone to compare
+  with). Puzzles still come from your games only; other players' games are downloaded and exported, ready for
+  later features. Your old Lichess and Chess.com usernames become accounts of yours.
+- **Games from PGN files.** Add PGN files, or folders of them, in the settings. Games where one of your names
+  plays become puzzles like your online games; a name listed as another player's is followed too.
+- **PGN export.** Choose an export folder to have every account's games written there as PGN after each update,
+  or use **Tools → Knightly Review → Export games…** once.
+- **An optional email for Chess.com**, sent with its downloads, as Chess.com asks of programs using its API.
+- **Settings for the notes already in Anki:** keep them up to date (on by default; off leaves them as they are),
+  replace their `knightly::` tags when they are written again (on by default), and suspend the notes this
+  version can no longer keep up to date (off by default): notes from versions before puzzle keys, and notes made
+  under older rules whose game is no longer among your games. Suspending is part of the update's undo step.
+
+### Changed
+
+- **Settings in pages, one per stage:** Games, Engine, Annotating, Candidates, Puzzles and Notes in Anki, each
+  saying what that stage does. New there: which time controls count, rated games only, the scan depth, where an
+  inaccuracy starts, and how much a move must lose to become a puzzle.
+- **The progress window shows each stage:** its progress or its last result, and a button to run it now; plus the
+  engine at work, and the log.
+- **The work runs in stages, each on its own.** Fetching games, annotating your moves, choosing puzzle candidates,
+  making cards and maintaining your notes each run on a thread of their own, as soon as the stage before them
+  has something new, sharing Stockfish (making cards comes before annotating). An update no longer has to finish
+  everything in one go: annotating carries on where it stopped, and each run of the card stage makes up to your
+  "new cards per update". New cards are written into Anki every few seconds, each batch one undo step.
+- **"Keep analysing after the update" is now "keep annotating in the background"**, at low priority. "Keep adding
+  cards with no limit" is gone: cards are made up to your limit each time the card stage runs. Your setting
+  carries over.
+- Changing Stockfish's threads or memory no longer makes the next update analyse everything again. The first
+  update after this version does analyse again once, mostly from the searches already saved.
+- Only one program runs Stockfish at a time on the same data: an update from the command line waits while Anki's
+  update is searching (and the other way round), instead of both loading the CPU at once.
+
 ### Fixed
 
 - **Lichess games that were still being played during an update are no longer lost.** Each update moved past them,

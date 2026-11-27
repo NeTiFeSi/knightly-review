@@ -1,18 +1,21 @@
-"""Runs updates in the background and schedules automatic ones.
+"""Hosts the stages' supervisor (core/knightly/supervisor.py) in Anki, and writes what they make.
 
-The long part (download + engine analysis) runs in a plain thread with no
-collection access, so reviewing stays responsive and the job can be cancelled
-when the profile closes. Each note is written on the main thread as soon as its card is
-built (kc.RunWriter); when the run ends, the writes become one undo step.
+The stages run on threads of their own with no collection access, so reviewing stays responsive; they are
+stopped when the profile closes. Two things need the collection, on the main thread:
+
+- the notes already in it, which the stages ask for (`_existing`);
+- the outbox, where the build and manage stages put the notes they make and the notes to suspend: a timer
+  drains it every few seconds, each batch one undo step (kc.RunWriter). What is left there when the profile
+  closes is written the next time it opens, also when the settings are incomplete (no stage runs then). An
+  item that can't be written doesn't hold up the others: it is tried again a few times, then dropped (the
+  stages make its note again).
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
-import traceback
 from collections import deque
 from collections.abc import Callable
 
@@ -24,41 +27,55 @@ from aqt.utils import showWarning, tooltip
 from . import collection as kc
 from . import settings
 from .vendor.knightly.cache import SqliteCache
-from .vendor.knightly.jobs import UpdateResult, run_update
-from .vendor.knightly.progress import Tracker
+from .vendor.knightly.engine.broker import Lease, Pool
+from .vendor.knightly.http import Cancelled
+from .vendor.knightly.model import NoteSpec
+from .vendor.knightly.progress import Tracker, legacy_listener
+from .vendor.knightly.supervisor import NOTE, STAGES, SUSPEND, Context, Outcome, StageState, Supervisor
 
 log = logging.getLogger(__name__)
 
 Listener = Callable[[str, int, int, str], None]
+LABELS = {"extract": "Games", "manage": "Notes", "annotate": "Annotating", "select": "Candidates", "build": "Puzzles"}
+DRAIN_MS = 3000
+DRAIN_TRIES = 3  # an outbox item that fails this many times is dropped
+START_DELAY_MS = 20_000  # after the profile opens, so Anki starts at full speed
 
 
-class Updater:
+class Host:
     def __init__(self) -> None:
-        self.thread: threading.Thread | None = None
-        self.cancel = threading.Event()
+        self.sup: Supervisor | None = None
+        self.cache: SqliteCache | None = None
+        self.pool: Pool | None = None
         self.listeners: list[Listener] = []
-        self.last: tuple[str, int, int, str] = ("idle", 0, 0, "No update has run yet.")
-        # The current analysis step (positions done, total, what the step is).
+        self.last: tuple[str, int, int, str] = ("idle", 0, 0, "Nothing has run yet.")
         self.positions: tuple[int, int, str] = (0, 0, "")
-        # Everything the run reported, for the window's log (also what happened before it was opened).
-        # Entries are (sequence number, line) so a reader can pick up only the new ones.
+        # Everything the stages reported, for the progress window's log (also what happened before it was
+        # opened). Entries are (sequence number, line) so a reader can pick up only the new ones.
         self.history: deque[tuple[int, str]] = deque(maxlen=1000)
         self._seq = 0
         self._logged = ""
         self._lock = threading.Lock()
-        self.timer: QTimer | None = None
-        self.tracker = Tracker()  # what the current (or last) run is doing; the progress window reads it
+        self.tracker = Tracker()  # the stage the progress window shows: the one that started last
         self._last_emit = 0.0
         self._pending = False
-        # "Keep analysing" (settings.keep_running): after an update made its cards, more rounds follow
-        # until this time, `stopped`, or nothing is left. Stopping also ends the rounds.
-        self.keep_until = math.inf
-        self.stopped = False
-        self.keeping = False  # a keep-running session is under way (also between two rounds)
+        self.drainer: QTimer | None = None
+        self._draining = False
+        self._wrote: kc.RunWriter | None = None
+        self._fails: dict[int, int] = {}  # outbox seq → failed writes
+        self._retry_at = 0.0  # after a failed drain, the next try waits until then (monotonic)
+        self._drain_failures = 0
+        self._warn_until = 0.0  # a stage failing before then is shown in a dialog (an update the user asked for)
+        self.finished: dict[str, float] = {}  # stage → when its last run ended (time.time())
 
+    # --- what the progress window reads
     @property
     def running(self) -> bool:
-        return self.thread is not None and self.thread.is_alive()
+        return self.sup is not None and self.sup.busy
+
+    @property
+    def keeping(self) -> bool:
+        return self.sup is not None and self.sup.keeping
 
     def log(self, line: str) -> None:
         with self._lock:
@@ -93,11 +110,51 @@ class Updater:
         for f in list(self.listeners):
             f(*self.last)
 
-    def start(self, manual: bool, _round: str = "") -> bool:
-        """Start an update. Returns False if one is running or setup is incomplete.
-        `_round`: "", or what a keep-running session continues with: "more" (another batch of cards) or
-        "precalc" (analyse and save candidates, no cards)."""
-        if self.running or mw.col is None:
+    # --- the supervisor
+    def open(self) -> None:
+        """The cache, and the timer that drains its outbox (with or without the stages)."""
+        if mw.col is None:
+            return
+        if self.cache is None:
+            self.cache = SqliteCache(settings.CACHE_PATH)
+        self._start_drainer()
+
+    def launch(self, fetch: bool = True) -> bool:
+        """Start the stages with the current settings (`fetch`: and fetch games, when the settings say so)."""
+        if self.sup is not None or mw.col is None:
+            return self.sup is not None
+        cfg = settings.load()
+        if not settings.configured(cfg):
+            return False
+        core = settings.core_config(cfg)
+        self.open()
+        assert self.cache is not None
+        self.pool = Pool(core, lease=Lease(self.cache))
+        ctx = Context(core, self.cache, self.pool, threading.Event(), existing=self._existing)
+        self.sup = Supervisor(ctx, on_start=self._on_start, on_done=self._on_done)
+        self.sup.start(fetch=fetch)
+        return True
+
+    def _stop_stages(self, wait: float) -> None:
+        sup, self.sup = self.sup, None
+        if sup is not None:
+            sup.stop(wait=wait)
+        if self.pool is not None:
+            self.pool.close()
+            self.pool = None
+
+    def shutdown(self, wait: float = 5) -> None:
+        self._stop_stages(wait)
+        if self.drainer is not None:
+            self.drainer.stop()
+            self.drainer = None
+        if self.cache is not None:
+            self.cache.close()
+            self.cache = None
+
+    def start(self, manual: bool = True) -> bool:
+        """Fetch games now, and every stage after it. Returns False if setup is incomplete."""
+        if mw.col is None:
             return False
         cfg = settings.load()
         if not settings.configured(cfg):
@@ -106,238 +163,200 @@ class Updater:
 
                 open_settings(first_run=not cfg.get("setup_done"))
             return False
-        try:
-            changes = kc.ensure_installed(mw.col)
-            existing = kc.existing_notes(mw.col)
-        except Exception as e:
-            log.exception("could not prepare the collection")
-            if manual:
-                showWarning(f"Knightly Review could not prepare the collection:\n{e}")
+        if self.sup is None and not self.launch():
             return False
-        core = settings.core_config(cfg)
-        deck = cfg.get("deck") or kc.MODEL
-        if not _round:
-            self.stopped = False
-            hours = core.keep_running_hours if core.keep_running in ("precalculate", "unlimited") else 0
-            self.keep_until = time.monotonic() + hours * 3600 if hours > 0 else math.inf
-            self.keeping = core.keep_running in ("precalculate", "unlimited")
-        left_min = (self.keep_until - time.monotonic()) / 60
-        if _round == "precalc":  # runs for the rest of the time, or until everything is at full depth
-            core.analysis_minutes = max(0.05, left_min) if left_min != math.inf else 0
-        elif _round and left_min != math.inf:
-            core.analysis_minutes = min(core.analysis_minutes or left_min, max(0.05, left_min))
-        self.cancel = threading.Event()
-        cancel = self.cancel
-        self.tracker = tracker = Tracker()
-        writer = kc.RunWriter(mw.col, deck)
-        self.positions, self._logged = (0, 0, ""), ""
-        self.log(
-            "── "
-            + {"more": "Next batch of cards", "precalc": "Pre-calculating for later updates"}.get(
-                _round, "Update" if manual else "Automatic update"
-            )
-            + " ──"
-        )
-        self._emit("start", 0, 0, "Starting…" + (f" ({'; '.join(changes)})" if changes else ""), force=True)
-
-        def on_note(spec) -> None:
-            """Analysis thread: hand the note to the main thread and wait, so writes stay in order."""
-            done, failure = threading.Event(), []
-
-            def write() -> None:
-                try:
-                    if mw.col is not None and not cancel.is_set():
-                        writer.add(spec)
-                except Exception as e:  # raised again in the analysis thread
-                    log.exception("could not add a note")
-                    failure.append(e)
-                finally:
-                    done.set()
-
-            mw.taskman.run_on_main(write)
-            while not done.wait(0.2):
-                if cancel.is_set():  # the profile is closing and the main thread may be waiting for us
-                    return
-            if failure:
-                raise failure[0]
-
-        def work() -> None:
-            cache = SqliteCache(settings.CACHE_PATH)
-            try:
-                res = run_update(
-                    core,
-                    cache,
-                    existing=existing,
-                    progress=self._emit,
-                    cancel=cancel,
-                    force=manual and not _round,
-                    precalculate=_round == "precalc",
-                    fetch=_round == "",
-                    on_note=on_note,
-                    tracker=tracker,
-                )
-                err = None
-            except Exception as e:  # reported on the main thread
-                log.exception("the update failed")
-                res, err = None, (e, traceback.format_exc())
-            finally:
-                cache.close()
-            mw.taskman.run_on_main(lambda: self._finish(res, err, deck, manual, core.keep_running, _round, writer))
-
-        self.thread = threading.Thread(target=work, name="knightly-update", daemon=True)
-        self.thread.start()
+        assert self.sup is not None
+        if manual:
+            self._warn_until = time.monotonic() + 3600
+            self.sup.update()
+        else:
+            self.sup.trigger("extract")
+        self._emit("start", 0, 0, "Starting…", force=True)
         return True
 
+    def run(self, name: str) -> bool:
+        """Run one stage now (and the stages after it when it has something new)."""
+        if self.sup is None and not self.launch():
+            return False
+        assert self.sup is not None
+        self.sup.trigger(name, manual=True)
+        return True
+
+    def stages(self) -> list[tuple[str, str, StageState | None]]:
+        """(name, label, state) of each stage, in order; the state is None before the stages started."""
+        states = self.sup.state if self.sup is not None else {}
+        return [(name, LABELS[name], states.get(name)) for name in STAGES]
+
     def stop(self, wait: float = 0) -> None:
-        self.stopped = True
-        if not self.running:  # between two rounds: nothing to cancel, just end the session
-            self._end_keeping()
-        self.cancel.set()
-        if wait and self.thread is not None:
-            self.thread.join(wait)
+        """Cancel what the stages are doing now (they stay ready for their next run)."""
+        sup = self.sup
+        if sup is None:
+            return
+        self._emit("done", 0, 0, "Cancelling…", force=True)
+        self._warn_until = 0.0
 
-    def _next_round(self, res: UpdateResult, mode: str, round_: str) -> None:
-        """After a round's cards are in the collection: carry on, or end the keep-running session."""
-        again = ""
-        if (
-            mode in ("precalculate", "unlimited")
-            and self.keeping
-            and not self.stopped
-            and not res.cancelled
-            and time.monotonic() < self.keep_until
-        ):
-            if round_ == "precalc":
-                again = ""  # one pass up to the time limit or full depth
-            elif mode == "precalculate":
-                again = "precalc"
-            elif not res.skipped and (res.new_cards or not res.finished):
-                again = "more"
-        if again and mw.col is not None:
-            QTimer.singleShot(500, lambda: self._start_round(again))
+        def cancel() -> None:
+            sup.cancel_running()
+            self._emit("done", 0, 0, "Stopped.", force=True)
+
+        th = threading.Thread(target=cancel, name="knightly-cancel", daemon=True)
+        th.start()
+        if wait:
+            th.join(wait)
+
+    def reschedule(self) -> None:
+        """The settings changed. Running stages finish with the old ones; the next runs use the new ones, and
+        the stages they concern run again. Incomplete settings stop the stages; completed ones start them."""
+        if mw.col is None:
+            return
+        cfg = settings.load()
+        if not settings.configured(cfg):
+            self._stop_stages(wait=0)  # the threads end at their next search or download
+            self.open()
+            return
+        if self.sup is None:
+            self.launch(fetch=False)  # the settings dialog asks whether to fetch now
         else:
-            self._end_keeping(res)
+            self.sup.reconfigure(settings.core_config(cfg))
 
-    def _start_round(self, round_: str) -> None:
-        """The timer's side of `_next_round`: stop, closing the profile or another update may have happened since."""
-        if self.stopped or not self.keeping or mw.col is None:
-            self._end_keeping()
-        elif self.running:  # an update started by hand or the schedule took over; it resets the session
-            self.keeping = False
-        elif not self.start(manual=False, _round=round_):
-            self._end_keeping()
+    def _existing(self) -> dict[str, str] | None:
+        """Stage thread: the collection's Knightly notes, read on the main thread (None: no collection)."""
+        box: list = []
+        done = threading.Event()
 
-    def _end_keeping(self, res: UpdateResult | None = None) -> None:
-        if self.keeping:
-            self.keeping = False
-            self._emit(
-                "done",
-                1,
-                1,
-                "Finished analysing in the background."
-                if res is not None and not res.cancelled
-                else "Stopped analysing in the background.",
-                force=True,
-            )
+        def get() -> None:
+            try:
+                box.append(kc.existing_notes(mw.col) if mw.col is not None else None)
+            except Exception as e:  # raised again in the stage's thread
+                log.exception("could not read the collection's notes")
+                box.append(e)
+            finally:
+                done.set()
 
-    def _finish(
-        self,
-        res: UpdateResult | None,
-        err,
-        deck: str,
-        manual: bool,
-        mode: str = "off",
-        round_: str = "",
-        writer: kc.RunWriter | None = None,
-    ) -> None:
-        """The run is over: merge what it wrote into one undo step, then report."""
+        mw.taskman.run_on_main(get)
+        while not done.wait(0.2):
+            sup = self.sup
+            if sup is None or sup.ctx.cancel.is_set():  # the profile is closing: the main thread may wait for us
+                raise Cancelled()
+        if isinstance(box[0], Exception):
+            raise box[0]
+        return box[0]
+
+    def _on_start(self, name: str, tracker: Tracker) -> None:
+        label = LABELS[name]
+        self.tracker = tracker
+        tracker.listen(
+            legacy_listener(lambda stage, d, t, msg: self._emit(stage, d, t, f"{label}: {msg}" if msg else msg))
+        )
+
+    def _on_done(self, name: str, out: Outcome | None, error: str) -> None:
+        label = LABELS[name]
+        self.finished[name] = time.time()
+        if error == "cancelled":
+            self._emit("done", 0, 0, f"{label}: cancelled.", force=True)
+        elif error:
+            self._emit("error", 0, 0, f"{label} failed: {error}", force=True)
+            if time.monotonic() < self._warn_until:  # an update the user asked for: say it failed
+                self._warn_until = 0.0
+                mw.taskman.run_on_main(lambda: showWarning(f"Knightly Review: {label} failed:\n{error}"))
+        elif out is not None:
+            text = out.summary + (" Warnings: " + "; ".join(out.warnings) if out.warnings else "")
+            self._emit("done", 1, 1, f"{label}: {text}", force=True)
+            if out.notes:
+                mw.taskman.run_on_main(self.drain)
+
+    # --- the outbox → the collection
+    def _start_drainer(self) -> None:
+        if self.drainer is None:
+            self.drainer = QTimer(mw)
+            self.drainer.timeout.connect(self.drain)
+            self.drainer.start(DRAIN_MS)
+        self.drain()
+
+    def drain(self) -> None:
+        """Write what waits in the outbox into the collection, as one undo step (main thread)."""
+        cache = self.cache
+        if self._draining or cache is None or mw.col is None or time.monotonic() < self._retry_at:
+            return
+        items = cache.outbox()
+        if not items:
+            return
+        self._draining = True
+        deck = settings.load().get("deck") or kc.MODEL
+        written: list[int] = []
+        dropped: dict[int, str] = {}  # seq → what was given up on
+
+        def write(col):
+            kc.ensure_installed(col)
+            writer = kc.RunWriter(col, deck)
+            for seq, kind, data in items:
+                try:
+                    if kind == NOTE:
+                        writer.add(NoteSpec(**data))
+                    elif kind == SUSPEND:
+                        writer.suspend(data)
+                    written.append(seq)
+                except Exception as e:  # this item only: the others are still written
+                    log.exception("could not write outbox item %s", seq)
+                    self._fails[seq] = self._fails.get(seq, 0) + 1
+                    if self._fails[seq] >= DRAIN_TRIES:
+                        dropped[seq] = f"{data.get('key', kind) if isinstance(data, dict) else kind}: {e}"
+            changes = writer.finish()
+            cache.outbox_done([*written, *dropped])
+            self._wrote = writer
+            return changes
+
+        def ok(_changes) -> None:
+            self._draining = False
+            self._drain_failures, self._retry_at = 0, 0.0
+            for seq in [*written, *dropped]:
+                self._fails.pop(seq, None)
+            for d in dropped.values():
+                self._emit("error", 0, 0, f"Gave up on writing a note ({d}); it will be made again.", force=True)
+            new_cards = sum(d.get("new_cards", 0) for seq, kind, d in items if kind == NOTE and seq in written)
+            suspended = self._wrote.suspended if self._wrote is not None else 0
+            parts = []
+            if new_cards:
+                parts.append(f"{new_cards} new card{'s' if new_cards != 1 else ''}")
+            if suspended:
+                parts.append(f"{suspended} card{'s' if suspended != 1 else ''} of out-of-date notes suspended")
+            if parts:
+                tooltip("Knightly Review: " + ", ".join(parts), period=5000)
+                self.log("Written into the collection: " + ", ".join(parts) + ".")
 
         def failed(e: Exception) -> None:
-            self.keeping = False
-            self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
+            self._draining = False
+            self._drain_failures += 1  # tried again later, waiting longer each time (up to 5 minutes)
+            self._retry_at = time.monotonic() + min(300, DRAIN_MS / 1000 * 2**self._drain_failures)
+            log.error("could not write the notes: %s", e)
+            if self._drain_failures == 1:
+                self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
 
-        if writer is None or not writer.written or mw.col is None:
-            self._report(res, err, deck, manual, mode, round_)
-            return
-        CollectionOp(parent=mw, op=lambda col: writer.finish()).success(
-            lambda _changes: self._report(res, err, deck, manual, mode, round_)
-        ).failure(failed).run_in_background()
-
-    def _report(self, res: UpdateResult | None, err, deck: str, manual: bool, mode: str, round_: str) -> None:
-        if err is not None:
-            self.keeping = False
-            e, tb = err
-            print(tb)
-            self._emit("error", 0, 0, f"Update failed: {e}", force=True)
-            if manual:
-                showWarning(f"Knightly Review update failed:\n{e}")
-            return
-        assert res is not None
-        summary = _summary(res)
-        if res.cancelled:
-            self.keeping = False
-            self._emit("done", 0, 0, "Cancelled. " + summary, force=True)
-            return
-        hint = mw.col and kc.sibling_bury_hint(mw.col, deck, res.new_cards, sum(n.new_cards > 0 for n in res.notes))
-        self._emit("done", 1, 1, summary + (" " + hint if hint else ""), force=True)
-        if not round_:
-            if res.notes:
-                tooltip(f"Knightly Review: {res.new_cards} new card{'s' if res.new_cards != 1 else ''}", period=5000)
-            elif manual or res.warnings:
-                tooltip("Knightly Review: " + summary, period=5000)
-        self._next_round(res, mode, round_)
-
-    # scheduling
-    def reschedule(self) -> None:
-        if self.timer is not None:
-            self.timer.stop()
-            self.timer = None
-        hours = float(settings.load().get("update_every_hours") or 0)
-        if hours > 0:
-            self.timer = QTimer(mw)
-            self.timer.timeout.connect(lambda: self.start(manual=False))
-            self.timer.start(int(hours * 3600 * 1000))
+        CollectionOp(parent=mw, op=write).success(ok).failure(failed).run_in_background()
 
 
-def _summary(res: UpdateResult) -> str:
-    if res.skipped:
-        text = "Nothing changed since the last update."
-        return text + (" Warnings: " + "; ".join(res.warnings) if res.warnings else "")
-    parts = [
-        f"{res.new_games} new game{'s' if res.new_games != 1 else ''}",
-        f"{res.analysed_positions} position{'s' if res.analysed_positions != 1 else ''} analysed",
-        f"{res.new_cards} new card{'s' if res.new_cards != 1 else ''}",
-    ]
-    text = ", ".join(parts) + "."
-    if res.warnings:
-        text += " Warnings: " + "; ".join(res.warnings)
-    return text
-
-
-updater = Updater()
+updater = Host()
 
 
 def _on_profile_open() -> None:
     cfg = settings.load()
     try:  # card templates and styling of a new add-on version reach the collection now, not at the next update
-        if mw.col is not None and kc.MODEL in mw.col.models.all_names():
+        if mw.col is not None and mw.col.models.by_name(kc.MODEL) is not None:
             changes = kc.ensure_installed(mw.col)
             if changes:
                 updater.log("Card templates: " + "; ".join(changes))
     except Exception:
         log.exception("could not set up the collection")
-    updater.reschedule()
     if not cfg.get("setup_done"):
         from .ui import open_settings
 
         QTimer.singleShot(1500, lambda: open_settings(first_run=True))
-    elif cfg.get("update_on_startup") and settings.configured(cfg):
-        QTimer.singleShot(20_000, lambda: updater.start(manual=False))
+    else:  # the outbox is written also when the settings are incomplete
+        QTimer.singleShot(START_DELAY_MS, updater.launch if settings.configured(cfg) else updater.open)
 
 
 def _on_profile_close() -> None:
-    if updater.timer is not None:
-        updater.timer.stop()
-    updater.stop(wait=5)
+    updater.shutdown(wait=5)
 
 
 def setup() -> None:

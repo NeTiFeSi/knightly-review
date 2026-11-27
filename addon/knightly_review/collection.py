@@ -127,16 +127,39 @@ def _write_note(col: Collection, nt: Any, did: int, spec: NoteSpec) -> None:
     note["PGN"] = kn.pgn_to_field(spec.pgn)
     note["Cards"] = spec.cards
     note["Notes"] = spec.notes
-    # The generated tags are replaced (the user's own are kept).
-    for t in [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]:
-        note.remove_tag(t)
-    for t in spec.tags:
-        if not note.has_tag(t):
-            note.add_tag(t)
+    # The generated tags are replaced (the user's own are kept), unless the note keeps its own (`spec.retag`).
+    if spec.retag or not nids:
+        for t in [t for t in note.tags if t.lower().startswith(f"{kn.NOTE_TAG}::") and t not in spec.tags]:
+            note.remove_tag(t)
+        for t in spec.tags:
+            if not note.has_tag(t):
+                note.add_tag(t)
     if nids:
         col.update_note(note)
     else:
         col.add_note(note, did)
+
+
+def note_ids(col: Collection, keys: list[str]) -> list[int]:
+    """The ids of the notes with these keys (as `existing_notes` gives them: `legacy:<id>` for older notes)."""
+    out: list[int] = []
+    for key in keys:
+        if key.startswith("legacy:"):
+            out.append(int(key.split(":", 1)[1]))
+        else:
+            out += col.find_notes(f'"note:{MODEL}" "tag:{kn.note_key_tag(key)}"')
+    return out
+
+
+def suspend_notes(col: Collection, keys: list[str]) -> int:
+    """Suspend the cards of these notes that aren't suspended yet. Returns how many were suspended."""
+    nids = note_ids(col, keys)
+    if not nids:
+        return 0
+    cids = col.find_cards(f"-is:suspended nid:{','.join(map(str, nids))}")
+    if cids:
+        col.sched.suspend_cards(cids)
+    return len(cids)
 
 
 def _note_type(col: Collection) -> Any:
@@ -165,19 +188,35 @@ class RunWriter:
         self.last = 0
         self.clean = True
         self.written = 0
+        self.suspended = 0
 
     def _check(self) -> None:
         if self.pos is not None and self.col.undo_status().last_step != self.last:
             self.clean = False
 
-    def add(self, spec: NoteSpec) -> None:
+    def _begin(self) -> None:
         if self.pos is None:
             self.pos = self.col.add_custom_undo_entry(UNDO_NAME)
         else:
             self._check()
+
+    def add(self, spec: NoteSpec) -> None:
+        self._begin()
         _write_note(self.col, self.nt, self.did, spec)
         self.last = self.col.undo_status().last_step
         self.written += 1
+
+    def suspend(self, keys: list[str]) -> None:
+        """Suspend the cards of the notes this version can no longer maintain, in the run's undo step."""
+        if not note_ids(self.col, keys):
+            return
+        self._begin()
+        self.suspended += suspend_notes(self.col, keys)
+        self.last = self.col.undo_status().last_step
+
+    @property
+    def touched(self) -> bool:
+        return self.pos is not None
 
     def finish(self) -> OpChanges:
         """Merge the run's undo entries into one step."""
