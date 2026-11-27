@@ -20,6 +20,11 @@ and the project follows [Semantic Versioning](https://semver.org/).
   replace their `knightly::` tags when they are written again (on by default), and suspend the notes this
   version can no longer keep up to date (off by default): notes from versions before puzzle keys, and notes made
   under older rules whose game is no longer among your games. Suspending is part of the update's undo step.
+- **A companion process, `knightly daemon`,** to fetch games, annotate them and make puzzles while Anki is
+  closed: `python -m knightly daemon --addon <your addons21 folder>/<Knightly Review's folder>`. It uses the
+  add-on's settings (read again when they change), cache and Lichess login, and puts the notes it makes where
+  the add-on picks them up as Anki opens. When Anki opens, the daemon stops after its current search and
+  waits until Anki closes. Notes already in Anki are only changed or suspended by the add-on.
 
 ### Changed
 

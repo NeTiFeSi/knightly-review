@@ -131,8 +131,13 @@ class Cache(Protocol):
     def clear_candidates(self) -> None: ...
     def outbox_put(self, kind: str, data: Any) -> int: ...
     def outbox(self) -> list[tuple[int, str, Any]]: ...
-    def outbox_done(self, seqs: Iterable[int]) -> None: ...
+    def outbox_done(self, seqs: Iterable[int], notes: dict[str, str] | None = None) -> None: ...
+    def published_notes(self) -> dict[str, str] | None: ...
+    def publish_notes(self, notes: dict[str, str]) -> None: ...
     def unclaim(self, key: str, owner: str) -> None: ...
+
+
+NOTES_KEY = "collection_notes"  # kv: the collection's notes, published by the add-on
 
 
 class SqliteCache:
@@ -377,6 +382,22 @@ class SqliteCache:
         rows = self._conn().execute("SELECT seq, kind, data FROM outbox ORDER BY seq").fetchall()
         return [(seq, kind, json.loads(d)) for seq, kind, d in rows]
 
-    def outbox_done(self, seqs: Iterable[int]) -> None:
+    def outbox_done(self, seqs: Iterable[int], notes: dict[str, str] | None = None) -> None:
+        """These items are in the collection now; `notes`: the collection's notes with them, published in the same
+        transaction (so a reader never sees a note in neither)."""
         with self._conn() as c:
             c.executemany("DELETE FROM outbox WHERE seq=?", [(s,) for s in seqs])
+            if notes is not None:
+                c.execute(
+                    "INSERT OR REPLACE INTO kv (key, value) VALUES (?,?)",
+                    (NOTES_KEY, json.dumps({"ts": time.time(), "notes": notes})),
+                )
+
+    def published_notes(self) -> dict[str, str] | None:
+        """The collection's notes (key → PGN) as the add-on last published them; None: never published."""
+        got = self.get(NOTES_KEY)
+        return got["notes"] if got else None
+
+    def publish_notes(self, notes: dict[str, str]) -> None:
+        """For processes without the collection (the daemon): its notes, key → PGN."""
+        self.set(NOTES_KEY, {"ts": time.time(), "notes": notes})

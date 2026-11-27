@@ -20,6 +20,10 @@ waiting there as in the collection). The engine is the shared pool (engine/broke
 before annotate's. Build and manage both write notes, so they never run at the same time.
 
 `run_all` runs every stage once, one after another (the command line, tests).
+
+Two processes may run the stages on one cache: the add-on, and the daemon (`knightly daemon`, which runs every
+stage but manage, as it has no collection: it reads the notes the add-on publishes). They take turns (`Turn`):
+the add-on comes first, and the daemon hands over after its current step and waits until Anki closes.
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ from . import http, puzzles, stats
 from .cache import Cache
 from .config import Config
 from .engine.analyse import Analyser
-from .engine.broker import BACKFILL, BUILD, CONFIRM, SCAN, Pool
+from .engine.broker import BACKFILL, BUILD, CONFIRM, PROCESS, SCAN, Pool
 from .jobs import collection_state
 from .model import NoteSpec
 from .progress import Tracker
@@ -55,6 +59,54 @@ STAGES = ("extract", "manage", "annotate", "select", "build")
 NEXT = {"extract": ("manage", "annotate"), "annotate": ("select",), "select": ("build",)}
 NOTE, SUSPEND = "note", "suspend"
 IDLE_ENGINE_SECONDS = 60
+TURN_KEY, WANT_KEY = "stages_turn", "stages_wanted"  # kv: who runs the stages; the add-on asking for its turn
+TURN_SECONDS = 90  # a turn (and a wish for one) lapses this long after its owner stopped renewing it
+TICK = 5  # the supervisor's timer, in seconds
+
+
+class Turn:
+    """Which process runs the stages on a cache: one at a time. `first` (the add-on) asks for the turn and gets
+    it as soon as the holder lets go; the other (the daemon) takes it only while nobody asks, and gives it back
+    when somebody does (`yield_now`)."""
+
+    def __init__(self, cache: Cache, first: bool, owner: str = PROCESS, seconds: float = TURN_SECONDS):
+        self.cache, self.first, self.owner, self.seconds = cache, first, owner, seconds
+
+    def wanted(self) -> bool:
+        """Another process asks for the turn."""
+        v = self.cache.get(WANT_KEY)
+        return bool(v) and v["owner"] != self.owner and v["until"] > time.time()
+
+    def take(self, stop: threading.Event, poll: float = 1.0) -> bool:
+        """Wait for the turn (renewing it when held already). False: `stop` was set first."""
+        while True:
+            if self.first:
+                self.cache.claim(WANT_KEY, self.owner, self.seconds)
+            if stop.is_set():  # never taken on the way out: nobody would renew or give it back
+                return False
+            if (self.first or not self.wanted()) and self.cache.claim(TURN_KEY, self.owner, self.seconds):
+                return True
+            if stop.wait(poll):
+                return False
+
+    def holding(self) -> bool:
+        v = self.cache.get(TURN_KEY)
+        return bool(v) and v["owner"] == self.owner and v["until"] > time.time()
+
+    def renew(self) -> None:
+        if self.first:
+            self.cache.claim(WANT_KEY, self.owner, self.seconds)
+        if self.holding():
+            self.cache.claim(TURN_KEY, self.owner, self.seconds)
+
+    def yield_now(self) -> bool:
+        """The daemon holds the turn and the add-on asks for it."""
+        return not self.first and self.wanted() and self.holding()
+
+    def release(self) -> None:
+        self.cache.unclaim(TURN_KEY, self.owner)
+        if self.first:
+            self.cache.unclaim(WANT_KEY, self.owner)
 
 
 @dataclass
@@ -348,20 +400,27 @@ class Supervisor:
         on_start: Callable[[str, Tracker], None] | None = None,
         workers: dict[str, Callable[[Context, Tracker, bool], Outcome]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        stages: tuple[str, ...] = STAGES,
+        turn: Turn | None = None,
     ):
         """`on_start(stage, tracker)`: as a stage run starts, with the tracker it reports to; `on_done(stage,
-        outcome, error)`: after it (both on that stage's thread)."""
+        outcome, error)`: after it (both on that stage's thread). `stages`: the ones this supervisor runs (the
+        others are never triggered). `turn`: taken before each run, when another process may run the stages
+        on the same cache."""
         self.ctx = ctx
         self.on_done = on_done or (lambda *a: None)
         self.on_start = on_start or (lambda *a: None)
         self.workers = dict(workers or WORKERS)
         self.clock = clock
-        self.state = {name: StageState(name) for name in STAGES}
-        self._wake = {name: threading.Event() for name in STAGES}
-        self._manual = dict.fromkeys(STAGES, False)
+        self.stages = tuple(n for n in STAGES if n in stages)
+        self.turn = turn
+        self.state = {name: StageState(name) for name in self.stages}
+        self._wake = {name: threading.Event() for name in self.stages}
+        self._manual = dict.fromkeys(self.stages, False)
         self._threads: list[threading.Thread] = []
         self._stopping = threading.Event()
         self.keep_until = 0.0  # keep annotating until this time (monotonic); 0 = not keeping on
+        self.tick = TICK  # seconds between the timer's checks (tests make it shorter)
 
     # --- running one stage
     def run_stage(self, name: str, manual: bool = False) -> Outcome | None:
@@ -386,7 +445,7 @@ class Supervisor:
 
     def run_all(self, manual: bool = False) -> dict[str, Outcome | None]:
         """Every stage once, in order (no threads)."""
-        return {name: self.run_stage(name, manual) for name in STAGES}
+        return {name: self.run_stage(name, manual) for name in self.stages}
 
     # --- threads
     def start(self, fetch: bool = True) -> None:
@@ -394,7 +453,9 @@ class Supervisor:
         if self._threads:
             return
         self._stopping.clear()
-        for name in STAGES:
+        if self.turn is not None:
+            self.turn.renew()  # the add-on asks for the turn from now on, not only when a stage first runs
+        for name in self.stages:
             th = threading.Thread(target=self._loop, args=(name,), name=f"knightly-{name}", daemon=True)
             th.start()
             self._threads.append(th)
@@ -435,8 +496,22 @@ class Supervisor:
         if old.fingerprint("manage", "annotate", "select") != cfg.fingerprint("manage", "annotate", "select"):
             self.trigger("manage")
 
+    def hand_over(self) -> None:
+        """Give the turn to the process asking for it: stop what runs now, and run it again once the turn is
+        back (keeping on annotating as before)."""
+        running = [name for name, st in self.state.items() if st.running]
+        keep = self.keep_until
+        self.cancel_running()
+        self.keep_until = keep
+        if self.turn is not None:
+            self.turn.release()
+        for name in running:
+            self.trigger(name)
+
     def trigger(self, name: str, manual: bool = False) -> None:
         """Run `name` as soon as its thread is free (a run already asked for is not repeated)."""
+        if name not in self._wake:
+            return
         self._manual[name] = self._manual[name] or manual
         self._wake[name].set()
 
@@ -467,6 +542,8 @@ class Supervisor:
             for th in self._threads:
                 th.join(max(0.0, end - time.monotonic()))
         self._threads = []
+        if self.turn is not None and not self.busy:
+            self.turn.release()
 
     @property
     def busy(self) -> bool:
@@ -479,6 +556,8 @@ class Supervisor:
             if self._stopping.is_set():
                 return
             wake.clear()
+            if self.turn is not None and not self.turn.take(self._stopping):
+                return
             manual, self._manual[name] = self._manual[name], False
             self.ctx.background = name == "annotate" and self.state[name].last is not None and not manual
             out = self.run_stage(name, manual)
@@ -492,7 +571,12 @@ class Supervisor:
 
     def _timer(self) -> None:
         last = self.clock()
-        while not self._stopping.wait(30):
+        while not self._stopping.wait(self.tick):
+            if self.turn is not None:
+                if self.turn.yield_now():
+                    self.hand_over()
+                else:
+                    self.turn.renew()
             self.ctx.pool.reap(IDLE_ENGINE_SECONDS)  # an idle Stockfish gives its memory back
             hours = self.ctx.cfg.extract.update_every_hours
             if hours > 0 and self.clock() - last >= hours * 3600:

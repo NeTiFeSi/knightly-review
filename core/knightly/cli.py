@@ -88,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--days", type=int, help="look back this many days; 0 = all time")
     up.add_argument("--out", default="-", help="output JSON file ('-' = stdout)")
 
+    dm = sub.add_parser("daemon", help="fetch, annotate and make puzzles in the background, for the Anki add-on to add")
+    dm.add_argument("--addon", required=True, help="the Knightly Review add-on's folder in Anki's addons21")
+
     eng = sub.add_parser("engines", help="list the Stockfish builds found on this computer")
     eng.add_argument("--dir", help="extra folder with downloaded engines")
 
@@ -98,6 +101,19 @@ def main(argv: list[str] | None = None) -> int:
 
     args = ap.parse_args(argv)
 
+    if args.cmd == "daemon":
+        import signal
+
+        from . import daemon
+
+        stop = threading.Event()
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, lambda *_: stop.set())
+        try:
+            return daemon.run(args.addon, stop)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 2
     if args.cmd == "engines":
         from .engine.discover import discover
 

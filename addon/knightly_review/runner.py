@@ -9,6 +9,10 @@ stopped when the profile closes. Two things need the collection, on the main thr
   closes is written the next time it opens, also when the settings are incomplete (no stage runs then). An
   item that can't be written doesn't hold up the others: it is tried again a few times, then dropped (the
   stages make its note again).
+
+The companion daemon (`knightly daemon --addon <this folder>`) may run the stages on the same cache while Anki
+is closed. It has no collection, so the add-on publishes the collection's notes into the cache whenever it reads
+them, and with every drain. While Anki runs, the add-on has the turn (supervisor.Turn) and the daemon waits.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from .vendor.knightly.engine.broker import Lease, Pool
 from .vendor.knightly.http import Cancelled
 from .vendor.knightly.model import NoteSpec
 from .vendor.knightly.progress import Tracker, legacy_listener
-from .vendor.knightly.supervisor import NOTE, STAGES, SUSPEND, Context, Outcome, StageState, Supervisor
+from .vendor.knightly.supervisor import NOTE, STAGES, SUSPEND, Context, Outcome, StageState, Supervisor, Turn
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +121,17 @@ class Host:
             return
         if self.cache is None:
             self.cache = SqliteCache(settings.CACHE_PATH)
+            self.publish_now()
         self._start_drainer()
+
+    def publish_now(self) -> None:
+        """Main thread: publish the collection's notes for the daemon (at start, and as the profile closes:
+        notes deleted meanwhile are made again, the daemon's way too)."""
+        try:
+            if mw.col is not None:
+                self._publish(kc.existing_notes(mw.col))
+        except Exception:
+            log.exception("could not publish the collection's notes")
 
     def launch(self, fetch: bool = True) -> bool:
         """Start the stages with the current settings (`fetch`: and fetch games, when the settings say so)."""
@@ -131,7 +145,7 @@ class Host:
         assert self.cache is not None
         self.pool = Pool(core, lease=Lease(self.cache))
         ctx = Context(core, self.cache, self.pool, threading.Event(), existing=self._existing)
-        self.sup = Supervisor(ctx, on_start=self._on_start, on_done=self._on_done)
+        self.sup = Supervisor(ctx, on_start=self._on_start, on_done=self._on_done, turn=Turn(self.cache, first=True))
         self.sup.start(fetch=fetch)
         return True
 
@@ -226,7 +240,9 @@ class Host:
 
         def get() -> None:
             try:
-                box.append(kc.existing_notes(mw.col) if mw.col is not None else None)
+                notes = kc.existing_notes(mw.col) if mw.col is not None else None
+                self._publish(notes)
+                box.append(notes)
             except Exception as e:  # raised again in the stage's thread
                 log.exception("could not read the collection's notes")
                 box.append(e)
@@ -241,6 +257,15 @@ class Host:
         if isinstance(box[0], Exception):
             raise box[0]
         return box[0]
+
+    def _publish(self, notes: dict[str, str] | None) -> None:
+        """Main thread: the collection's notes, for the daemon. Not while a drain writes (its own publishing,
+        with the notes it wrote, would be overwritten by this older reading)."""
+        cache = self.cache
+        if notes is None or cache is None or self._draining:
+            return
+        if cache.published_notes() != notes:
+            cache.publish_notes(notes)
 
     def _on_start(self, name: str, tracker: Tracker) -> None:
         label = LABELS[name]
@@ -302,7 +327,10 @@ class Host:
                     if self._fails[seq] >= DRAIN_TRIES:
                         dropped[seq] = f"{data.get('key', kind) if isinstance(data, dict) else kind}: {e}"
             changes = writer.finish()
-            cache.outbox_done([*written, *dropped])
+            published = cache.published_notes()  # the daemon's view: with the notes written now
+            if published is not None:
+                published.update({d["key"]: d["pgn"] for seq, kind, d in items if kind == NOTE and seq in written})
+            cache.outbox_done([*written, *dropped], notes=published)
             self._wrote = writer
             return changes
 
@@ -356,6 +384,7 @@ def _on_profile_open() -> None:
 
 
 def _on_profile_close() -> None:
+    updater.publish_now()
     updater.shutdown(wait=5)
 
 

@@ -229,3 +229,36 @@ class Config:
             for name in names
         }
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
+
+
+def upgrade(stored: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    """The add-on's stored settings (over its defaults, `config.json`) brought up to the current version. The
+    add-on and the daemon read them the same way."""
+    cfg = {**defaults, **stored}
+    if cfg.get("config_version", 1) < 2:
+        # Version 2: one way of making puzzles (ply by ply). The old grouping settings are gone, and
+        # `min_loss` means something else now (a move losing more than this is a puzzle).
+        cfg.pop("note_grouping", None)
+        cfg.pop("opening_min_loss", None)
+        cfg["min_loss"] = defaults.get("min_loss", Select.min_loss)
+    if not cfg.get("accounts"):
+        # Version 3: accounts (several per site, yours or other players') instead of one username per site.
+        # Checked by the old keys, not the version: a config that never stored its version gets the default's.
+        cfg["accounts"] = [
+            {"source": site, "name": cfg[f"{site}_user"], "role": ME} for site in SITES if cfg.get(f"{site}_user")
+        ]
+    for old in ("lichess_user", "chesscom_user"):
+        cfg.pop(old, None)
+    if "keep_running" in cfg:
+        # The stages run on their own now: "keep analysing after the update" became annotating in the
+        # background (at low priority); cards are only made by the build stage, up to its limit per run.
+        if cfg["keep_running"] in ("precalculate", "unlimited"):
+            cfg["keep_annotating"] = True
+            cfg["keep_annotating_hours"] = float(cfg.get("keep_running_hours") or 0)
+        cfg.pop("keep_running", None)
+        cfg.pop("keep_running_hours", None)
+    if "config_version" in defaults:
+        cfg["config_version"] = defaults["config_version"]
+    if cfg.get("engine_path") and not cfg.get("stockfish_path"):  # settings from an early version
+        cfg["stockfish_path"] = cfg["engine_path"]
+    return cfg
