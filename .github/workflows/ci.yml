@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: python -m pip install --upgrade pip && python -m pip install --group core/pyproject.toml:dev
+      - run: ruff check .
+      - run: ruff format --check .
+
+  core:
+    name: core (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.13"]
+        include:
+          - os: ubuntu-latest
+            python: "3.11" # the oldest Python the project supports
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e core
+      - name: Unit tests (no network or engine needed)
+        working-directory: core
+        run: python -m unittest discover -s tests
+
+  card:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: card
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: card/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: card/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Build the card bundle
+        working-directory: card
+        run: npm ci && npm run build
+      - name: Install Anki's Python package (the collection tests need it)
+        run: python -m pip install anki
+      - name: Bundle the core and python-chess into the add-on folder
+        run: python addon/build.py --dev
+      - name: Add-on tests
+        working-directory: addon
+        run: python -m unittest discover -s tests
+      - name: Build the .ankiaddon
+        run: python addon/build.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: knightly_review.ankiaddon
+          path: addon/dist/knightly_review.ankiaddon
+          if-no-files-found: error

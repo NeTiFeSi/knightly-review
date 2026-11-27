@@ -1,0 +1,10 @@
+name: Feature request
+description: An idea for a card, a setting or a game source
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like, and why?
+    validations:
+      required: true

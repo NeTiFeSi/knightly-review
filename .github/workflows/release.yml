@@ -1,0 +1,74 @@
+name: Release
+
+# Push a tag like v0.1.0 (or v0.1.0-rc1 for a pre-release) to publish a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: card/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check that the tag matches the version in the code
+        id: version
+        run: |
+          version=$(python -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('core/knightly/__init__.py').read_text()).group(1))")
+          tag="${GITHUB_REF_NAME#v}"
+          base="${tag%%-*}"
+          if [ "$base" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match knightly.__version__ ($version)"
+            exit 1
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          if [ "$tag" != "$base" ]; then echo "prerelease=--prerelease" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="${{ steps.version.outputs.base }}" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            /^## \[/ || /^\[[^]]+\]: / { found = 0 }
+            found
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${{ steps.version.outputs.base }}"
+            exit 1
+          fi
+
+      - name: Build the card, the add-on and the sample deck
+        run: |
+          (cd card && npm ci && npm run build)
+          python -m pip install anki
+          python addon/build.py
+          (cd card && npm run apkg)
+          cd "$GITHUB_WORKSPACE"
+          mkdir release
+          cp addon/dist/knightly_review.ankiaddon card/dist/knightly-sample.apkg release/
+          (cd release && sha256sum * > SHA256SUMS)
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "Knightly Review $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag ${{ steps.version.outputs.prerelease }}

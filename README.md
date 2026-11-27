@@ -5,7 +5,7 @@ Your nightly chess reps, made from your own games. knightly-review pulls your Li
 
 You need [Anki](https://apps.ankiweb.net/) 25.07 or newer on a computer (Windows, macOS or Linux). Older versions run Python 3.9, which the add-on no longer supports. Cards are made on the computer, and reach AnkiDroid, AnkiMobile and AnkiWeb through normal Anki sync.
 
-1. Install the add-on: double-click `knightly_review.ankiaddon`, or in Anki use **Tools → Add-ons → Install from file…**. Restart Anki.
+1. Install the add-on: download `knightly_review.ankiaddon` from the [latest release](https://github.com/NeTiFeSi/knightly-review/releases/latest), then double-click it, or in Anki use **Tools → Add-ons → Install from file…**. Restart Anki. (A sample deck, `knightly-sample.apkg`, is on the same page if you want to see the cards first.)
 2. A welcome window opens. Enter your Lichess and/or Chess.com username.
 3. Check that Stockfish was found (it's required). If it isn't installed, its window offers two ways to get it:
 
@@ -164,6 +164,27 @@ card/      the interactive card (TypeScript), built into one media file
 The add-on bundles only pure-Python code (python-chess and the core), so one file installs on every OS. Heavier work planned for later (personal engines that need ML libraries) will run in a separate helper process with its own Python, not inside Anki.
 
 See [card/README.md](card/README.md) for the card and its PGN format, [addon/README.md](addon/README.md) for building the add-on, and [core/README.md](core/README.md) for the command line.
+
+## Build from source
+
+You need Python 3.11+ and Node.js 24+.
+
+```sh
+git clone https://github.com/NeTiFeSi/knightly-review.git && cd knightly-review
+(cd card && npm ci && npm run build)     # the card bundle and templates
+python3 addon/build.py                   # addon/dist/knightly_review.ankiaddon
+```
+
+Command-line use, tests and the development setup are in [CONTRIBUTING.md](CONTRIBUTING.md); changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Known limitations
+
+- Needs Anki 25.07 or newer on a computer. Cards are made on the computer only.
+- The author develops and tests on Linux. The core's unit tests also run on Windows and macOS in CI, but the add-on's windows have not been tried by the author there. Please report problems.
+- Tested on AnkiDroid 2.25. AnkiMobile and AnkiWeb get the cards through sync and have not been tested by the author.
+- Only Stockfish and Lc0 are supported as engines.
+- New Chess.com games can take a few hours to appear, because Chess.com refreshes its game lists only a few times a day.
+- Deleting a puzzle card does not remove the puzzle: it is made again at the next update. Suspend a card you don't want to see instead.
 
 ## Licence
 
