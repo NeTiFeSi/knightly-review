@@ -95,6 +95,8 @@ class Cache(Protocol):
     def put_http(self, url: str, etag: str | None, last_modified: str | None) -> None: ...
     def get(self, key: str, default: Any = None) -> Any: ...
     def set(self, key: str, value: Any) -> None: ...
+    def claim(self, key: str, owner: str, seconds: float) -> bool: ...
+    def unclaim(self, key: str, owner: str) -> None: ...
 
 
 class SqliteCache:
@@ -249,3 +251,21 @@ class SqliteCache:
     def set(self, key: str, value: Any) -> None:
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?,?)", (key, json.dumps(value)))
+
+    # leases: one owner at a time across threads and processes (engine/broker.py)
+    def claim(self, key: str, owner: str, seconds: float) -> bool:
+        """Hold `key` for `seconds` if it is free, expired or held by `owner` already (renewed). One statement,
+        so two processes can't both win."""
+        now = time.time()
+        value = json.dumps({"owner": owner, "until": now + seconds})
+        with self._conn() as c:
+            cur = c.execute(
+                """INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value
+                   WHERE json_extract(kv.value, '$.owner')=? OR json_extract(kv.value, '$.until')<?""",
+                (key, value, owner, now),
+            )
+            return cur.rowcount > 0
+
+    def unclaim(self, key: str, owner: str) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM kv WHERE key=? AND json_extract(value, '$.owner')=?", (key, owner))

@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from . import http, notes, pipeline, puzzles
 from .cache import Cache
 from .config import Config
+from .engine import broker
 from .engine.analyse import Analyser
+from .engine.broker import Pool
 from .model import Game, NoteSpec
 from .progress import Tracker, legacy_listener
 from .stages import extract
@@ -52,6 +54,13 @@ def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
+def _priorities(precalculate: bool) -> dict[str, int]:
+    """Pre-calculating is work for later: it waits behind every other user of the engine."""
+    if precalculate:
+        return {"priority": broker.BACKFILL, "scan_priority": broker.BACKFILL}
+    return {"priority": broker.CONFIRM, "scan_priority": broker.SCAN}
+
+
 def run_update(
     cfg: Config,
     cache: Cache,
@@ -65,6 +74,7 @@ def run_update(
     precalculate: bool = False,
     on_note: Callable[[NoteSpec], None] | None = None,
     tracker: Tracker | None = None,
+    pool: Pool | None = None,
 ) -> UpdateResult:
     """`precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
     the searches in the cache. `analysis_minutes` still bounds it.
@@ -75,7 +85,9 @@ def run_update(
     a similar position). `result.notes` ends with the same specs, and holds those made so far if the run
     is cancelled.
     `tracker`: a progress.Tracker to read the run's progress from (stage, engines, counters) while it goes on;
-    `progress` still gets the older `(stage, done, total, message)` calls."""
+    `progress` still gets the older `(stage, done, total, message)` calls.
+    `pool`: the Stockfish processes shared with other users of the engine (engine/broker.py); None = a pool of
+    this run's own."""
     tracker = tracker or Tracker()
     if progress:
         tracker.listen(legacy_listener(progress))
@@ -120,7 +132,9 @@ def run_update(
 
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
         an_ctx = (
-            analyser_factory(cfg, cache, cancel) if analyser_factory else Analyser(cfg, cache, cancel, tracker=tracker)
+            analyser_factory(cfg, cache, cancel)
+            if analyser_factory
+            else Analyser(cfg, cache, cancel, tracker=tracker, pool=pool, **_priorities(precalculate))
         )
         with an_ctx as an:
             miner = pipeline.Miner(

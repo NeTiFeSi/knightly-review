@@ -1375,8 +1375,8 @@ class ProgressTest(unittest.TestCase):
                 )
 
         c = tmpcache(self)
-        eng = Engine("x", Config.from_dict({"sf_depth": 13}), c, tracker=t)
-        eng._proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": 13}), c, tracker=t)
+        eng.pool.inject(Proc())
         b = chess.Board()
         ev = eng.evaluate(b)
         self.assertEqual(seen, [0, 5, 9])  # the depth shown while each info arrives (the last one is current after)
@@ -1402,8 +1402,8 @@ class ProgressTest(unittest.TestCase):
                 made.append(a)
                 return a
 
-        eng = Engine("x", Config.from_dict({"sf_depth": 13}), tmpcache(self), cancel=cancel)
-        eng._proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": 13}), tmpcache(self), cancel=cancel)
+        eng.pool.inject(Proc())
         with self.assertRaises(http.Cancelled):
             eng.evaluate(chess.Board())
         self.assertTrue(made[0].stopped)
@@ -1790,8 +1790,9 @@ class AnalyserTest(unittest.TestCase):
                 self.searches.append((limit.depth, multipv))
                 return FakeAnalysis([sf_info(limit.depth)])
 
-        eng = Engine("x", Config.from_dict({"sf_depth": depth}), cache)
-        eng._proc = proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": depth}), cache)
+        proc = Proc()
+        eng.pool.inject(proc)
         return eng, proc
 
     def test_every_legal_move_is_searched_at_the_fixed_depth(self):
@@ -1828,8 +1829,9 @@ class AnalyserTest(unittest.TestCase):
                 moves = only or ["e2e4", "d2d4", "g1f3"][:multipv]
                 return FakeAnalysis([sf_info(limit.depth, move=m, cp=10 * (i + 1)) for i, m in enumerate(moves)])
 
-        eng = Engine("x", Config.from_dict({"sf_depth": depth, "scan_depth": scan_depth}), cache)
-        eng._proc = proc = Proc()
+        eng = Engine(Config.from_dict({"sf_depth": depth, "scan_depth": scan_depth}), cache)
+        proc = Proc()
+        eng.pool.inject(proc)
         return eng, proc
 
     def test_scan_searches_the_best_move_and_each_played_move_on_its_own(self):
@@ -1908,7 +1910,7 @@ class AnalyserTest(unittest.TestCase):
         mated = chess.Board("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
         ev = an.evaluate(mated)
         self.assertEqual((ev.source, ev.lines[0].moves, ev.lines[0].score.cp), ("rules", [], -10000))
-        self.assertIsNone(an.sf._proc)  # no engine process was needed
+        self.assertEqual(an.sf.pool.started, 0)  # no engine process was needed
 
     def test_cached_never_searches(self):
         from knightly.engine.analyse import Analyser

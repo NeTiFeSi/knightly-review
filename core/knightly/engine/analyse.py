@@ -11,7 +11,8 @@ Two kinds of search, each to a fixed depth:
   `searchmoves`), so its score is exact too. It tells which positions are worth a full search.
 
 Results are cached by position and count when they were searched at least as deep as asked; a cached full search
-answers a scan for free.
+answers a scan for free. A search that the cache can't answer borrows a process from the shared pool
+(broker.py), by priority: full searches as `CONFIRM`, scans as `SCAN`, unless the caller says otherwise.
 """
 
 from __future__ import annotations
@@ -30,16 +31,13 @@ from ..http import Cancelled
 from ..model import Eval, Line, NoWdl, Score
 from ..progress import STOCKFISH as P_SF
 from ..progress import Tracker
-from .discover import is_stockfish, popen_kwargs
+from .broker import CONFIRM, SCAN, EngineError, Lease, Pool
 
 log = logging.getLogger(__name__)
 
-WDL_OPTION = "UCI_ShowWDL"
+__all__ = ["MATED", "Analyser", "Engine", "EngineError"]
+
 MATED = 10000  # |cp| used for a checkmated position (the side to move lost)
-
-
-class EngineError(RuntimeError):
-    pass
 
 
 def _score(info: chess.engine.InfoDict) -> Score:
@@ -61,61 +59,63 @@ def terminal(board: chess.Board) -> Score:
 
 
 class Engine:
-    """One Stockfish process."""
+    """Stockfish searches for one client, through the cache and the shared pool of processes."""
 
     def __init__(
         self,
-        path: str,
         cfg: Config,
         cache: Cache,
         tracker: Tracker | None = None,
         cancel: threading.Event | None = None,
+        *,
+        pool: Pool | None = None,
+        priority: int = CONFIRM,
+        scan_priority: int = SCAN,
     ):
-        self.path, self.cfg, self.cache = path, cfg, cache
-        self._proc: chess.engine.SimpleEngine | None = None
-        self.name = ""
+        """`pool`: the shared processes; None = a pool of one, for this client alone (closed with it), holding
+        the cache's engine lease while it runs."""
+        self.cfg, self.cache = cfg, cache
+        self.own_pool = pool is None
+        self.pool = pool if pool is not None else Pool(cfg, lease=Lease(cache))
+        self.priority, self.scan_priority = priority, scan_priority
         self.calls = 0
         self.tracker = tracker  # told about every search (progress.py)
         self.cancel = cancel  # a search in progress stops when this is set
+        self._announced = False
 
-    def proc(self) -> chess.engine.SimpleEngine:
-        if self._proc is None:
-            if not self.path:
-                raise EngineError("no Stockfish configured")
-            eng = chess.engine.SimpleEngine.popen_uci(self.path, **popen_kwargs())
-            name = eng.id.get("name", "")
-            if not is_stockfish(name):
-                eng.quit()
-                raise EngineError(f"{self.path} is {name or 'not a known engine'}, not Stockfish")
-            if WDL_OPTION not in eng.options:
-                eng.quit()
-                raise EngineError(f"{name} doesn't report win/draw/loss ({WDL_OPTION}); please update it")
-            conf = {WDL_OPTION: True, "Threads": self.cfg.engine.engine_threads(), "Hash": self.cfg.engine.hash_mb}
-            eng.configure({k: v for k, v in conf.items() if k in eng.options})
-            self._proc, self.name = eng, name
-            if self.tracker:
-                self.tracker.engine(P_SF, name=name, enabled=True)
-        return self._proc
+    @property
+    def name(self) -> str:
+        return self.pool.name
 
     def _search(
-        self, board: chess.Board, depth: int, lines: int, t0: float, root: list[chess.Move] | None = None
+        self,
+        board: chess.Board,
+        depth: int,
+        lines: int,
+        t0: float,
+        root: list[chess.Move] | None = None,
+        priority: int = CONFIRM,
     ) -> list:
         """`lines` lines (of the `root` moves only, when given), streaming progress to the tracker; stops at once
         on cancel."""
-        with self.proc().analysis(board, chess.engine.Limit(depth=depth), multipv=lines, root_moves=root) as a:
-            for info in a:
-                if self.cancel is not None and self.cancel.is_set():
-                    a.stop()
-                    raise Cancelled()
-                if self.tracker and "depth" in info:
-                    self.tracker.search_progress(
-                        P_SF,
-                        depth=int(info.get("depth", 0)),
-                        nodes=int(info.get("nodes", 0)),
-                        nps=int(info.get("nps", 0)),
-                        ms=round(info.get("time", time.monotonic() - t0) * 1000),
-                    )
-            return [dict(i) for i in a.multipv]
+        with self.pool.acquire(priority, self.cancel) as proc:
+            if self.tracker and not self._announced:
+                self._announced = True
+                self.tracker.engine(P_SF, name=self.pool.name, enabled=True)
+            with proc.analysis(board, chess.engine.Limit(depth=depth), multipv=lines, root_moves=root) as a:
+                for info in a:
+                    if self.cancel is not None and self.cancel.is_set():
+                        a.stop()
+                        raise Cancelled()
+                    if self.tracker and "depth" in info:
+                        self.tracker.search_progress(
+                            P_SF,
+                            depth=int(info.get("depth", 0)),
+                            nodes=int(info.get("nodes", 0)),
+                            nps=int(info.get("nps", 0)),
+                            ms=round(info.get("time", time.monotonic() - t0) * 1000),
+                        )
+                return [dict(i) for i in a.multipv]
 
     def evaluate(self, board: chess.Board) -> Eval:
         """`board` searched to `cfg.annotate.sf_depth` with one line per legal move, best first (from the cache when the
@@ -132,7 +132,7 @@ class Engine:
             self.tracker.search_start(P_SF, board.fen(), board.ply(), lines, depth)
         t0 = time.monotonic()
         try:
-            infos = self._search(board, depth, lines, t0)
+            infos = self._search(board, depth, lines, t0, priority=self.priority)
         except BaseException:
             if self.tracker:
                 self.tracker.search_end(P_SF, ms=round((time.monotonic() - t0) * 1000))
@@ -194,7 +194,8 @@ class Engine:
             self.tracker.search_start(P_SF, board.fen(), board.ply(), lines, depth)
         t0 = time.monotonic()
         try:
-            infos = self._search(board, depth, lines, t0, [chess.Move.from_uci(m) for m in only] if only else None)
+            root = [chess.Move.from_uci(m) for m in only] if only else None
+            infos = self._search(board, depth, lines, t0, root, priority=self.scan_priority)
         except BaseException:
             if self.tracker:
                 self.tracker.search_end(P_SF, ms=round((time.monotonic() - t0) * 1000))
@@ -205,25 +206,31 @@ class Engine:
         return [Line(_score(i), [m.uci() for m in i.get("pv", [])]) for i in infos if "score" in i]
 
     def close(self) -> None:
-        if self._proc is not None:
-            try:
-                self._proc.quit()
-            except Exception:
-                log.debug("engine did not quit cleanly", exc_info=True)
-            self._proc = None
+        if self.own_pool:
+            self.pool.close()
 
 
 class Analyser:
     """The engine, as the pipeline uses it. Not thread-safe: use one per worker thread."""
 
     def __init__(
-        self, cfg: Config, cache: Cache, cancel: threading.Event | None = None, tracker: Tracker | None = None
+        self,
+        cfg: Config,
+        cache: Cache,
+        cancel: threading.Event | None = None,
+        tracker: Tracker | None = None,
+        *,
+        pool: Pool | None = None,
+        priority: int = CONFIRM,
+        scan_priority: int = SCAN,
     ):
+        """`pool`: the shared Stockfish processes (None: one of its own); `priority`/`scan_priority`: how urgent
+        this client's full searches and scans are against the other clients of the pool."""
         self.cfg = cfg
         self.cache = cache
         self.cancel = cancel or threading.Event()
         self.tracker = tracker
-        self.sf = Engine(cfg.engine.stockfish_path, cfg, cache, tracker, self.cancel)
+        self.sf = Engine(cfg, cache, tracker, self.cancel, pool=pool, priority=priority, scan_priority=scan_priority)
         if tracker:
             tracker.engine(P_SF, enabled=True)
 

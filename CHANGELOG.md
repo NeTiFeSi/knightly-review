@@ -21,6 +21,8 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 - Changing Stockfish's threads or memory no longer makes the next update analyse everything again. The first
   update after this version does analyse again once, mostly from the searches already saved.
+- Only one program runs Stockfish at a time on the same data: an update from the command line waits while Anki's
+  update is searching (and the other way round), instead of both loading the CPU at once.
 
 ### Fixed
 
