@@ -69,13 +69,18 @@ def parse_game(d: dict, user: str) -> Game | None:
 
 
 ONGOING = ("created", "started")  # a game still being played
+IDS_PER_REQUEST = 300  # /api/games/export/_ids takes at most this many ids
 
 
 def _keys(user: str) -> tuple[str, str]:
-    """Cache keys: the cursor (where the next fetch starts: createdAt of the newest stored game + 1, but never
-    past a game still being played, in ms) and the floor (where the stored, gap-free run of games starts:
-    0 = all time)."""
+    """Cache keys: the cursor (createdAt of the newest game fetched + 1, in ms) and the floor (where the
+    stored, gap-free run of games starts: 0 = all time)."""
     return f"cursor:lichess:{user.lower()}", f"floor:lichess:{user.lower()}"
+
+
+def _ongoing_key(user: str) -> str:
+    """Ids of the games that were still being played when fetched: looked up again until they end."""
+    return f"ongoing:lichess:{user.lower()}"
 
 
 def _refetched_key(user: str) -> str:
@@ -88,13 +93,19 @@ def _start_ms(history_days: int) -> int:
     return 0 if history_days <= 0 else int((time.time() - history_days * 86400) * 1000)
 
 
+def _filters(time_classes: list[str] | None, rated_only: bool) -> tuple[list[str] | None, bool]:
+    """The filters as Lichess sees them: only its own speeds."""
+    # None: every speed (no perfType asked for), also when none of them is a Lichess one
+    return ([t for t in time_classes if t in SPEEDS] or None if time_classes else None), rated_only
+
+
 def needs_backfill(
     cache, user: str, history_days: int, time_classes: list[str] | None = None, rated_only: bool = False
 ) -> bool:
     """True when the look-back now reaches further back than the games fetched so far, or the filters now let
     through games the last download left out."""
     floor = cache.get(_keys(user)[1])
-    widened = sources.filters_widened(cache, "lichess", user, time_classes, rated_only)
+    widened = sources.filters_widened(cache, "lichess", user, *_filters(time_classes, rated_only))
     return floor is None or _start_ms(history_days) < int(floor) or widened
 
 
@@ -116,20 +127,21 @@ def fetch(
     `history_days` 0 or negative fetches the whole history. When the look-back grows, the next
     fetch starts over from the new start date (games already stored are skipped). Games are
     saved as they stream in, so a cancelled or failed download resumes where it stopped.
-    Games still being played are asked for too, only so the cursor stays at the first of them: a
-    correspondence game started long ago is stored once it ends.
+    Games still being played are listed too: their ids are kept and looked up again by every later fetch
+    until they end (a correspondence game started long ago is stored once it is over).
     """
     cursor_key, floor_key = _keys(user)
     start = _start_ms(history_days)
     floor = cache.get(floor_key)
     cursor = int(cache.get(cursor_key, 0))
-    widened = sources.filters_widened(cache, "lichess", user, time_classes, rated_only)
+    filters = _filters(time_classes, rated_only)
+    widened = sources.filters_widened(cache, "lichess", user, *filters)
     if floor is None or start < int(floor) or not cursor or not cache.get(_refetched_key(user)) or widened:
         cursor = start
         cache.set(cursor_key, cursor)
         cache.set(floor_key, start)
         cache.set(_refetched_key(user), True)
-    sources.mark_filters(cache, "lichess", user, time_classes, rated_only)  # the cursor resumes from here
+    sources.mark_filters(cache, "lichess", user, *filters)  # the cursor resumes from here
     params = {
         "since": cursor,
         "moves": "true",
@@ -139,12 +151,17 @@ def fetch(
     }
     if max_games:
         params["max"] = max_games
-    perfs = [t for t in (time_classes or []) if t in SPEEDS]
+    perfs = filters[0] or []
     if perfs:
         params["perfType"] = ",".join(perfs)
     if rated_only:
         params["rated"] = "true"
     s = session or http.session(token)
+
+    def on_wait(w: float) -> None:
+        if progress:
+            progress(f"Lichess asked us to wait {w:.0f} s…")
+
     r = http.get(
         s,
         f"{API}/api/games/user/{user}",
@@ -152,19 +169,21 @@ def fetch(
         headers={"Accept": "application/x-ndjson"},
         stream=True,
         cancel=cancel,
-        on_wait=(lambda w: progress and progress(f"Lichess asked us to wait {w:.0f} s…")),
+        on_wait=on_wait,
     )
     if r.status_code == 404:
         raise ValueError(f"Lichess user {user!r} not found")
     r.raise_for_status()
     batch: list[Game] = []
     newest, seen, n = cursor, 0, 0
-    ongoing: int | None = None  # createdAt of the first game still being played
+    ongoing_key = _ongoing_key(user)
+    earlier = list(cache.get(ongoing_key) or [])  # still being played at an earlier fetch
+    ongoing = set(earlier)
 
     def save() -> int:
         k = cache.put_games(batch, user)
-        # dateAsc: everything before `newest` is stored, except the games still being played
-        cache.set(cursor_key, newest if ongoing is None else min(newest, ongoing))
+        cache.set(cursor_key, newest)  # dateAsc: everything before `newest` is stored or listed in `ongoing`
+        cache.set(ongoing_key, sorted(ongoing))
         batch.clear()
         return k
 
@@ -175,12 +194,12 @@ def fetch(
             if not line:
                 continue
             d = json.loads(line)
-            created = int(d.get("createdAt", 0))
-            newest = max(newest, created + 1)
+            newest = max(newest, int(d.get("createdAt", 0)) + 1)
             seen += 1
             if d.get("status") in ONGOING:
-                ongoing = created if ongoing is None else min(ongoing, created)
+                ongoing.add(d["id"])
                 continue
+            ongoing.discard(d.get("id"))
             g = parse_game(d, user)
             if g:
                 batch.append(g)
@@ -190,6 +209,40 @@ def fetch(
                     day = time.strftime("%Y-%m-%d", time.gmtime(newest / 1000))
                     progress(f"Lichess: {seen} games so far (up to {day})…")
     n += save()
+    if cancel is not None and cancel.is_set():
+        return n
+    # The games still being played at an earlier fetch: the ones that ended are stored now.
+    todo = [i for i in earlier if i in ongoing]
+    for at in range(0, len(todo), IDS_PER_REQUEST):
+        ids = todo[at : at + IDS_PER_REQUEST]
+        if progress:
+            progress(f"Lichess: checking {len(todo)} game{'s' if len(todo) != 1 else ''} that were still going on…")
+        r = http.post(
+            s,
+            f"{API}/api/games/export/_ids",
+            data=",".join(ids),
+            params={"moves": "true"},
+            headers={"Accept": "application/x-ndjson", "Content-Type": "text/plain"},
+            stream=True,
+            cancel=cancel,
+            on_wait=on_wait,
+        )
+        r.raise_for_status()
+        listed = set()
+        with r:
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                d = json.loads(line)
+                listed.add(d.get("id"))
+                if d.get("status") in ONGOING:
+                    continue
+                ongoing.discard(d.get("id"))
+                g = parse_game(d, user)
+                if g:
+                    batch.append(g)
+        ongoing.difference_update(set(ids) - listed)  # gone from Lichess: nothing to wait for
+        n += save()
     return n
 
 

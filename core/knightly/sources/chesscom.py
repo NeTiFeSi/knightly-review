@@ -20,6 +20,7 @@ from ..model import Game
 
 API = "https://api.chess.com/pub"
 TIME_CLASS = {"daily": "correspondence"}
+CLASSES = {"bullet", "blitz", "rapid", "correspondence"}  # Chess.com's time classes, as `parse_game` names them
 
 
 def parse_game(d: dict, user: str) -> Game | None:
@@ -86,14 +87,16 @@ def fetch(
     done_key = f"chesscom_done:{u}"
     # Before the look-back was recorded, the oldest month was stored only in part: redo all once.
     done = set(cache.get(done_key, [])) if cache.get(_first_key(u)) is not None else set()
-    all_months = [a for a in r.json().get("archives", []) if _month(a) >= first]
-    if sources.filters_widened(cache, "chesscom", user, time_classes, rated_only):
-        # Games the old filters left out: every month again, without the validators (they'd answer 304).
+    listed = r.json().get("archives", [])
+    all_months = [a for a in listed if _month(a) >= first]
+    if sources.filters_widened(cache, "chesscom", user, time_classes, rated_only, CLASSES):
+        # Games the old filters left out: every month again, without the validators (they'd answer 304). Also
+        # the months before the look-back, in case it grows later.
         done = set()
         cache.set(done_key, [])
-        for url in all_months:
+        for url in listed:
             cache.put_http(url, None, None)
-    sources.mark_filters(cache, "chesscom", user, time_classes, rated_only)  # `done` resumes from here
+    sources.mark_filters(cache, "chesscom", user, time_classes, rated_only, CLASSES)  # `done` resumes from here
     cur = time.gmtime(now or time.time())
     current = (cur.tm_year, cur.tm_mon)
     archives = [a for a in all_months if a not in done]
@@ -156,5 +159,5 @@ def needs_backfill(
     """True when the look-back now reaches further back than any fetch so far, or the filters now let through
     games the last download left out."""
     got = cache.get(_first_key(user))
-    widened = sources.filters_widened(cache, "chesscom", user, time_classes, rated_only)
+    widened = sources.filters_widened(cache, "chesscom", user, time_classes, rated_only, CLASSES)
     return got is None or _first_month(history_days, now) < tuple(got) or widened

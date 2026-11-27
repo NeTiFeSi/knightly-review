@@ -37,22 +37,32 @@ def _filters_key(source: str, user: str) -> str:
     return f"fetch_filters:{source}:{user.lower()}"
 
 
-def _filters(time_classes: list[str] | None, rated_only: bool) -> dict:
-    return {"time_classes": sorted(time_classes) if time_classes else None, "rated_only": bool(rated_only)}
+def _filters(time_classes: list[str] | None, rated_only: bool, known: set[str] | None) -> dict:
+    """The filters as the site applies them: no time classes means all; with `known`, the classes the site has
+    (none of them: no game at all)."""
+    if not time_classes:
+        classes = None
+    else:
+        classes = sorted(set(time_classes) & known if known is not None else set(time_classes))
+    return {"time_classes": classes, "rated_only": bool(rated_only)}
 
 
-def filters_widened(cache, source: str, user: str, time_classes: list[str] | None, rated_only: bool) -> bool:
+def filters_widened(
+    cache, source: str, user: str, time_classes: list[str] | None, rated_only: bool, known: set[str] | None = None
+) -> bool:
     """True when these filters let through games the ones of the last download left out. Unknown (nothing
-    recorded yet) counts as unchanged."""
+    recorded yet) counts as unchanged. `known`: the time classes the site has (the others change nothing)."""
     old = cache.get(_filters_key(source, user))
     if not old:
         return False
-    new = _filters(time_classes, rated_only)
+    new = _filters(time_classes, rated_only, known)
     more_classes = old["time_classes"] is not None and (
         new["time_classes"] is None or bool(set(new["time_classes"]) - set(old["time_classes"]))
     )
     return more_classes or (old["rated_only"] and not new["rated_only"])
 
 
-def mark_filters(cache, source: str, user: str, time_classes: list[str] | None, rated_only: bool) -> None:
-    cache.set(_filters_key(source, user), _filters(time_classes, rated_only))
+def mark_filters(
+    cache, source: str, user: str, time_classes: list[str] | None, rated_only: bool, known: set[str] | None = None
+) -> None:
+    cache.set(_filters_key(source, user), _filters(time_classes, rated_only, known))

@@ -9,7 +9,7 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 - **Lichess games that were still being played during an update are no longer lost.** Each update moved past them,
   so a game in progress at that moment (most often a correspondence game) never reached your cards once it ended.
-  Updates now wait for such games. The next update downloads your history window from Lichess once more to pick up
+  Updates now keep track of such games and add them once they end. The next update downloads your history window from Lichess once more to pick up
   the games missed so far; games you already have are not added twice.
 - **Undo after answering a card undoes the answer again.** The card's record of which replies it showed was saved
   as an Anki change of its own, so Ctrl+Z undid that record instead of your last answer. It is now saved when you

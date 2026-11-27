@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 ADDON = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ADDON))
@@ -153,12 +154,13 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(_queue_visits(card, 'k1:1|{"r1":1,"r3":4}'), {"ok": True})  # the larger count wins
         self.assertEqual(_queue_visits(card, 'k2:2|{"r1":9}'), {"ok": True})  # another card of the note
         self.assertEqual(self.col.get_note(note.id)["Visits"], "")  # nothing written before the answer
-        self.assertTrue(_flush_visits(self.col, card))
+        self.assertFalse(_flush_visits(self.col, card))  # the last step is not an answer: they stay queued
+        self.assertTrue(_flush_visits(self.col, card, answered=False))  # the profile's close
         stored = json.loads(self.col.get_note(note.id)["Visits"])
         self.assertEqual(stored, {"k1:1": {"r1": 2, "r2": 1, "r3": 4}, "k2:2": {"r1": 9}})
         _queue_visits(card, 'k2:2|{"r1":3}')
-        self.assertFalse(_flush_visits(self.col, card))  # lower counts change nothing
-        self.assertFalse(_flush_visits(self.col, card))  # nothing queued
+        self.assertFalse(_flush_visits(self.col, card, answered=False))  # lower counts change nothing
+        self.assertFalse(_flush_visits(self.col, card, answered=False))  # nothing queued
 
     def test_visits_join_the_answer_undo_step(self):
         import json
@@ -185,6 +187,28 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(self.col.get_card(c.id).reps, 0)
         self.assertEqual(note()["Visits"], "")
         self.assertEqual(self.col.undo_status().undo, before)
+
+    def test_visits_left_queued_are_written_when_the_profile_closes(self):
+        import json
+
+        from anki.scheduler.v3 import CardAnswer
+        from knightly_review import _flush_all_visits, _flush_visits, _pending_visits, _queue_visits
+
+        self.kc.ensure_installed(self.col, self.card_dir)
+        self.kc.apply_notes(self.col, [self.spec()], "KR")
+        c = self.col.get_card(self.col.find_cards('"note:Knightly Review"')[0])
+        c.start_timer()
+        states = self.col._backend.get_scheduling_states(c.id)
+        self.col.sched.answer_card(self.col.sched.build_answer(card=c, states=states, rating=CardAnswer.GOOD))
+        self.kc.apply_notes(self.col, [self.spec(key="puzzle:6:fedcba654321")], "KR")  # another change on top
+        top = self.col.undo_status().undo
+        _queue_visits(c, 'k1:1|{"r1":1}')
+        _queue_visits(SimpleNamespace(id=999999), 'k9:1|{"r1":1}')  # a card deleted since
+        self.assertFalse(_flush_visits(self.col, c))  # not merged into someone else's step: still queued
+        self.assertEqual(self.col.undo_status().undo, top)
+        _flush_all_visits(self.col)
+        self.assertEqual(json.loads(self.col.get_note(c.nid)["Visits"]), {"k1:1": {"r1": 1}})
+        self.assertEqual(_pending_visits, {})
 
     def test_existing_notes_lists_puzzles_by_key_and_older_notes_as_legacy(self):
         self.kc.ensure_installed(self.col, self.card_dir)

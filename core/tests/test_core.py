@@ -252,15 +252,35 @@ class LichessTest(unittest.TestCase):
         c = tmpcache(self)
         older, newer = sorted((json.loads(l) for l in self.lines), key=lambda d: d["createdAt"])
         playing = {**older, "status": "started"}
-        first = (json.dumps(playing) + "\n" + json.dumps(newer) + "\n").encode()
-        both = (json.dumps(older) + "\n" + json.dumps(newer) + "\n").encode()
-        s = FakeSession([("/api/games/user/", [FakeResponse(200, first), FakeResponse(200, both)])])
+        gone = {**playing, "id": "gone0000", "createdAt": older["createdAt"] - 1}
+        first = "".join(json.dumps(d) + "\n" for d in (gone, playing, newer)).encode()
+        stream = [FakeResponse(200, first), FakeResponse(200, b""), FakeResponse(200, b"")]
+        by_id = [
+            FakeResponse(200, (json.dumps(playing) + "\n").encode()),  # still going on; "gone0000" not listed
+            FakeResponse(200, (json.dumps(older) + "\n").encode()),  # it ended
+        ]
+        s = FakeSession([("/api/games/user/", stream), ("/api/games/export/_ids", by_id)])
         self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 1)  # only the finished one
         self.assertEqual(s.requests[0][1]["params"]["ongoing"], "true")
-        self.assertEqual(c.get("cursor:lichess:knightlyme"), older["createdAt"])  # not past the game in play
+        self.assertEqual(c.get("cursor:lichess:knightlyme"), newer["createdAt"] + 1)  # the cursor moves on
+        self.assertEqual(c.get("ongoing:lichess:knightlyme"), sorted(["gone0000", older["id"]]))
+        self.assertEqual(len(s.requests), 1)  # nothing to look up yet: they were just listed
+        self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 0)
+        self.assertEqual(s.requests[1][1]["params"]["since"], newer["createdAt"] + 1)
+        self.assertIn("_ids", s.requests[2][0])
+        self.assertEqual(s.requests[2][1]["data"], ",".join(sorted(["gone0000", older["id"]])))
+        self.assertEqual(c.get("ongoing:lichess:knightlyme"), [older["id"]])  # the deleted game is dropped
         self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 1)  # it ended: stored now
-        self.assertEqual(s.requests[1][1]["params"]["since"], older["createdAt"])
-        self.assertEqual(c.get("cursor:lichess:knightlyme"), newer["createdAt"] + 1)
+        self.assertEqual(s.requests[4][1]["data"], older["id"])
+        self.assertEqual(c.get("ongoing:lichess:knightlyme"), [])
+        self.assertEqual({g.id for g in c.games("lichess", "KnightlyMe")}, {older["id"], newer["id"]})
+
+    def test_time_classes_lichess_does_not_have_change_nothing_there(self):
+        c = tmpcache(self)
+        s = FakeSession([("/api/games/user/", FakeResponse(200, b""))])
+        lichess.fetch(c, "KnightlyMe", session=s, time_classes=["blitz"])
+        self.assertFalse(lichess.needs_backfill(c, "KnightlyMe", 90, ["blitz", "daily"]))
+        self.assertTrue(lichess.needs_backfill(c, "KnightlyMe", 90, ["blitz", "bullet"]))
 
     def test_cursor_from_an_older_version_is_fetched_again_once(self):
         c = tmpcache(self)
@@ -341,7 +361,7 @@ class ChesscomTest(unittest.TestCase):
         month = json.loads((FIXTURES / "chesscom_2026_10.json").read_text())
         c = tmpcache(self)
         base = "https://api.chess.com/pub/player/knightlyme/games/"
-        arch = {"archives": [base + "2026/09", base + "2026/10"]}
+        arch = {"archives": [base + "2019/03", base + "2026/09", base + "2026/10"]}
         s = FakeSession(
             [
                 ("/games/archives", FakeResponse(200, arch)),
@@ -356,8 +376,10 @@ class ChesscomTest(unittest.TestCase):
         )
         self.assertTrue(chesscom.needs_backfill(c, "KnightlyMe", 60, ["blitz", "correspondence"], now=now))
         self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 60, ["blitz"], now=now))
+        c.put_http(base + "2019/03", 'W/"old"', None)  # a month before the look-back, fetched long ago
         s.requests.clear()
         self.assertEqual(chesscom.fetch(c, "KnightlyMe", session=s, history_days=60, time_classes=None, now=now), 2)
+        self.assertEqual(c.get_http(base + "2019/03"), (None, None))  # a longer look-back would fetch it again
         self.assertEqual(months(), [("2026/09", {}), ("2026/10", {})])  # September again; no 304 for October
         self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 60, None, now=now))
 

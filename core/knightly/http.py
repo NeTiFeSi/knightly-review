@@ -46,9 +46,36 @@ def get(
     **kw: Any,
 ) -> requests.Response:
     """GET that waits `wait_429` seconds (or Retry-After) on HTTP 429, then retries."""
+    return _request(s.get, url, cancel=cancel, retries=retries, wait_429=wait_429, on_wait=on_wait, **kw)
+
+
+def post(
+    s: requests.Session,
+    url: str,
+    *,
+    cancel: threading.Event | None = None,
+    retries: int = 2,
+    wait_429: float = 60.0,
+    on_wait: Callable[[float], None] | None = None,
+    **kw: Any,
+) -> requests.Response:
+    """POST, waiting on HTTP 429 like `get`."""
+    return _request(s.post, url, cancel=cancel, retries=retries, wait_429=wait_429, on_wait=on_wait, **kw)
+
+
+def _request(
+    send: Callable[..., requests.Response],
+    url: str,
+    *,
+    cancel: threading.Event | None,
+    retries: int,
+    wait_429: float,
+    on_wait: Callable[[float], None] | None,
+    **kw: Any,
+) -> requests.Response:
     kw.setdefault("timeout", 30)
     for attempt in range(retries + 1):
-        r = s.get(url, **kw)
+        r = send(url, **kw)
         if r.status_code != 429:
             return r
         r.close()
