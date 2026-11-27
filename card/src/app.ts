@@ -347,7 +347,8 @@ export class App {
     if (this.card.side === 'back') {
       root.addEventListener('mousedown', () => this.cancelGrade(), true);
       root.addEventListener('touchstart', () => this.cancelGrade(), { capture: true, passive: true });
-    }    this.drawClock(); // show the full time during the intro too
+    }
+    this.drawClock(); // show the full time during the intro too
   }
 
   /** Menu under the Export button: the position on the board, as links and a FEN copy. */
@@ -409,15 +410,19 @@ export class App {
     if (ev && ev !== '?') meta.push(ev);
     if (date && !/^\?/.test(date)) meta.push(date.replace(/\.\?\?/g, ''));
     if (this.games.length > 1) meta.push('Game ' + (this.puzzle.game.index + 1) + ' of ' + this.games.length);
-    if (meta.length) head.appendChild(h('div', 'kr-meta', meta.join(' · ')));
     const site = hd.get('Site');
-    if (site && /^https?:\/\//.test(site)) {
-      const a = h('a', 'kr-site', 'View game');
-      a.href = site;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      head.lastElementChild!.appendChild(document.createTextNode(meta.length ? ' · ' : ''));
-      head.lastElementChild!.appendChild(a);
+    const link = site && /^https?:\/\//.test(site) ? site : undefined;
+    if (meta.length || link) {
+      const metaEl = h('div', 'kr-meta', meta.join(' · '));
+      if (link) {
+        const a = h('a', 'kr-site', 'View game');
+        a.href = link;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        if (meta.length) metaEl.appendChild(document.createTextNode(' · '));
+        metaEl.appendChild(a);
+      }
+      head.appendChild(metaEl);
     }
     return head;
   }

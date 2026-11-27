@@ -55,6 +55,12 @@ describe('PuzzleRun', () => {
     expect(c.played.map(n => n.san)).toEqual(['g6']);
   });
 
+  it('does not count castling as a capture for the fifty-move rule', () => {
+    const pgn = '[FEN "4k3/p7/8/8/8/8/P7/4K2R w K - 99 80"]\n[SetUp "1"]\n\n1. Kd1 $2 { [%kr 1] } (1. O-O $1) *';
+    const r = new PuzzleRun(findPuzzle(parseGames(pgn), 1)!.position, DEFAULT_ACCEPT);
+    expect(r.play(mv(r.cur, 'e1g1'))).toMatchObject({ kind: 'solved', draw: 'Draw by the fifty-move rule.' });
+  });
+
   it('handles castling dragged as king two squares (white to move)', () => {
     const r = run(4);
     expect(r.userColor).toBe('white');

@@ -191,6 +191,9 @@ class FakeSession:
                 return resp
         return FakeResponse(404, b"{}")
 
+    def post(self, url, **kw):
+        return self.get(url, **kw)
+
 
 # 1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 — the Najdorf.
 SICILIAN = ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6", "b1c3", "a7a6"]

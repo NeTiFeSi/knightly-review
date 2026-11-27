@@ -181,7 +181,9 @@ export class PuzzleRun {
   private count(before: KNode, node: KNode): string | undefined {
     const pos = positionOf(before);
     const m = node.move!;
-    const reset = 'from' in m && (pos.board.has(m.to) || pos.board.get(m.from)?.role === 'pawn');
+    // A capture lands on an enemy piece; castling (king onto its own rook, in chessops) is not one.
+    const enemy = pos.board[pos.turn === 'white' ? 'black' : 'white'];
+    const reset = 'from' in m && (enemy.has(m.to) || pos.board.get(m.from)?.role === 'pawn');
     this.halfmoves = reset ? 0 : this.halfmoves + 1;
     const k = fenKey(node.fen);
     const n = (this.seen.get(k) || 0) + 1;
