@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 import chess
 
-from .. import http
+from .. import http, sources
 from ..model import Game
 
 API = "https://lichess.org"
@@ -88,10 +88,14 @@ def _start_ms(history_days: int) -> int:
     return 0 if history_days <= 0 else int((time.time() - history_days * 86400) * 1000)
 
 
-def needs_backfill(cache, user: str, history_days: int) -> bool:
-    """True when the look-back now reaches further back than the games fetched so far."""
+def needs_backfill(
+    cache, user: str, history_days: int, time_classes: list[str] | None = None, rated_only: bool = False
+) -> bool:
+    """True when the look-back now reaches further back than the games fetched so far, or the filters now let
+    through games the last download left out."""
     floor = cache.get(_keys(user)[1])
-    return floor is None or _start_ms(history_days) < int(floor)
+    widened = sources.filters_widened(cache, "lichess", user, time_classes, rated_only)
+    return floor is None or _start_ms(history_days) < int(floor) or widened
 
 
 def fetch(
@@ -119,11 +123,13 @@ def fetch(
     start = _start_ms(history_days)
     floor = cache.get(floor_key)
     cursor = int(cache.get(cursor_key, 0))
-    if floor is None or start < int(floor) or not cursor or not cache.get(_refetched_key(user)):
+    widened = sources.filters_widened(cache, "lichess", user, time_classes, rated_only)
+    if floor is None or start < int(floor) or not cursor or not cache.get(_refetched_key(user)) or widened:
         cursor = start
         cache.set(cursor_key, cursor)
         cache.set(floor_key, start)
         cache.set(_refetched_key(user), True)
+    sources.mark_filters(cache, "lichess", user, time_classes, rated_only)  # the cursor resumes from here
     params = {
         "since": cursor,
         "moves": "true",

@@ -54,9 +54,9 @@ def secrets() -> dict[str, Any]:
 def save_secrets(data: dict[str, Any]) -> None:
     USER_FILES.mkdir(exist_ok=True)
     tmp = SECRETS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data))
-    if os.name != "nt":
-        os.chmod(tmp, 0o600)
+    tmp.unlink(missing_ok=True)  # created afresh below, so it is never readable by others, even for a moment
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+        f.write(json.dumps(data))
     tmp.replace(SECRETS)
 
 

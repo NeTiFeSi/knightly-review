@@ -245,7 +245,7 @@ class LichessTest(unittest.TestCase):
         self.assertNotIn("evals", params)  # Lichess's evals have no WDL; the local engine does all analysis
         newest = max(json.loads(l)["createdAt"] for l in self.lines)
         self.assertEqual(c.get("cursor:lichess:knightlyme"), newest + 1)
-        self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s), 0)  # already stored
+        self.assertEqual(lichess.fetch(c, "KnightlyMe", session=s, time_classes=["blitz", "rapid"]), 0)  # stored
         self.assertEqual(s.requests[1][1]["params"]["since"], newest + 1)
 
     def test_game_still_being_played_is_fetched_once_it_ends(self):
@@ -273,6 +273,23 @@ class LichessTest(unittest.TestCase):
         self.assertLessEqual(abs(s.requests[1][1]["params"]["since"] - floor), 5000)  # the whole look-back again
         lichess.fetch(c, "KnightlyMe", session=s, history_days=30)
         self.assertGreater(s.requests[2][1]["params"]["since"], floor + 5000)  # then incremental
+
+    def test_wider_filters_fetch_the_look_back_again(self):
+        c = tmpcache(self)
+        body = ("\n".join(self.lines) + "\n").encode()
+        s = FakeSession([("/api/games/user/", FakeResponse(200, body))])
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30, time_classes=["blitz"], rated_only=True)
+        floor = c.get("floor:lichess:knightlyme")
+        self.assertFalse(lichess.needs_backfill(c, "KnightlyMe", 30, ["blitz"], True))
+        self.assertTrue(lichess.needs_backfill(c, "KnightlyMe", 30, ["blitz", "rapid"], True))  # a new time control
+        self.assertTrue(lichess.needs_backfill(c, "KnightlyMe", 30, ["blitz"], False))  # casual games too
+        self.assertTrue(lichess.needs_backfill(c, "KnightlyMe", 30, None, True))  # every time control
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30, time_classes=["blitz"])
+        self.assertNotIn("rated", s.requests[1][1]["params"])
+        self.assertLessEqual(abs(s.requests[1][1]["params"]["since"] - floor), 5000)  # the whole look-back again
+        self.assertFalse(lichess.needs_backfill(c, "KnightlyMe", 30, ["blitz"], False))
+        lichess.fetch(c, "KnightlyMe", session=s, history_days=30, time_classes=["blitz"], rated_only=True)
+        self.assertGreater(s.requests[2][1]["params"]["since"], floor + 5000)  # narrower: incremental
 
     def test_all_time_and_growing_look_back(self):
         c = tmpcache(self)
@@ -319,6 +336,30 @@ class ChesscomTest(unittest.TestCase):
         oct_reqs = [kw for url, kw in s.requests if url.endswith("2026/10")]
         self.assertEqual(oct_reqs[1]["headers"]["If-None-Match"], 'W/"abc"')
         self.assertEqual(sum(url.endswith("2026/09") for url, _ in s.requests), 1)  # finished month: once
+
+    def test_wider_filters_fetch_every_month_again(self):
+        month = json.loads((FIXTURES / "chesscom_2026_10.json").read_text())
+        c = tmpcache(self)
+        base = "https://api.chess.com/pub/player/knightlyme/games/"
+        arch = {"archives": [base + "2026/09", base + "2026/10"]}
+        s = FakeSession(
+            [
+                ("/games/archives", FakeResponse(200, arch)),
+                ("/games/2026/10", [FakeResponse(200, month, {"ETag": 'W/"abc"'})]),
+                ("/games/2026/09", FakeResponse(200, {"games": []})),
+            ]
+        )
+        now = 1793000000  # 2026-10-26: October is the current month
+        months = lambda: [(u.rsplit("games/", 1)[1], kw.get("headers")) for u, kw in s.requests if "/games/2" in u]
+        self.assertEqual(
+            chesscom.fetch(c, "KnightlyMe", session=s, history_days=60, time_classes=["blitz"], now=now), 0
+        )
+        self.assertTrue(chesscom.needs_backfill(c, "KnightlyMe", 60, ["blitz", "correspondence"], now=now))
+        self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 60, ["blitz"], now=now))
+        s.requests.clear()
+        self.assertEqual(chesscom.fetch(c, "KnightlyMe", session=s, history_days=60, time_classes=None, now=now), 2)
+        self.assertEqual(months(), [("2026/09", {}), ("2026/10", {})])  # September again; no 304 for October
+        self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 60, None, now=now))
 
     def test_all_time_backfill(self):
         c = tmpcache(self)
@@ -698,6 +739,26 @@ class JobsTest(unittest.TestCase):
             analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE),
         )
         self.assertEqual((again.new_cards, again.notes), (0, []))
+
+    def test_rated_only_leaves_out_casual_games_already_downloaded(self):
+        an = lambda *a: FakeAnalyser(table=PUNISH_TABLE)
+        casual = run_update(
+            Config(**CFG, rated_only=True), seed(self, [recent(rated=False)]), fetch=False, analyser_factory=an
+        )
+        self.assertEqual(casual.notes, [])
+        rated = seed(self, [recent(rated=True)])
+        self.assertEqual(
+            len(run_update(Config(**CFG, rated_only=True), rated, fetch=False, analyser_factory=an).notes), 1
+        )
+
+    def test_without_a_collection_the_puzzle_records_are_kept(self):
+        c = seed(self, [recent()])
+        store = puzzles.Store(c)
+        store.put(puzzles.Puzzle(key="puzzle:9:abcdef123456", fen=chess.STARTING_FEN, ply=9))
+        run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
+        self.assertIsNotNone(store.get("puzzle:9:abcdef123456"))  # the CLI: no collection to compare with
+        run_update(Config(**CFG), c, fetch=False, existing={}, analyser_factory=FakeAnalyser)
+        self.assertIsNone(store.get("puzzle:9:abcdef123456"))  # the collection has no such note
 
     def test_no_second_puzzle_when_the_reply_is_unknown(self):
         res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser)

@@ -282,10 +282,9 @@ class Miner:
         """The notes of a mistake: one for every decision position of its two trees, deepest first, then the
         mistake's own. A position that is a card already is never made again. Stops between notes at the
         card limit (the mistake is found again next time and only the missing notes are made)."""
-        ply = card.ply
         similar_to = self._similar(u.board)
         if similar_to is not None:
-            self._merge(similar_to, u, ply)
+            self._merge(similar_to, u, card.ply)
             return
         self._grow(u.board.fen(), game, card)
 

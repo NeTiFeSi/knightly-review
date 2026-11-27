@@ -67,7 +67,8 @@ def fetch_all(
         # A manual update may always ask Lichess (incremental); Chess.com's cache makes
         # frequent asks pointless, so its cooldown always applies.
         mod = lichess if source == "lichess" else chesscom
-        backfill = mod.needs_backfill(cache, user, cfg.history_days)  # the look-back grew
+        # the look-back grew, or the filters let through games they left out
+        backfill = mod.needs_backfill(cache, user, cfg.history_days, cfg.time_classes, cfg.rated_only)
         if not sources.due(cache, source, user) and not (force and source == "lichess") and not backfill:
             continue
         msg = lambda m: progress("fetch", 0, 0, m)
@@ -119,7 +120,8 @@ def run_update(
 ) -> UpdateResult:
     """`precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
     the searches in the cache. `analysis_minutes` still bounds it.
-    `existing` maps note key → PGN of the Knightly notes already in the collection.
+    `existing` maps note key → PGN of the Knightly notes already in the collection. None: no collection to
+    compare with (the CLI), so the saved puzzle records are kept rather than deleted as gone.
     `on_note`: called with a note's whole spec as soon as it is built, so the caller can write it while
     the run goes on: a new puzzle note, or an old one whose Notes field changed (a move played again,
     a similar position). `result.notes` ends with the same specs, and holds those made so far if the run
@@ -131,6 +133,7 @@ def run_update(
         tracker.listen(legacy_listener(progress))
     progress = progress or (lambda *a: None)
     cancel = cancel or threading.Event()
+    have_collection = existing is not None
     existing = existing or {}
     result = UpdateResult()
     try:
@@ -144,7 +147,7 @@ def run_update(
                 games += [
                     g
                     for g in cache.games(source, user, since)
-                    if not cfg.time_classes or g.time_class in cfg.time_classes
+                    if (not cfg.time_classes or g.time_class in cfg.time_classes) and (not cfg.rated_only or g.rated)
                 ]
         games.sort(key=lambda g: g.end_ts, reverse=True)  # newest first across both sites
         by_key = {g.key: g for g in games}
@@ -161,7 +164,7 @@ def run_update(
                 if p is not None:
                     known.append(p)
         for key in store:  # puzzles whose note is gone from the collection may be made again
-            if key not in existing:
+            if have_collection and key not in existing:
                 store.delete(key)
         exclude = claimed
 

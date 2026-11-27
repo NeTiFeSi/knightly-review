@@ -14,6 +14,13 @@ and the project follows [Semantic Versioning](https://semver.org/).
 - **Undo after answering a card undoes the answer again.** The card's record of which replies it showed was saved
   as an Anki change of its own, so Ctrl+Z undid that record instead of your last answer. It is now saved when you
   answer the card, as part of the same undo step.
+- **Wider game filters now bring in the games they used to leave out.** The time controls and "rated only" are
+  applied while downloading, so adding a time control or turning "rated only" off had no effect on games already
+  passed over. The next update now downloads your history window again from Lichess and Chess.com. Turning
+  "rated only" on now also leaves out casual games that were downloaded before.
+- **Castling no longer restarts the fifty-move count** on the card, so a line that reaches the fifty-move rule
+  ends there as a draw.
+- The Lichess login token file is now private to your user from the moment it is written.
 
 ## [0.2.1] - 2026-11-27
 

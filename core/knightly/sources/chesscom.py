@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 import chess.pgn
 
-from .. import http
+from .. import http, sources
 from ..model import Game
 
 API = "https://api.chess.com/pub"
@@ -86,9 +86,17 @@ def fetch(
     done_key = f"chesscom_done:{u}"
     # Before the look-back was recorded, the oldest month was stored only in part: redo all once.
     done = set(cache.get(done_key, [])) if cache.get(_first_key(u)) is not None else set()
+    all_months = [a for a in r.json().get("archives", []) if _month(a) >= first]
+    if sources.filters_widened(cache, "chesscom", user, time_classes, rated_only):
+        # Games the old filters left out: every month again, without the validators (they'd answer 304).
+        done = set()
+        cache.set(done_key, [])
+        for url in all_months:
+            cache.put_http(url, None, None)
+    sources.mark_filters(cache, "chesscom", user, time_classes, rated_only)  # `done` resumes from here
     cur = time.gmtime(now or time.time())
     current = (cur.tm_year, cur.tm_mon)
-    archives = [a for a in r.json().get("archives", []) if _month(a) >= first and a not in done]
+    archives = [a for a in all_months if a not in done]
     new = 0
     for url in archives:
         if cancel is not None and cancel.is_set():
@@ -137,7 +145,16 @@ def _first_key(user: str) -> str:
     return f"chesscom_first:{user.lower()}"
 
 
-def needs_backfill(cache, user: str, history_days: int, now: float | None = None) -> bool:
-    """True when the look-back now reaches further back than any fetch so far."""
+def needs_backfill(
+    cache,
+    user: str,
+    history_days: int,
+    time_classes: list[str] | None = None,
+    rated_only: bool = False,
+    now: float | None = None,
+) -> bool:
+    """True when the look-back now reaches further back than any fetch so far, or the filters now let through
+    games the last download left out."""
     got = cache.get(_first_key(user))
-    return got is None or _first_month(history_days, now) < tuple(got)
+    widened = sources.filters_widened(cache, "chesscom", user, time_classes, rated_only)
+    return got is None or _first_month(history_days, now) < tuple(got) or widened
