@@ -21,7 +21,7 @@ You need [Anki](https://apps.ankiweb.net/) 25.07 or newer on a computer (Windows
 
    **Download Stockfish for me** fetches the official build from the Stockfish GitHub releases, checks it, and keeps it inside the add-on's folder. No admin rights needed.
 
-   Stockfish searches every position to a fixed depth: 13 by default, which is quick. 20 or more gives better judgements if your computer can take it. Its hash table size (RAM) is in the same box.
+   Stockfish searches every position to a fixed depth (in the same box as its hash table size, in RAM).
 
    Optional: **Lc0** as a second engine (much faster with a graphics card; get it from [lczero.org](https://lczero.org/play/download/)). When it's on, Lc0 analyses each position after Stockfish, for as long as Stockfish took there. Lc0's judgement is used, except in mate positions, where Stockfish's is. Only Stockfish and Lc0 are supported.
 4. Save. The first update fetches your recent games and analyses them in the background (a few minutes; Anki stays usable). New cards appear in the **Knightly Review** deck.
@@ -73,12 +73,12 @@ Every move on the back of a card has a grade, the standard chess annotation symb
 | `!!` | brilliant | the only good move, and it sacrifices material |
 | `□` | only move | the only good move, and not a sacrifice |
 | `!?` | interesting | a good move that gives up material while another good move keeps more |
-| `!` | good | any other good move: within **Good move** (2 % by default) of the best |
-| `?!` | inaccuracy | not a good move; loses up to 10 % |
+| `!` | good | any other good move: within **Good move** (1 % by default) of the best |
+| `?!` | inaccuracy | not a good move; loses 5–10 % (the `inaccuracy` setting is where it starts) |
 | `?` | mistake | loses 10–20 % |
 | `??` | blunder | loses more than 20 % |
 
-- By default, `!!`, `□`, `!` and `!?` are accepted as answers; `?!`, `?` and `??` fail the puzzle. A move that loses a little more than a good move (1–5 % win rate) gets no mark: normal play, never a puzzle of its own, and not accepted by default (the card says something better was available; turn on `acceptNeutral` to accept it). Change which ones count with `acceptNags` ([card/README.md](card/README.md#settings)).
+- By default, `!!`, `□`, `!` and `!?` are accepted as answers; `?!`, `?` and `??` fail the puzzle. A move that loses a little more than a good move (between **Good move** and `inaccuracy`: 1–5 % by default) gets no mark: normal play, never a puzzle of its own, and not accepted by default (the card says something better was available; turn on `acceptNeutral` to accept it). Change which ones count with `acceptNags` ([card/README.md](card/README.md#settings)).
 - When the best move mates by force, a good move is one that keeps a forced mate, however long. A move that gives the mate up is `?!` at best, even if the engine still calls the position won. Turn on `strictMate` to accept only the fastest mate.
 - A *sacrifice* is a move that, along the engine's line, ends at least 2 points of material (pawn 1, knight and bishop 3, rook 5, queen 9) below the line that keeps the most.
 - The numbers beside moves (`+2.4`, `#3`) are the engine's eval from White's point of view; `#3` is mate in 3.
@@ -102,7 +102,7 @@ There are two places for settings. **Tools → Knightly Review → Settings…**
 | After the update | stop | **Keep analysing** keeps analysing, ply by ply, in the background, so the next update adds puzzles right away. **Keep adding cards** goes on with no per-update limit. Both run the engine at full load (heat, fan, battery). |
 | Opponents' mistakes | off | Also make cards from your opponents' mistakes, played from their side. |
 | Update when Anki starts / every | on / 6 h | Automatic updates while Anki is open. |
-| Good move: within | 2 % | A move this close to the best (in win rate) counts as a correct answer. |
+| Good move: within | 1 % | A move this close to the best (in win rate) counts as a correct answer. |
 
 Not in the window, but in the add-on's config (**Tools → Add-ons → Knightly Review → Config**): `time_classes` (which time controls to fetch), `rated_only`, and `min_loss` (default 1 %: a move you played must lose more than this, in win rate, to become a puzzle). See [addon/knightly_review/config.md](addon/knightly_review/config.md) for every key.
 

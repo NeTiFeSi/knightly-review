@@ -87,6 +87,9 @@ def main() -> None:
                 note.guid = guid_for(Path(p).name)
                 note["PGN"] = html.escape(pgn, quote=False).replace("\n", "<br>")
                 note["Cards"] = cards_field(pgn)
+                notes_file = ROOT / "dev" / "samples-notes.html"  # made by sample_stats.py
+                if notes_file.exists():
+                    note["Notes"] = notes_file.read_text().strip()
                 col.add_note(note, did)
             out = str(Path(args.out).resolve())
             col.export_anki_package(
