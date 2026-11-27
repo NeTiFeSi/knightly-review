@@ -29,7 +29,7 @@ from .vendor.knightly.engine.broker import Lease, Pool
 from .vendor.knightly.http import Cancelled
 from .vendor.knightly.model import NoteSpec
 from .vendor.knightly.progress import Tracker, legacy_listener
-from .vendor.knightly.supervisor import NOTE, SUSPEND, Context, Outcome, Supervisor
+from .vendor.knightly.supervisor import NOTE, STAGES, SUSPEND, Context, Outcome, StageState, Supervisor
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class Host:
         self.drainer: QTimer | None = None
         self._draining = False
         self._wrote: kc.RunWriter | None = None
+        self.finished: dict[str, float] = {}  # stage → when its last run ended (time.time())
 
     # --- what the progress window reads
     @property
@@ -154,6 +155,19 @@ class Host:
         self._emit("start", 0, 0, "Starting…", force=True)
         return True
 
+    def run(self, name: str) -> bool:
+        """Run one stage now (and the stages after it when it has something new)."""
+        if self.sup is None and not self.launch():
+            return False
+        assert self.sup is not None
+        self.sup.trigger(name, manual=True)
+        return True
+
+    def stages(self) -> list[tuple[str, str, StageState | None]]:
+        """(name, label, state) of each stage, in order; the state is None before the stages started."""
+        states = self.sup.state if self.sup is not None else {}
+        return [(name, LABELS[name], states.get(name)) for name in STAGES]
+
     def stop(self, wait: float = 0) -> None:
         """Cancel what the stages are doing now (they stay ready for their next run)."""
         sup = self.sup
@@ -203,6 +217,7 @@ class Host:
 
     def _on_done(self, name: str, out: Outcome | None, error: str) -> None:
         label = LABELS[name]
+        self.finished[name] = time.time()
         if error == "cancelled":
             self._emit("done", 0, 0, f"{label}: cancelled.", force=True)
         elif error:
@@ -272,7 +287,7 @@ updater = Host()
 def _on_profile_open() -> None:
     cfg = settings.load()
     try:  # card templates and styling of a new add-on version reach the collection now, not at the next update
-        if mw.col is not None and kc.MODEL in mw.col.models.all_names():
+        if mw.col is not None and mw.col.models.by_name(kc.MODEL) is not None:
             changes = kc.ensure_installed(mw.col)
             if changes:
                 updater.log("Card templates: " + "; ".join(changes))

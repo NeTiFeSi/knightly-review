@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import ClassVar
 
 from aqt import mw
@@ -29,7 +30,9 @@ from aqt.qt import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QStackedWidget,
     Qt,
     QTableWidget,
     QTableWidgetItem,
@@ -41,6 +44,7 @@ from aqt.qt import (
 from aqt.utils import askUser, showWarning, tooltip
 
 from . import settings
+from .runner import LABELS as LABELS_SHORT
 from .runner import updater
 from .vendor.knightly.cache import SqliteCache
 from .vendor.knightly.engine import discover as kd
@@ -234,6 +238,16 @@ class EngineDialog(QDialog):
 # ---------------------------------------------------------------- settings dialog
 
 
+TIME_CLASSES = [
+    ("ultraBullet", "UltraBullet"),
+    ("bullet", "Bullet"),
+    ("blitz", "Blitz"),
+    ("rapid", "Rapid"),
+    ("classical", "Classical"),
+    ("correspondence", "Correspondence / daily"),
+]
+
+
 class AccountsTable(QWidget):
     """The accounts whose games are collected: site, name, and whether they are yours or another player's."""
 
@@ -246,7 +260,10 @@ class AccountsTable(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Site", "Username", "Whose games"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setToolTip(
@@ -361,16 +378,95 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(self)
         if first_run:
             hello = QLabel(
-                "<b>Welcome to Knightly Review.</b> Enter your usernames and check that Stockfish was found. "
-                "New cards will be made from your recent games, and kept up to date in the background."
+                "<b>Welcome to Knightly Review.</b> Add your accounts on the Games page and check that Stockfish "
+                "was found on the Engine page. New cards will be made from your recent games, and kept up to "
+                "date in the background."
             )
             hello.setWordWrap(True)
             lay.addWidget(hello)
+        body = QHBoxLayout()
+        self.page_list = QListWidget()
+        self.page_list.setMaximumWidth(150)
+        self.pages = QStackedWidget()
+        self.page_list.currentRowChanged.connect(self.pages.setCurrentIndex)
+        body.addWidget(self.page_list)
+        body.addWidget(self.pages, 1)
+        lay.addLayout(body, 1)
+        self._page_games()
+        self._page_engine()
+        self._page_annotate()
+        self._page_candidates()
+        self._page_puzzles()
+        self._page_notes()
+        self.page_list.setCurrentRow(0)
 
-        acc = QGroupBox("Games")
-        af = QFormLayout(acc)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self.save)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        self.resize(860, 600)
+        self.engine_path = self.cfg.get("stockfish_path") or self.cfg.get("engine_path", "")
+        self._show_engine()
+        self._show_login()
+        if not self.engine_path:
+            # Pick a found Stockfish silently if there is one.
+            _bg(lambda: kd.discover(str(settings.ENGINES_DIR)), self._auto_engines, lambda e: None)
+
+    # --- pages: one per stage, plus the engine they share
+    def _page(self, name: str, about: str) -> QFormLayout:
+        """A page of the dialog: its title, what the stage does, and a form for its settings."""
+        self.page_list.addItem(name)
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        title = QLabel(f"<h3>{name}</h3>")
+        text = QLabel(about)
+        text.setWordWrap(True)
+        text.setStyleSheet("color: gray")
+        col.addWidget(title)
+        col.addWidget(text)
+        form = QFormLayout()
+        col.addLayout(form)
+        col.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        self.pages.addWidget(scroll)
+        return form
+
+    def _go(self, name: str) -> None:
+        for i in range(self.page_list.count()):
+            if self.page_list.item(i).text() == name:
+                self.page_list.setCurrentRow(i)
+
+    @staticmethod
+    def _minutes(value: float, none: str, tip: str) -> QSpinBox:
+        w = QSpinBox()
+        w.setRange(0, 24 * 60)
+        w.setSuffix(" min")
+        w.setSpecialValueText(none)
+        w.setValue(int(value))
+        w.setToolTip(tip)
+        return w
+
+    @staticmethod
+    def _percent(value: float, low: float, high: float, tip: str) -> QDoubleSpinBox:
+        w = QDoubleSpinBox()
+        w.setRange(low, high)
+        w.setSingleStep(0.5)
+        w.setSuffix(" %")
+        w.setValue(float(value))
+        w.setToolTip(tip)
+        return w
+
+    def _page_games(self) -> None:
+        f = self._page(
+            "Games",
+            "Whose games are collected and when. Puzzles are made from your games; other players' games "
+            "(masters, rivals, players to compare with) are downloaded and exported too.",
+        )
         self.accounts = AccountsTable(self.cfg.get("accounts", []))
-        af.addRow(self.accounts)
+        f.addRow(self.accounts)
         self.login_btn = QPushButton()
         self.login_status = QLabel()
         self.login_status.setWordWrap(True)
@@ -378,25 +474,9 @@ class SettingsDialog(QDialog):
         lrow = QHBoxLayout()
         lrow.addWidget(self.login_status, 1)
         lrow.addWidget(self.login_btn)
-        af.addRow("Lichess login:", lrow)
+        f.addRow("Lichess login:", lrow)
         self.pgn = PathList(self.cfg.get("pgn_paths", []))
-        af.addRow("PGN files:", self.pgn)
-        self.export_dir = QLineEdit(self.cfg.get("export_dir", ""))
-        self.export_dir.setPlaceholderText("off")
-        self.export_dir.setToolTip("After new games arrive, every account's games are written here as PGN files.")
-        browse = QPushButton("Choose…")
-        browse.clicked.connect(self.pick_export_dir)
-        erow = QHBoxLayout()
-        erow.addWidget(self.export_dir, 1)
-        erow.addWidget(browse)
-        af.addRow("Export games to:", erow)
-        self.contact = QLineEdit(self.cfg.get("contact_email", ""))
-        self.contact.setPlaceholderText("optional")
-        self.contact.setToolTip(
-            "Chess.com asks programs that use its API for a way to contact whoever runs them.\n"
-            "If you enter an email address, it is sent to Chess.com with each download, and nowhere else."
-        )
-        af.addRow("Email for Chess.com:", self.contact)
+        f.addRow("PGN files:", self.pgn)
         days = int(self.cfg.get("history_days", 90))
         self.days = QSpinBox()
         self.days.setRange(1, 36500)
@@ -414,11 +494,55 @@ class SettingsDialog(QDialog):
         drow.addWidget(self.days)
         drow.addWidget(self.all_time)
         drow.addStretch()
-        af.addRow("Look back:", drow)
-        lay.addWidget(acc)
+        f.addRow("Look back:", drow)
+        chosen = set(self.cfg.get("time_classes") or [])
+        self.time_classes: dict[str, QCheckBox] = {}
+        tgrid = QGridLayout()
+        for i, (tc, label) in enumerate(TIME_CLASSES):
+            box = QCheckBox(label)
+            box.setChecked(not chosen or tc in chosen)
+            self.time_classes[tc] = box
+            tgrid.addWidget(box, i // 3, i % 3)
+        f.addRow("Time controls:", tgrid)
+        self.rated_only = QCheckBox("Rated games only")
+        self.rated_only.setChecked(bool(self.cfg.get("rated_only", False)))
+        f.addRow("", self.rated_only)
+        self.on_start = QCheckBox("When Anki starts")
+        self.on_start.setChecked(bool(self.cfg.get("update_on_startup", True)))
+        self.every = QSpinBox()
+        self.every.setRange(0, 168)
+        self.every.setSuffix(" h")
+        self.every.setPrefix("and every ")
+        self.every.setSpecialValueText("and when you ask (Update now)")
+        self.every.setValue(int(self.cfg.get("update_every_hours", 6)))
+        srow = QHBoxLayout()
+        srow.addWidget(self.on_start)
+        srow.addWidget(self.every)
+        srow.addStretch()
+        f.addRow("Fetch new games:", srow)
+        self.export_dir = QLineEdit(self.cfg.get("export_dir", ""))
+        self.export_dir.setPlaceholderText("off")
+        self.export_dir.setToolTip("After new games arrive, every account's games are written here as PGN files.")
+        browse = QPushButton("Choose…")
+        browse.clicked.connect(self.pick_export_dir)
+        erow = QHBoxLayout()
+        erow.addWidget(self.export_dir, 1)
+        erow.addWidget(browse)
+        f.addRow("Export games to:", erow)
+        self.contact = QLineEdit(self.cfg.get("contact_email", ""))
+        self.contact.setPlaceholderText("optional")
+        self.contact.setToolTip(
+            "Chess.com asks programs that use its API for a way to contact whoever runs them.\n"
+            "If you enter an email address, it is sent to Chess.com with each download, and nowhere else."
+        )
+        f.addRow("Email for Chess.com:", self.contact)
 
-        sf = QGroupBox("Stockfish (required)")
-        sff = QFormLayout(sf)
+    def _page_engine(self) -> None:
+        f = self._page(
+            "Engine",
+            "Stockfish, shared by every stage: making cards comes first, annotating waits. It is stopped when "
+            "idle for a minute.",
+        )
         self.engine = QLabel()
         self.engine.setWordWrap(True)
         change = QPushButton("Change…")
@@ -426,81 +550,114 @@ class SettingsDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(self.engine, 1)
         row.addWidget(change)
-        sff.addRow(row)
-        self.depth = QSpinBox()
-        self.depth.setRange(8, 60)
-        self.depth.setValue(int(self.cfg.get("sf_depth", 13)))
-        self.depth.setToolTip("Every position is searched to this depth, with every move scored. Higher is slower.")
-        sff.addRow("Depth:", self.depth)
+        f.addRow("Stockfish:", row)
         self.threads = QSpinBox()
         self.threads.setRange(0, 256)
         self.threads.setSpecialValueText("half the CPU cores")
         self.threads.setValue(int(self.cfg.get("threads", 0)))
-        sff.addRow("Threads:", self.threads)
+        f.addRow("Threads:", self.threads)
         self.hash = QSpinBox()
         self.hash.setRange(16, 65536)
         self.hash.setSingleStep(64)
         self.hash.setSuffix(" MB")
         self.hash.setValue(int(self.cfg.get("hash_mb", 64)))
         self.hash.setToolTip("Memory for Stockfish's hash table. More helps deeper searches.")
-        sff.addRow("Hash (RAM):", self.hash)
-        lay.addWidget(sf)
+        f.addRow("Hash (RAM):", self.hash)
 
-        work = QGroupBox("Cards and updates")
-        wf = QFormLayout(work)
-        self.deck = QLineEdit(self.cfg.get("deck", "Knightly Review"))
-        wf.addRow("Deck:", self.deck)
-        self.max_cards = QSpinBox()
-        self.max_cards.setRange(1, 200)
-        self.max_cards.setValue(int(self.cfg.get("max_new_cards", 10)))
-        wf.addRow("New cards per update:", self.max_cards)
-        self.minutes = QSpinBox()
-        self.minutes.setRange(0, 24 * 60)
-        self.minutes.setSuffix(" min")
-        self.minutes.setSpecialValueText("until the cards are found")
-        self.minutes.setValue(int(self.cfg.get("analysis_minutes", 10)))
-        self.minutes.setToolTip("Engine time for confirming puzzles and making their cards, each time it runs.")
-        wf.addRow("Making cards, per run:", self.minutes)
-        self.annotate_minutes = QSpinBox()
-        self.annotate_minutes.setRange(0, 24 * 60)
-        self.annotate_minutes.setSuffix(" min")
-        self.annotate_minutes.setSpecialValueText("until every position is annotated")
-        self.annotate_minutes.setValue(int(self.cfg.get("annotate_minutes", 10)))
-        self.annotate_minutes.setToolTip(
-            "Engine time for the cheap look at every position of your games (how good each move was),\n"
-            "each time new games arrive. It carries on where it stopped."
+    def _page_annotate(self) -> None:
+        f = self._page(
+            "Annotating",
+            "How good each move of your games was: a cheap look at every position, ply by ply, then a full "
+            "search (every move scored) of the positions that may hold a puzzle.",
         )
-        wf.addRow("Annotating, per run:", self.annotate_minutes)
+        self.scan_depth = QSpinBox()
+        self.scan_depth.setRange(4, 60)
+        self.scan_depth.setValue(int(self.cfg.get("scan_depth", 10)))
+        self.scan_depth.setToolTip("The cheap look at every position. Never deeper than the full search.")
+        f.addRow("Scan depth:", self.scan_depth)
+        self.depth = QSpinBox()
+        self.depth.setRange(8, 60)
+        self.depth.setValue(int(self.cfg.get("sf_depth", 13)))
+        self.depth.setToolTip("Positions that may hold a puzzle are searched to this depth, every move scored.")
+        f.addRow("Full search depth:", self.depth)
+        self.good = self._percent(
+            self.cfg.get("good_move", 1.0),
+            0.1,
+            10,
+            "A move this close to the engine's best (in win rate) counts as a correct answer.",
+        )
+        f.addRow("Good move: within", self.good)
+        self.inaccuracy = self._percent(
+            self.cfg.get("inaccuracy", 5.0),
+            1,
+            50,
+            "A move losing this much win rate or more is an inaccuracy (?!). Between a good move and this is\n"
+            "normal play: no mark.",
+        )
+        f.addRow("Inaccuracy from:", self.inaccuracy)
+        self.annotate_minutes = self._minutes(
+            self.cfg.get("annotate_minutes", 10),
+            "until every position is annotated",
+            "Engine time for each run, after new games arrive. It carries on where it stopped.",
+        )
+        f.addRow("Time per run:", self.annotate_minutes)
         self.keep = QCheckBox("Keep annotating in the background, at low priority, while Anki is open")
         self.keep.setChecked(bool(self.cfg.get("keep_annotating", False)))
         self.keep.setToolTip(
-            "Cards are still made only up to “New cards per update”; annotating ahead makes them come faster.\n"
+            "Cards are still made only up to “New cards per run”; annotating ahead makes them come faster.\n"
             "Stop it with Cancel in the progress window or by closing the profile."
         )
-        wf.addRow("", self.keep)
+        f.addRow("", self.keep)
         self.keep_hours = QDoubleSpinBox()
         self.keep_hours.setRange(0, 72)
         self.keep_hours.setDecimals(1)
         self.keep_hours.setSuffix(" h")
         self.keep_hours.setSpecialValueText("until stopped or everything is annotated")
         self.keep_hours.setValue(float(self.cfg.get("keep_annotating_hours", 0)))
-        wf.addRow("For at most:", self.keep_hours)
-        self.opponent = QCheckBox("Also make cards from my opponents' mistakes (played from their side)")
-        self.opponent.setChecked(bool(self.cfg.get("include_opponent", False)))
-        wf.addRow("", self.opponent)
-        self.on_start = QCheckBox("Update when Anki starts")
-        self.on_start.setChecked(bool(self.cfg.get("update_on_startup", True)))
-        wf.addRow("", self.on_start)
-        self.every = QSpinBox()
-        self.every.setRange(0, 168)
-        self.every.setSuffix(" h")
-        self.every.setSpecialValueText("never")
-        self.every.setValue(int(self.cfg.get("update_every_hours", 6)))
-        wf.addRow("Also update every:", self.every)
-        lay.addWidget(work)
+        f.addRow("For at most:", self.keep_hours)
 
-        manage = QGroupBox("Notes already in Anki")
-        mf = QVBoxLayout(manage)
+    def _page_candidates(self) -> None:
+        f = self._page(
+            "Candidates",
+            "Which mistakes are worth a puzzle: biggest first, ply by ply, once a whole ply is annotated.",
+        )
+        self.min_loss = self._percent(
+            self.cfg.get("min_loss", 1.0),
+            0.1,
+            50,
+            "A move you played must lose more than this much win rate, against the best move, to become a puzzle.",
+        )
+        f.addRow("A puzzle loses more than:", self.min_loss)
+        self.opponent = QCheckBox("Also my opponents' mistakes (played from their side)")
+        self.opponent.setChecked(bool(self.cfg.get("include_opponent", False)))
+        f.addRow("", self.opponent)
+
+    def _page_puzzles(self) -> None:
+        f = self._page(
+            "Puzzles",
+            "Each candidate gets the full search and, when it holds up, a note: the position before the "
+            "mistake and the punishment after it, plus a note for each later position where the choice "
+            "matters. It runs whenever there are candidates.",
+        )
+        self.deck = QLineEdit(self.cfg.get("deck", "Knightly Review"))
+        f.addRow("Deck:", self.deck)
+        self.max_cards = QSpinBox()
+        self.max_cards.setRange(1, 200)
+        self.max_cards.setValue(int(self.cfg.get("max_new_cards", 10)))
+        f.addRow("New cards per run:", self.max_cards)
+        self.minutes = self._minutes(
+            self.cfg.get("analysis_minutes", 10),
+            "until the cards are found",
+            "Engine time for confirming puzzles and making their cards, each time it runs.",
+        )
+        f.addRow("Time per run:", self.minutes)
+
+    def _page_notes(self) -> None:
+        f = self._page(
+            "Notes in Anki",
+            "What happens to the Knightly notes already in your collection. Rescheduling is left to you "
+            "(Anki's own tools).",
+        )
         self.update_notes = QCheckBox(
             "Keep them up to date (rebuild notes from older versions, refresh the Notes field)"
         )
@@ -511,33 +668,10 @@ class SettingsDialog(QDialog):
         self.suspend_outdated.setChecked(bool(self.cfg.get("suspend_outdated", False)))
         self.suspend_outdated.setToolTip(
             "Notes made by versions before puzzle keys, and notes made under older rules whose game is no\n"
-            "longer among your games. Unsuspend one in the browser to keep it; Undo reverts the update."
+            "longer among your games. Unsuspend one in the browser to keep it; Undo reverts the write."
         )
         for w in (self.update_notes, self.update_tags, self.suspend_outdated):
-            mf.addWidget(w)
-        lay.addWidget(manage)
-
-        cpu = QGroupBox("Judging moves")
-        cf = QFormLayout(cpu)
-        self.good = QDoubleSpinBox()
-        self.good.setRange(0.1, 10)
-        self.good.setSingleStep(0.5)
-        self.good.setSuffix(" %")
-        self.good.setValue(float(self.cfg.get("good_move", 1.0)))
-        self.good.setToolTip("A move this close to the engine's best (in win rate) counts as a correct answer.")
-        cf.addRow("Good move: within", self.good)
-        lay.addWidget(cpu)
-
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        bb.accepted.connect(self.save)
-        bb.rejected.connect(self.reject)
-        lay.addWidget(bb)
-        self.engine_path = self.cfg.get("stockfish_path") or self.cfg.get("engine_path", "")
-        self._show_engine()
-        self._show_login()
-        if not self.engine_path:
-            # Pick a found Stockfish silently if there is one.
-            _bg(lambda: kd.discover(str(settings.ENGINES_DIR)), self._auto_engines, lambda e: None)
+            f.addRow(w)
 
     def _auto_engines(self, found) -> None:
         for e in found:
@@ -614,10 +748,17 @@ class SettingsDialog(QDialog):
     def save(self) -> None:
         accounts = self.accounts.accounts()
         if not (any(a["source"] != "pgn" for a in accounts) or self.pgn.paths()):
+            self._go("Games")
             showWarning("Add a Lichess or Chess.com account, or a PGN file.", parent=self)
             return
         if not self.engine_path:
-            showWarning("Choose Stockfish first (press “Change…” in the Stockfish box).", parent=self)
+            self._go("Engine")
+            showWarning("Choose Stockfish first (press “Change…” on the Engine page).", parent=self)
+            return
+        classes = [tc for tc, box in self.time_classes.items() if box.isChecked()]
+        if not classes:
+            self._go("Games")
+            showWarning("Choose at least one time control.", parent=self)
             return
         keep = self.keep.isChecked()
         if (
@@ -641,6 +782,11 @@ class SettingsDialog(QDialog):
             export_dir=self.export_dir.text().strip(),
             contact_email=self.contact.text().strip(),
             history_days=0 if self.all_time.isChecked() else self.days.value(),
+            time_classes=classes,
+            rated_only=self.rated_only.isChecked(),
+            scan_depth=min(self.scan_depth.value(), self.depth.value()),
+            inaccuracy=round(self.inaccuracy.value(), 2),
+            min_loss=round(self.min_loss.value(), 2),
             stockfish_path=self.engine_path,
             sf_depth=self.depth.value(),
             hash_mb=self.hash.value(),
@@ -683,18 +829,13 @@ class SettingsDialog(QDialog):
 
 
 class ProgressWindow(QDialog):
-    """Current step, two bars (puzzles found, and the current analysis step), and a log of the whole run."""
+    """One row per stage (its progress and its last result), the engine at work, and a log of everything."""
 
-    STAGES: ClassVar[dict[str, str]] = {
-        "fetch": "Downloading",
-        "analyse": "Puzzles",
-        "cards": "Cards",
-        "start": "Starting",
-    }
+    ORDER: ClassVar[tuple[str, ...]] = ("build", "manage", "annotate", "select", "extract")  # whose engine to show
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        self.setWindowTitle("Knightly Review – update")
+        self.setWindowTitle("Knightly Review – progress")
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
         lay = QVBoxLayout(self)
         self.label = QLabel()
@@ -706,98 +847,120 @@ class ProgressWindow(QDialog):
 
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
-        self.stage_name = QLabel()
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(True)
-        self.step_label = QLabel("Step")
-        self.step_bar = QProgressBar()
-        self.step_bar.setTextVisible(True)
-        self.step_bar.setFormat("%p %")
-        self.step_info = QLabel()
-        self.step_info.setStyleSheet("color: gray")
-        grid.addWidget(self.stage_name, 0, 0)
-        grid.addWidget(self.bar, 0, 1)
-        grid.addWidget(self.step_label, 1, 0)
-        grid.addWidget(self.step_bar, 1, 1)
-        grid.addWidget(self.step_info, 2, 1)
+        self.rows: dict[str, tuple[QProgressBar, QLabel]] = {}
+        for i, (name, label, _state) in enumerate(updater.stages()):
+            bar, info = QProgressBar(), QLabel()
+            bar.setTextVisible(True)
+            info.setStyleSheet("color: gray")
+            info.setWordWrap(True)
+            run = QPushButton("Run")
+            run.setToolTip(f"Run “{label}” now (and the stages after it, when it has something new).")
+            run.clicked.connect(lambda _=False, n=name: updater.run(n))
+            grid.addWidget(QLabel(label), 2 * i, 0)
+            grid.addWidget(bar, 2 * i, 1)
+            grid.addWidget(run, 2 * i, 2)
+            grid.addWidget(info, 2 * i + 1, 1, 1, 2)
+            self.rows[name] = (bar, info)
         # The engine's row: live depth of the search in progress.
+        n = 2 * len(self.rows)
         self.engine_name, self.engine_bar, self.engine_info = QLabel(), QProgressBar(), QLabel()
         self.engine_bar.setRange(0, 1000)
         self.engine_bar.setTextVisible(False)
         self.engine_info.setStyleSheet("color: gray")
-        grid.addWidget(self.engine_name, 3, 0)
-        grid.addWidget(self.engine_bar, 3, 1)
-        grid.addWidget(self.engine_info, 4, 1)
+        grid.addWidget(self.engine_name, n, 0)
+        grid.addWidget(self.engine_bar, n, 1, 1, 2)
+        grid.addWidget(self.engine_info, n + 1, 1, 1, 2)
         self.position_info = QLabel()
         self.position_info.setStyleSheet("color: gray")
-        grid.addWidget(self.position_info, 5, 1)
+        grid.addWidget(self.position_info, n + 2, 1, 1, 2)
         lay.addLayout(grid)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(1000)
         self.log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.log.setPlaceholderText("Each step of an update is logged here.")
+        self.log.setPlaceholderText("What each stage does is logged here.")
         lay.addWidget(self.log, 1)
         self._seq = 0
 
         row = QHBoxLayout()
-        self.cancel_btn = QPushButton("Cancel update")
+        update = QPushButton("Update now")
+        update.setToolTip("Fetch new games, then every stage after it.")
+        update.clicked.connect(lambda: updater.start(manual=True))
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Stop what the stages are doing now (and keeping on annotating).")
         self.cancel_btn.clicked.connect(lambda: updater.stop())
         hide = QPushButton("Hide (keeps running)")
         hide.clicked.connect(self.hide)
+        row.addWidget(update)
         row.addWidget(self.cancel_btn)
         row.addStretch()
         row.addWidget(hide)
         lay.addLayout(row)
-        self.resize(560, 380)
+        self.resize(620, 560)
         updater.listeners.append(self.update_progress)
         self.update_progress(*updater.last)
-        self._timer = QTimer(self)  # the numbers come from the run's tracker, a few times a second
+        self._timer = QTimer(self)  # the numbers come from the stages' trackers, a few times a second
         self._timer.timeout.connect(self._poll)
         self._timer.start(200)
         self._poll()
 
     def update_progress(self, stage: str, done: int, total: int, msg: str) -> None:
         self.label.setText(msg)
-        self.stage_name.setText(self.STAGES.get(stage, "Update"))
-        if total:
-            self.bar.setRange(0, total)
-            self.bar.setValue(done)
-            self.bar.setFormat({"analyse": "%v / %m found"}.get(stage, "%v / %m"))
-        elif stage in ("done", "error", "idle"):
-            self.bar.setRange(0, 1)
-            self.bar.setValue(1 if stage == "done" else 0)
-            self.bar.setFormat({"done": "Done", "error": "Failed"}.get(stage, ""))
-        else:
-            self.bar.setRange(0, 0)  # busy
-        self.cancel_btn.setEnabled(updater.keeping or (updater.running and stage not in ("done", "error")))
         self._update_log()
 
     def _poll(self) -> None:
-        """Step, engines and position, from the run's tracker (see core/knightly/progress.py)."""
+        """Each stage's bar and line, and the engine of the most urgent stage at work."""
         if not self.isVisible():
             return
         from .vendor.knightly.progress import describe
 
-        d = describe(updater.tracker.snapshot())
-        show = d["stage_ratio"] is not None
-        for w in (self.step_label, self.step_bar):
-            w.setVisible(show)
-        if show:
-            self.step_bar.setRange(0, 1000)
-            self.step_bar.setValue(int(1000 * d["stage_ratio"]))
-            self.step_label.setText(d["step"] or "Step")
-        self.step_info.setText(" · ".join(x for x in (d["stage"], d["ply"], d["budget"], d["elapsed"]) if x))
-        e = d["engines"].get("stockfish")
+        shown = None
+        for name, _label, st in updater.stages():
+            bar, info = self.rows[name]
+            if st is None:
+                bar.setRange(0, 1)
+                bar.setValue(0)
+                bar.setFormat("not started")
+                info.setText("")
+                continue
+            d = describe(st.tracker.snapshot())
+            if st.running:
+                if d["stage_ratio"] is None:
+                    bar.setRange(0, 0)  # busy
+                else:
+                    bar.setRange(0, 1000)
+                    bar.setValue(int(1000 * d["stage_ratio"]))
+                    bar.setFormat("%p %")
+                info.setText(" · ".join(x for x in (d["message"], d["stage"], d["budget"]) if x))
+                if shown is None or self.ORDER.index(name) < self.ORDER.index(shown[0]):
+                    shown = (name, d)
+            else:
+                bar.setRange(0, 1)
+                if st.error:
+                    bar.setValue(0)
+                    bar.setFormat("cancelled" if st.error == "cancelled" else "failed")
+                    info.setText("" if st.error == "cancelled" else st.error)
+                elif st.last is not None:
+                    bar.setValue(1)
+                    when = updater.finished.get(name)
+                    bar.setFormat(f"done {time.strftime('%H:%M', time.localtime(when))}" if when else "done")
+                    info.setText(st.last.summary)
+                else:
+                    bar.setValue(0)
+                    bar.setFormat("waiting")
+                    info.setText("")
+        e = shown[1]["engines"].get("stockfish") if shown else None
         for w in (self.engine_name, self.engine_bar, self.engine_info):
             w.setVisible(bool(e))
         if e:
             self.engine_name.setText(e["label"])
             self.engine_bar.setValue(int(1000 * (e["ratio"] or 0)))
-            self.engine_info.setText(f"{e['detail']} · {e['counts']}")
-        self.position_info.setText(d["position"])
-        self.position_info.setVisible(bool(d["position"]))
+            self.engine_info.setText(f"{LABELS_SHORT.get(shown[0], shown[0])}: {e['detail']} · {e['counts']}")
+        position = shown[1]["position"] if shown else ""
+        self.position_info.setText(position)
+        self.position_info.setVisible(bool(position))
+        self.cancel_btn.setEnabled(updater.running or updater.keeping)
 
     def _update_log(self) -> None:
         new = updater.history_since(self._seq)
@@ -863,7 +1026,7 @@ def setup_menu() -> None:
     menu = mw.form.menuTools.addMenu("Knightly Review")
     for label, fn in (
         ("Update now", start_update),
-        ("Show update progress", show_progress),
+        ("Show progress", show_progress),
         ("Export games…", export_games),
         ("Settings…", open_settings),
     ):

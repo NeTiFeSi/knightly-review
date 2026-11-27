@@ -23,6 +23,11 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Settings in pages, one per stage:** Games, Engine, Annotating, Candidates, Puzzles and Notes in Anki, each
+  saying what that stage does. New there: which time controls count, rated games only, the scan depth, where an
+  inaccuracy starts, and how much a move must lose to become a puzzle.
+- **The progress window shows each stage:** its progress or its last result, and a button to run it now; plus the
+  engine at work, and the log.
 - **The work runs in stages, each on its own.** Fetching games, annotating your moves, choosing puzzle candidates,
   making cards and maintaining your notes each run on a thread of their own, as soon as the stage before them
   has something new, sharing Stockfish (making cards comes before annotating). An update no longer has to finish
