@@ -45,7 +45,7 @@ import chess
 from . import motifs as motifs_mod
 from .cache import fen_key
 from .config import Config
-from .model import CardSpec, Choice, Game, Line
+from .model import CardSpec, Choice, Game, Line, NoWdl
 
 NEUTRAL = 0  # no NAG
 GOOD, MISTAKE, BRILLIANT, BLUNDER, INTERESTING, DUBIOUS, SINGULAR = 1, 2, 3, 4, 5, 6, 8
@@ -262,16 +262,19 @@ def grade_cheap(board: chess.Board, move: str, analyser, cfg: Config) -> Graded 
 
 
 def decided(board: chess.Board, by_move: dict[str, Line]) -> bool | None:
-    """Whether no move can change the result for the side to move: True when even the worst move still
-    scores above 50 % (it wins whatever it plays), False when even the best scores below 50 % (it loses
-    whatever it plays), None otherwise. Positions with a forced mate in any line are never decided."""
+    """Whether no move can change the result for the side to move: True when after every move it wins
+    more than half the time (WDL), False when after every move it loses more than half the time, None
+    otherwise. Draws count for neither, so a drawish position is never decided. Positions with a forced
+    mate in any line are never decided."""
     if not by_move or any(l.score.mate is not None for l in by_move.values()):
         return None
     white = board.turn == chess.WHITE
-    pcts = [l.score.win_pct(white) for l in by_move.values()]
-    if min(pcts) > 50:
+    wdls = [l.score.wdl for l in by_move.values()]
+    if any(w is None for w in wdls):
+        raise NoWdl("score has no WDL")
+    if all(2 * (w if white else l) > w + d + l for w, d, l in wdls):
         return True
-    if max(pcts) < 50:
+    if all(2 * (l if white else w) > w + d + l for w, d, l in wdls):
         return False
     return None
 
