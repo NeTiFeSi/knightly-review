@@ -37,7 +37,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from . import http, puzzles, stats
+from . import export, http, puzzles, stats
 from .cache import Cache
 from .config import Config
 from .engine.analyse import Analyser
@@ -202,7 +202,14 @@ def run_annotate(ctx: Context, tracker: Tracker, manual: bool = False) -> Outcom
         except Stop:
             pass
     left = len(todo) - done
-    return Outcome(done > 0, left > 0, f"{done} positions annotated" + (f", {left} to go" if left else ""))
+    out = Outcome(done > 0, left > 0, f"{done} positions annotated" + (f", {left} to go" if left else ""))
+    if done and cfg.extract.export_dir and cfg.annotate.export_annotations:  # the export, with the new grades
+        try:
+            export.export_all(cache, cfg, cfg.extract.export_dir)
+        except OSError as e:
+            log.exception("exporting the games failed")
+            out.warnings.append(f"PGN export: {e}")
+    return out
 
 
 def _units_by_key(by_ply, ply: int, mine: bool):

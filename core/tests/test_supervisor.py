@@ -7,6 +7,7 @@ import time
 import unittest
 
 from helpers import SICILIAN, FakeAnalyser, S, ScriptedAnalyser, board_at, game_from
+from knightly import export
 from knightly.cache import fen_key
 from knightly.config import Config
 from knightly.engine.broker import Pool
@@ -144,6 +145,31 @@ class TablesTest(unittest.TestCase):
             self.sup.run_stage(n)
         self.assertEqual([n.key for n in self.sup.run_stage("build").notes], [note.key])
         self.assertEqual(self.sup.run_stage("select").summary.split(";")[0], "0 new candidates, up to ply 6")
+
+    def test_annotating_writes_the_grades_into_the_export(self):
+        import io
+        import tempfile
+        from pathlib import Path
+
+        import chess.pgn
+
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        cfg = Config.from_dict({**CFG, "export_dir": d.name})
+        sup = Supervisor(context(self.c, cfg, lambda *a: FakeAnalyser(table=PUNISH_TABLE)))
+        sup.run_stage("annotate")
+        game = chess.pgn.read_game(io.StringIO((Path(d.name) / "lichess-KnightlyMe.pgn").read_text()))
+        moves = list(game.mainline())
+        self.assertEqual([m.comment != "" for m in moves], [False, True] * 3 + [False])  # your moves (Black)
+        blunder = moves[5]  # 3...Nf6, missing the mate
+        self.assertEqual((blunder.san(), blunder.nags), ("Nf6", {4}))  # ??
+        self.assertEqual(blunder.comment, "[%eval #1]")  # mate in one for White
+        self.assertEqual(moves[1].nags, set())  # a fine move gets no grade
+        # Off: the export has the bare moves.
+        cfg.annotate.export_annotations = False
+        export.export_all(self.c, cfg, d.name)
+        game = chess.pgn.read_game(io.StringIO((Path(d.name) / "lichess-KnightlyMe.pgn").read_text()))
+        self.assertTrue(all(not m.comment and not m.nags for m in game.mainline()))
 
     def test_no_collection_no_candidates_or_notes(self):
         self.sup.run_stage("annotate")

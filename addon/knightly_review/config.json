@@ -23,6 +23,7 @@
   "annotate_minutes": 10,
   "keep_annotating": false,
   "keep_annotating_hours": 0,
+  "export_annotations": true,
   "include_opponent": false,
   "min_loss": 1.0,
   "good_move": 1.0,

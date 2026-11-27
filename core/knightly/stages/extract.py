@@ -67,7 +67,7 @@ def run(
             out.warnings.append(f"PGN files: {e}")
     if ex.export_dir and (out.new_games or _export_missing(ex)):
         try:
-            out.exported = export.export_all(cache, ex, ex.export_dir)
+            out.exported = export.export_all(cache, cfg, ex.export_dir)
         except OSError as e:
             log.exception("exporting the games failed")
             out.warnings.append(f"PGN export: {e}")

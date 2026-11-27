@@ -118,6 +118,9 @@ class Annotate:
     annotate_minutes: float = 10
     keep_annotating: bool = False
     keep_annotating_hours: float = 0
+    # The PGN export (`extract.export_dir`, and Tools → Export games…): each annotated move gets its grade (?!, ?,
+    # ??) and the evaluation after it (`[%eval]`). The export is written again whenever more moves are annotated.
+    export_annotations: bool = True
 
     def scan_depth_used(self) -> int:
         """The scan's depth: `scan_depth`, but never deeper than the full search."""
@@ -172,6 +175,8 @@ SCHEDULE = {
     ("annotate", "keep_annotating"),
     ("annotate", "keep_annotating_hours"),
 }
+# What is written out, not how puzzles are made: left out of the fingerprints as well.
+OUTPUT = {("annotate", "export_annotations")}
 
 
 def _owner() -> dict[str, str]:
@@ -223,7 +228,7 @@ class Config:
     def fingerprint(self, *sections: str) -> str:
         """Hash of the given sections' settings (all of them when none is named), secrets and schedules left out."""
         names = sections or tuple(SECTIONS)
-        skip = SECRETS | SCHEDULE
+        skip = SECRETS | SCHEDULE | OUTPUT
         d = {
             name: {k: v for k, v in dataclasses.asdict(getattr(self, name)).items() if (name, k) not in skip}
             for name in names

@@ -14,7 +14,9 @@ and the project follows [Semantic Versioning](https://semver.org/).
 - **Games from PGN files.** Add PGN files, or folders of them, in the settings. Games where one of your names
   plays become puzzles like your online games; a name listed as another player's is followed too.
 - **PGN export.** Choose an export folder to have every account's games written there as PGN after each update,
-  or use **Tools → Knightly Review → Export games…** once.
+  or use **Tools → Knightly Review → Export games…** once. Your games come annotated: each move the engine
+  looked at gets its grade (?!, ?, ??) and the evaluation after it, which Lichess and ChessBase draw as a graph
+  (Annotating page; on by default). The folder is written again as more moves are annotated.
 - **An optional email for Chess.com**, sent with its downloads, as Chess.com asks of programs using its API.
 - **Settings for the notes already in Anki:** keep them up to date (on by default; off leaves them as they are),
   replace their `knightly::` tags when they are written again (on by default), and suspend the notes this

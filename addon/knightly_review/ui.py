@@ -615,6 +615,14 @@ class SettingsDialog(QDialog):
         self.keep_hours.setSpecialValueText("until stopped or everything is annotated")
         self.keep_hours.setValue(float(self.cfg.get("keep_annotating_hours", 0)))
         f.addRow("For at most:", self.keep_hours)
+        self.export_annotations = QCheckBox("Add the grades and evaluations to the exported games")
+        self.export_annotations.setChecked(bool(self.cfg.get("export_annotations", True)))
+        self.export_annotations.setToolTip(
+            "In the PGN export (Games page, and Tools → Export games…), each annotated move gets its grade\n"
+            "(?!, ?, ??) and the evaluation after it ([%eval]), which Lichess and ChessBase show as a graph.\n"
+            "The export folder is written again as more moves are annotated."
+        )
+        f.addRow("", self.export_annotations)
 
     def _page_candidates(self) -> None:
         f = self._page(
@@ -796,6 +804,7 @@ class SettingsDialog(QDialog):
             annotate_minutes=self.annotate_minutes.value(),
             keep_annotating=keep,
             keep_annotating_hours=round(self.keep_hours.value(), 1),
+            export_annotations=self.export_annotations.isChecked(),
             include_opponent=self.opponent.isChecked(),
             update_on_startup=self.on_start.isChecked(),
             update_every_hours=self.every.value(),
@@ -1008,7 +1017,7 @@ def export_games() -> None:
     def work() -> dict[str, int]:
         cache = SqliteCache(settings.CACHE_PATH)
         try:
-            return export_all(cache, cfg.extract, folder)
+            return export_all(cache, cfg, folder)
         finally:
             cache.close()
 
