@@ -10,6 +10,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import chess
@@ -54,10 +55,20 @@ def game_pgn(g: Game, notes: Notes | None = None) -> str:
     return str(pg)
 
 
-def annotations_of(g: Game, white: bool, have: dict, inaccuracy: float) -> Notes:
-    """The grade and evaluation of each move of `g` that the annotate stage covered, the game followed for the
-    player on White (`white`) or Black. `have`: the annotate stage's table (`cache.annotations()`)."""
-    out: Notes = {}
+@dataclass
+class Grade:
+    """One move of a game, as the annotate stage judged it."""
+
+    mine: bool  # played by the player the game is followed for
+    loss: float  # win rate lost against the best move (points)
+    nag: int  # ?!, ?, ?? (0: none; the good grades need the full search)
+    score: Score  # the evaluation after the move
+
+
+def grades_of(g: Game, white: bool, have: dict, inaccuracy: float) -> dict[int, Grade]:
+    """ply → grade of each move of `g` the annotate stage covered, the game followed for the player on White
+    (`white`) or Black. `have`: the annotate stage's table (`cache.annotations()`)."""
+    out: dict[int, Grade] = {}
     board = chess.Board()
     for uci in g.moves:
         mv = chess.Move.from_uci(uci)
@@ -69,10 +80,16 @@ def annotations_of(g: Game, white: bool, have: dict, inaccuracy: float) -> Notes
         if line is not None:
             score = Score.from_json(line["score"])
             best = Score.from_json(row[1]["best"]["score"])
-            nag = quick_nag(max(0.0, best.win_pct(turn) - score.win_pct(turn)), inaccuracy)
-            out[board.ply()] = (0 if nag == NEUTRAL else nag, score.pgn())
+            loss = max(0.0, best.win_pct(turn) - score.win_pct(turn))
+            nag = quick_nag(loss, inaccuracy)
+            out[board.ply()] = Grade(turn == white, loss, 0 if nag == NEUTRAL else nag, score)
         board.push(mv)
     return out
+
+
+def annotations_of(g: Game, white: bool, have: dict, inaccuracy: float) -> Notes:
+    """The grade and evaluation of each move of `g` that the annotate stage covered (see `grades_of`)."""
+    return {ply: (gr.nag, gr.score.pgn()) for ply, gr in grades_of(g, white, have, inaccuracy).items()}
 
 
 def write(path: Path, games: Iterable[Game], notes: Callable[[Game], Notes | None] = lambda g: None) -> int:

@@ -1031,11 +1031,18 @@ def open_settings(first_run: bool = False) -> None:
     SettingsDialog(mw, first_run=first_run).exec()
 
 
+def _show_stats() -> None:
+    from .stats_window import show_stats
+
+    show_stats()
+
+
 def setup_menu() -> None:
     menu = mw.form.menuTools.addMenu("Knightly Review")
     for label, fn in (
         ("Update now", start_update),
         ("Show progress", show_progress),
+        ("Statistics", _show_stats),
         ("Export games…", export_games),
         ("Settings…", open_settings),
     ):

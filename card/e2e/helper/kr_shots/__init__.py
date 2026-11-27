@@ -1,7 +1,7 @@
 """Test-only add-on for the README screenshots (card/e2e/screenshots.mjs). NOT part of Knightly Review.
 
 Install it in the isolated test profile only (symlink into its addons21/). It listens on
-127.0.0.1:8767 and, on `GET /shot?what=settings|engine|progress|live[&wait=ms]&file=/abs/path.png`, opens that
+127.0.0.1:8767 and, on `GET /shot?what=settings|engine|progress|live|stats[&wait=ms]&file=/abs/path.png`, opens that
 Knightly Review window with sample data and saves a picture of it (Qt's own widget.grab(), so no
 screen capture and no window decorations).
 """
@@ -40,6 +40,10 @@ def _make(what: str):
     from knightly_review import ui
     from knightly_review.runner import updater
 
+    if what == "stats":  # the real statistics of the test profile's games
+        from knightly_review.stats_window import StatsWindow
+
+        return StatsWindow(mw)
     if what == "settings":
         from knightly_review import settings
 
@@ -112,7 +116,8 @@ def _grab(what: str, file: str, done: dict, wait: int = 1500) -> None:
         w = _make(what)
         w.show()
         w.raise_()
-        _tidy(w)
+        if what != "stats":  # its size is its own: the page scrolls
+            _tidy(w)
 
         def snap() -> None:
             try:

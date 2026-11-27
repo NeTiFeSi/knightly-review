@@ -91,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     dm = sub.add_parser("daemon", help="fetch, annotate and make puzzles in the background, for the Anki add-on to add")
     dm.add_argument("--addon", required=True, help="the Knightly Review add-on's folder in Anki's addons21")
 
+    stp = sub.add_parser("stats", help="write the statistics of your games as an HTML page")
+    stp.add_argument("--addon", required=True, help="the Knightly Review add-on's folder in Anki's addons21")
+    stp.add_argument("--out", default="knightly-statistics.html")
+
     eng = sub.add_parser("engines", help="list the Stockfish builds found on this computer")
     eng.add_argument("--dir", help="extra folder with downloaded engines")
 
@@ -114,6 +118,22 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(e, file=sys.stderr)
             return 2
+    if args.cmd == "stats":
+        from . import daemon as daemon_mod
+        from .dashboard import collect, render
+
+        try:
+            addon = daemon_mod.AddonFolder(args.addon)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 2
+        cache = SqliteCache(addon.cache_path)
+        try:
+            Path(args.out).write_text(render(collect(addon.config(), cache)), encoding="utf-8")
+        finally:
+            cache.close()
+        print(args.out)
+        return 0
     if args.cmd == "engines":
         from .engine.discover import discover
 

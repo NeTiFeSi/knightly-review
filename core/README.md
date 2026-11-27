@@ -13,6 +13,7 @@ python -m knightly download-stockfish DIR
 python -m knightly update --lichess USER --chesscom USER --minutes 5 --max-cards 3 --out notes.json
 #   --depth 18 (Stockfish depth), --stockfish PATH
 python -m knightly daemon --addon ~/.local/share/Anki2/addons21/<Knightly Review's folder>
+python -m knightly stats --addon <the same folder> --out stats.html   # the statistics page
 ```
 
 `knightly daemon` runs the stages (extract, annotate, select, build) next to Anki, on the add-on's settings,
@@ -34,6 +35,7 @@ cache and outbox (see `daemon.py`). Only one of the two runs the stages at a tim
 | `notes.py` | PGN with `[%kr N]` tags: cloze 1 the mistake, cloze 2 its punishment; the Notes field; the notes' tags (from the first puzzle) |
 | `progress.py` | `Tracker`: what a run is doing (stage with a growing total, per-engine searches with live depth, puzzles found, ply, time left), read from any thread; `describe()` formats it for the add-on window and the CLI (tqdm bars when installed) |
 | `supervisor.py`, `stages/` | The stages (extract, annotate, select, build, manage), one thread each, chained through the cache's tables; `Turn`: which process runs them |
+| `export.py`, `dashboard.py` | Your games as PGN, with the annotate stage's grades and evaluations; the statistics page (inline SVG) |
 | `daemon.py` | `knightly daemon`: the stages but manage in a process of their own, on the add-on's folder |
 | `jobs.py` | `run_update()`: the single entry point the add-on calls (pauses while `gate` is cleared) |
 | `follow.py` | The solution tree under a puzzle's answers: both sides' good moves followed until a stop (decided, drawn, a Stockfish mate, a small gap, game over), and the decision positions found on the way; each becomes a note (`pipeline.py`, deepest first) |
