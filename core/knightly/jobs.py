@@ -1,4 +1,4 @@
-"""One update run: fetch → mine the games ply by ply (pipeline.py) → notes.
+"""One update run: extract the games (stages/extract.py) → mine the games ply by ply (pipeline.py) → notes.
 
 `run_update` is the single entry point for the add-on (in a background thread),
 the CLI, and later the companion process and a server. It never touches an
@@ -9,23 +9,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from . import http, notes, pipeline, puzzles, sources
+from . import http, notes, pipeline, puzzles
 from .cache import Cache
 from .config import Config
 from .engine.analyse import Analyser
 from .model import Game, NoteSpec
 from .progress import Tracker, legacy_listener
-from .sources import chesscom, lichess
+from .stages import extract
 
 # progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
 # of max_new_cards), positions (the current step, emitted often), cards.
-log = logging.getLogger(__name__)
 
 Progress = Callable[[str, int, int, str], None]
 
@@ -52,57 +50,6 @@ def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -
     settings = cfg.fingerprint("extract", "annotate", "select", "build")
     blob = json.dumps([puzzles.RULES, settings, sorted(game_keys), sorted(exclude)], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
-
-
-def fetch_all(
-    cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event, progress: Progress, result: UpdateResult
-) -> None:
-    jobs = []
-    if cfg.extract.lichess_user:
-        jobs.append(("lichess", cfg.extract.lichess_user))
-    if cfg.extract.chesscom_user:
-        jobs.append(("chesscom", cfg.extract.chesscom_user))
-    for source, user in jobs:
-        # A manual update may always ask Lichess (incremental); Chess.com's cache makes
-        # frequent asks pointless, so its cooldown always applies.
-        mod = lichess if source == "lichess" else chesscom
-        # the look-back grew, or the filters let through games they left out
-        backfill = mod.needs_backfill(
-            cache, user, cfg.extract.history_days, cfg.extract.time_classes, cfg.extract.rated_only
-        )
-        if not sources.due(cache, source, user) and not (force and source == "lichess") and not backfill:
-            continue
-        msg = lambda m: progress("fetch", 0, 0, m)
-        msg(f"Fetching games from {'Lichess' if source == 'lichess' else 'Chess.com'}…")
-        try:
-            if source == "lichess":
-                n = lichess.fetch(
-                    cache,
-                    user,
-                    token=cfg.extract.lichess_token,
-                    history_days=cfg.extract.history_days,
-                    time_classes=cfg.extract.time_classes,
-                    rated_only=cfg.extract.rated_only,
-                    cancel=cancel,
-                    progress=msg,
-                )
-            else:
-                n = chesscom.fetch(
-                    cache,
-                    user,
-                    history_days=cfg.extract.history_days,
-                    time_classes=cfg.extract.time_classes,
-                    rated_only=cfg.extract.rated_only,
-                    cancel=cancel,
-                    progress=msg,
-                )
-            result.new_games += n
-            sources.mark_fetched(cache, source, user)
-        except http.Cancelled:
-            raise
-        except Exception as e:  # one site failing shouldn't stop the other
-            log.exception("fetching games from %s failed", source)
-            result.warnings.append(f"{source}: {e}")
 
 
 def run_update(
@@ -139,19 +86,11 @@ def run_update(
     result = UpdateResult()
     try:
         if fetch:
-            fetch_all(cfg, cache, force=force, cancel=cancel, progress=progress, result=result)
+            got = extract.run(cfg, cache, force=force, cancel=cancel, message=lambda m: progress("fetch", 0, 0, m))
+            result.new_games += got.new_games
+            result.warnings += got.warnings
 
-        since = sources.since_ts(cfg.extract.history_days)
-        games: list[Game] = []
-        for source, user in (("lichess", cfg.extract.lichess_user), ("chesscom", cfg.extract.chesscom_user)):
-            if user:
-                games += [
-                    g
-                    for g in cache.games(source, user, since)
-                    if (not cfg.extract.time_classes or g.time_class in cfg.extract.time_classes)
-                    and (not cfg.extract.rated_only or g.rated)
-                ]
-        games.sort(key=lambda g: g.end_ts, reverse=True)  # newest first across both sites
+        games: list[Game] = extract.games_of(cfg, cache)  # yours, newest first across the sources
         by_key = {g.key: g for g in games}
 
         # What is on cards already: puzzles of this pipeline (found again by id: position and ply) and

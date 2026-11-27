@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS games (
   PRIMARY KEY (source, id)
 );
 CREATE INDEX IF NOT EXISTS games_user ON games (source, user, end_ts);
+CREATE TABLE IF NOT EXISTS game_players (
+  source TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,        -- lowercase, as the game names the player
+  white INTEGER NOT NULL,    -- 1: played White
+  PRIMARY KEY (source, id, white)
+);
+CREATE INDEX IF NOT EXISTS game_players_name ON game_players (name, source);
 CREATE TABLE IF NOT EXISTS http (
   url TEXT PRIMARY KEY,
   etag TEXT,
@@ -64,13 +72,23 @@ def fen_key(fen: str) -> str:
     return " ".join(fen.split()[:4])
 
 
+def _index_players(c: sqlite3.Connection, source: str, gid: str, white: str, black: str) -> None:
+    for name, is_white in ((white, 1), (black, 0)):
+        if name:
+            c.execute(
+                "INSERT OR IGNORE INTO game_players (source, id, name, white) VALUES (?,?,?,?)",
+                (source, gid, name.lower(), is_white),
+            )
+
+
 class Cache(Protocol):
     def get_eval(self, key: str, min_effort: int = 0) -> Eval | None: ...
     def put_eval(self, key: str, effort: int, ev: Eval) -> None: ...
     def get_scan(self, key: str, names: Iterable[str], min_effort: int) -> dict[str, Eval]: ...
     def put_scan(self, key: str, effort: int, found: dict[str, Eval]) -> None: ...
-    def put_games(self, games: Iterable[Game], user: str) -> int: ...
+    def put_games(self, games: Iterable[Game], user: str = "") -> int: ...
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]: ...
+    def games_from(self, source: str, since_ts: int = 0) -> list[Game]: ...
     def get_analysis(self, game: Game) -> list[dict | None] | None: ...
     def put_analysis(self, game: Game, analysis: list[dict | None]) -> None: ...
     def get_http(self, url: str) -> tuple[str | None, str | None]: ...
@@ -96,6 +114,12 @@ class SqliteCache:
                 c.execute("UPDATE games SET analysis=NULL")
                 c.execute("DELETE FROM kv WHERE key LIKE 'cloudmiss:%'")
                 c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+            if not c.execute("SELECT 1 FROM kv WHERE key='players_indexed'").fetchone():
+                # Caches from before game_players: index the players of the games already stored.
+                for source, gid, data in c.execute("SELECT source, id, data FROM games").fetchall():
+                    d = json.loads(data)
+                    _index_players(c, source, gid, d.get("white", ""), d.get("black", ""))
+                c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('players_indexed', '1')")
 
     def _conn(self) -> sqlite3.Connection:
         c = getattr(self._local, "conn", None)
@@ -154,7 +178,9 @@ class SqliteCache:
                 )
 
     # games
-    def put_games(self, games: Iterable[Game], user: str) -> int:
+    def put_games(self, games: Iterable[Game], user: str = "") -> int:
+        """Store new games (one already stored is left as it is). `user`: the account they were fetched for;
+        `games` finds each game by either player's name anyway."""
         n = 0
         with self._conn() as c:
             for g in games:
@@ -163,15 +189,27 @@ class SqliteCache:
                     (g.source, g.id, user.lower(), g.end_ts, json.dumps(g.to_json())),
                 )
                 n += cur.rowcount
+                _index_players(c, g.source, g.id, g.white, g.black)
         return n
 
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]:
+        """The games of `source` that `user` played (either colour), newest first."""
         rows = (
             self._conn()
             .execute(
-                "SELECT data FROM games WHERE source=? AND user=? AND end_ts>=? ORDER BY end_ts DESC",
-                (source, user.lower(), since_ts),
+                """SELECT g.data FROM games g JOIN game_players p ON p.source = g.source AND p.id = g.id
+                   WHERE p.name=? AND g.source=? AND g.end_ts>=? ORDER BY g.end_ts DESC""",
+                (user.lower(), source, since_ts),
             )
+            .fetchall()
+        )
+        return [Game.from_json(json.loads(r[0])) for r in rows]
+
+    def games_from(self, source: str, since_ts: int = 0) -> list[Game]:
+        """Every game of `source`, newest first."""
+        rows = (
+            self._conn()
+            .execute("SELECT data FROM games WHERE source=? AND end_ts>=? ORDER BY end_ts DESC", (source, since_ts))
             .fetchall()
         )
         return [Game.from_json(json.loads(r[0])) for r in rows]

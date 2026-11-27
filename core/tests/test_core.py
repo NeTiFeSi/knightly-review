@@ -1925,7 +1925,7 @@ class AnalyserTest(unittest.TestCase):
     def test_flat_settings_go_to_their_sections(self):
         cfg = Config.from_dict({"lichess_user": "me", "sf_depth": 20, "min_loss": 3, "max_new_cards": 4, "hash_mb": 8})
         self.assertEqual(
-            (cfg.extract.lichess_user, cfg.annotate.sf_depth, cfg.select.min_loss),
+            (cfg.extract.first("lichess"), cfg.annotate.sf_depth, cfg.select.min_loss),
             ("me", 20, 3),
         )
         self.assertEqual((cfg.build.max_new_cards, cfg.engine.hash_mb), (4, 8))

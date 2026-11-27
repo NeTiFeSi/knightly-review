@@ -1,6 +1,8 @@
 {
-  "lichess_user": "",
-  "chesscom_user": "",
+  "accounts": [],
+  "pgn_paths": [],
+  "export_dir": "",
+  "contact_email": "",
   "stockfish_path": "",
   "sf_depth": 13,
   "deck": "Knightly Review",
@@ -25,5 +27,5 @@
   "good_move": 1.0,
   "inaccuracy": 5.0,
   "setup_done": false,
-  "config_version": 2
+  "config_version": 3
 }

@@ -5,7 +5,8 @@ build puzzles → manage notes. Each stage reads its own section (and `engine`, 
 section has its own fingerprint, so changing one stage's settings only redoes that stage's work.
 
 `Config.from_dict` takes the sectioned form (`{"extract": {...}, "annotate": {...}}`) and also the flat form every
-earlier version stored (`{"lichess_user": ..., "sf_depth": ...}`): each flat key goes to the section that owns it.
+earlier version stored (`{"lichess_user": ..., "sf_depth": ...}`): each flat key goes to the section that owns it,
+and the old one-username-per-site keys become accounts of yours.
 """
 
 from __future__ import annotations
@@ -22,16 +23,61 @@ def _half_cores() -> int:
     return max(1, (os.cpu_count() or 2) // 2)
 
 
+ME, OTHER = "me", "other"
+SITES = ("lichess", "chesscom")
+SOURCES = (*SITES, "pgn")
+
+
+@dataclass
+class Account:
+    """A player whose games are collected. `source` "lichess" or "chesscom": a username there, whose games are
+    downloaded. "pgn": a name as PGN headers write it ("Carlsen, Magnus"), matched only in the PGN inputs.
+    `role` ME (your own games: puzzles are made from them) or OTHER (players to compare with or to study)."""
+
+    source: str = "lichess"
+    name: str = ""
+    role: str = ME
+
+    @classmethod
+    def from_dict(cls, d: Any) -> Account:
+        if isinstance(d, Account):
+            return d
+        return _build(cls, dict(d))
+
+
 @dataclass
 class Extract:
     """Where games come from and which ones are kept."""
 
-    lichess_user: str = ""
-    chesscom_user: str = ""
+    accounts: list[Account] = field(default_factory=list)
+    pgn_paths: list[str] = field(default_factory=list)  # PGN files, or folders searched for *.pgn
+    export_dir: str = ""  # after new games arrive, every account's games are written here as PGN; "" = off
+    contact_email: str = ""  # sent to Chess.com with each request, as its API asks; "" = none
     lichess_token: str = ""  # a secret: never in a fingerprint or the add-on's config
     history_days: int = 90  # 0 or negative = all time
     time_classes: list[str] = field(default_factory=lambda: ["blitz", "rapid", "classical", "correspondence"])
     rated_only: bool = False
+
+    def __post_init__(self) -> None:
+        seen: set[tuple[str, str]] = set()
+        accounts = []
+        for a in map(Account.from_dict, self.accounts):
+            key = (a.source, a.name.strip().lower())
+            if a.source in SOURCES and a.role in (ME, OTHER) and key[1] and key not in seen:
+                seen.add(key)
+                accounts.append(Account(a.source, a.name.strip(), a.role))
+        self.accounts = accounts
+
+    def of(self, source: str, role: str | None = None) -> list[Account]:
+        return [a for a in self.accounts if a.source == source and (role is None or a.role == role)]
+
+    def first(self, source: str, role: str = ME) -> str:
+        """The first account of this source and role ("" when there is none)."""
+        return next((a.name for a in self.of(source, role)), "")
+
+    def has_games(self) -> bool:
+        """Something to collect games from."""
+        return any(a.source in SITES for a in self.accounts) or bool(self.pgn_paths)
 
 
 @dataclass
@@ -146,6 +192,10 @@ class Config:
         for name in SECTIONS:
             if isinstance(d.get(name), dict):
                 parts[name].update(d[name])
+        if "accounts" not in parts["extract"]:  # one username per site, as versions before 0.3 stored them
+            parts["extract"]["accounts"] = [
+                {"source": site, "name": d[f"{site}_user"], "role": ME} for site in SITES if d.get(f"{site}_user")
+            ]
         return cls(**{name: _build(SECTIONS[name], parts[name]) for name in SECTIONS})
 
     def to_dict(self) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from typing import ClassVar
 
 from aqt import mw
 from aqt.qt import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -21,13 +22,17 @@ from aqt.qt import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSpinBox,
     Qt,
+    QTableWidget,
+    QTableWidgetItem,
     QTimer,
     QUrl,
     QVBoxLayout,
@@ -37,8 +42,10 @@ from aqt.utils import askUser, showWarning, tooltip
 
 from . import settings
 from .runner import updater
+from .vendor.knightly.cache import SqliteCache
 from .vendor.knightly.engine import discover as kd
 from .vendor.knightly.engine import install as ki
+from .vendor.knightly.export import export_all
 from .vendor.knightly.sources import lichess as kl
 from .vendor.knightly.sources.lichess_login import LoginFlow
 
@@ -227,6 +234,124 @@ class EngineDialog(QDialog):
 # ---------------------------------------------------------------- settings dialog
 
 
+class AccountsTable(QWidget):
+    """The accounts whose games are collected: site, name, and whether they are yours or another player's."""
+
+    SOURCES: ClassVar = [("lichess", "Lichess"), ("chesscom", "Chess.com"), ("pgn", "Name in PGN files")]
+    ROLES: ClassVar = [("me", "Mine"), ("other", "Another player")]
+
+    def __init__(self, accounts: list[dict]):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Site", "Username", "Whose games"])
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setToolTip(
+            "Puzzles are made from your games. Other players' games (masters, rivals, players to compare\n"
+            "with) are downloaded and exported too. A name in PGN files is matched against the White and\n"
+            "Black headers, as the files write it (for example “Carlsen, Magnus”)."
+        )
+        self.table.setMinimumHeight(110)
+        lay.addWidget(self.table)
+        row = QHBoxLayout()
+        add = QPushButton("Add")
+        add.clicked.connect(lambda: self.add_row())
+        remove = QPushButton("Remove")
+        remove.clicked.connect(self.remove_selected)
+        row.addWidget(add)
+        row.addWidget(remove)
+        row.addStretch()
+        lay.addLayout(row)
+        for a in accounts:
+            self.add_row(a.get("source", "lichess"), a.get("name", ""), a.get("role", "me"))
+        if not accounts:
+            self.add_row("lichess")
+            self.add_row("chesscom")
+
+    def _combo(self, items, value: str) -> QComboBox:
+        c = QComboBox()
+        for data, label in items:
+            c.addItem(label, data)
+        c.setCurrentIndex(max(0, c.findData(value)))
+        return c
+
+    def add_row(self, source: str = "lichess", name: str = "", role: str = "me") -> None:
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setCellWidget(r, 0, self._combo(self.SOURCES, source))
+        self.table.setItem(r, 1, QTableWidgetItem(name))
+        self.table.setCellWidget(r, 2, self._combo(self.ROLES, role))
+
+    def remove_selected(self) -> None:
+        for r in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
+            self.table.removeRow(r)
+
+    def accounts(self) -> list[dict]:
+        out = []
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 1)
+            name = item.text().strip() if item else ""
+            if name:
+                out.append(
+                    {
+                        "source": self.table.cellWidget(r, 0).currentData(),
+                        "name": name,
+                        "role": self.table.cellWidget(r, 2).currentData(),
+                    }
+                )
+        return out
+
+    def add_if_missing(self, source: str, name: str) -> None:
+        """After a Lichess login: the account becomes yours, in an empty row of that site or a new one."""
+        if not name or any(a["source"] == source and a["name"].lower() == name.lower() for a in self.accounts()):
+            return
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 1)
+            if self.table.cellWidget(r, 0).currentData() == source and not (item and item.text().strip()):
+                self.table.setItem(r, 1, QTableWidgetItem(name))
+                return
+        self.add_row(source, name)
+
+
+class PathList(QWidget):
+    """PGN files and folders (searched for *.pgn) to read games from."""
+
+    def __init__(self, paths: list[str]):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.list = QListWidget()
+        self.list.addItems(paths)
+        self.list.setMaximumHeight(70)
+        lay.addWidget(self.list, 1)
+        col = QVBoxLayout()
+        for label, fn in (("Add file…", self.add_file), ("Add folder…", self.add_folder), ("Remove", self.remove)):
+            b = QPushButton(label)
+            b.clicked.connect(fn)
+            col.addWidget(b)
+        col.addStretch()
+        lay.addLayout(col)
+
+    def add_file(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(self, "PGN files", "", "PGN (*.pgn *.PGN);;All files (*)")
+        self.list.addItems([f for f in files if f not in self.paths()])
+
+    def add_folder(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "A folder with PGN files")
+        if d and d not in self.paths():
+            self.list.addItem(d)
+
+    def remove(self) -> None:
+        for item in self.list.selectedItems():
+            self.list.takeItem(self.list.row(item))
+
+    def paths(self) -> list[str]:
+        return [self.list.item(i).text() for i in range(self.list.count())]
+
+
 class SettingsDialog(QDialog):
     def __init__(self, parent: QWidget, first_run: bool = False):
         super().__init__(parent)
@@ -242,21 +367,36 @@ class SettingsDialog(QDialog):
             hello.setWordWrap(True)
             lay.addWidget(hello)
 
-        acc = QGroupBox("Your games")
+        acc = QGroupBox("Games")
         af = QFormLayout(acc)
-        self.lichess = QLineEdit(self.cfg.get("lichess_user", ""))
-        self.lichess.setPlaceholderText("Lichess username (optional)")
+        self.accounts = AccountsTable(self.cfg.get("accounts", []))
+        af.addRow(self.accounts)
         self.login_btn = QPushButton()
         self.login_status = QLabel()
+        self.login_status.setWordWrap(True)
         self.login_btn.clicked.connect(self.toggle_login)
         lrow = QHBoxLayout()
-        lrow.addWidget(self.lichess)
+        lrow.addWidget(self.login_status, 1)
         lrow.addWidget(self.login_btn)
-        af.addRow("Lichess:", lrow)
-        af.addRow("", self.login_status)
-        self.chesscom = QLineEdit(self.cfg.get("chesscom_user", ""))
-        self.chesscom.setPlaceholderText("Chess.com username (optional)")
-        af.addRow("Chess.com:", self.chesscom)
+        af.addRow("Lichess login:", lrow)
+        self.pgn = PathList(self.cfg.get("pgn_paths", []))
+        af.addRow("PGN files:", self.pgn)
+        self.export_dir = QLineEdit(self.cfg.get("export_dir", ""))
+        self.export_dir.setPlaceholderText("off")
+        self.export_dir.setToolTip("After new games arrive, every account's games are written here as PGN files.")
+        browse = QPushButton("Choose…")
+        browse.clicked.connect(self.pick_export_dir)
+        erow = QHBoxLayout()
+        erow.addWidget(self.export_dir, 1)
+        erow.addWidget(browse)
+        af.addRow("Export games to:", erow)
+        self.contact = QLineEdit(self.cfg.get("contact_email", ""))
+        self.contact.setPlaceholderText("optional")
+        self.contact.setToolTip(
+            "Chess.com asks programs that use its API for a way to contact whoever runs them.\n"
+            "If you enter an email address, it is sent to Chess.com with each download, and nowhere else."
+        )
+        af.addRow("Email for Chess.com:", self.contact)
         days = int(self.cfg.get("history_days", 90))
         self.days = QSpinBox()
         self.days.setRange(1, 36500)
@@ -391,6 +531,11 @@ class SettingsDialog(QDialog):
             self.engine_path = d.path
             self._show_engine()
 
+    def pick_export_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Export games to", self.export_dir.text())
+        if d:
+            self.export_dir.setText(d)
+
     # Lichess login
     def _show_login(self) -> None:
         sec = settings.secrets()
@@ -429,8 +574,7 @@ class SettingsDialog(QDialog):
             sec = settings.secrets()
             sec.update(lichess_token=token, lichess_login=name)
             settings.save_secrets(sec)
-            if not self.lichess.text().strip():
-                self.lichess.setText(name)
+            self.accounts.add_if_missing("lichess", name)
             self.login_btn.setEnabled(True)
             self._show_login()
 
@@ -442,8 +586,9 @@ class SettingsDialog(QDialog):
         _bg(work, done, fail)
 
     def save(self) -> None:
-        if not (self.lichess.text().strip() or self.chesscom.text().strip()):
-            showWarning("Enter a Lichess or Chess.com username.", parent=self)
+        accounts = self.accounts.accounts()
+        if not (any(a["source"] != "pgn" for a in accounts) or self.pgn.paths()):
+            showWarning("Add a Lichess or Chess.com account, or a PGN file.", parent=self)
             return
         if not self.engine_path:
             showWarning("Choose Stockfish first (press “Change…” in the Stockfish box).", parent=self)
@@ -465,8 +610,10 @@ class SettingsDialog(QDialog):
         for old in ("engine_path", "use_lc0", "lc0_path"):  # replaced by stockfish_path / no longer used
             self.cfg.pop(old, None)
         self.cfg.update(
-            lichess_user=self.lichess.text().strip(),
-            chesscom_user=self.chesscom.text().strip(),
+            accounts=accounts,
+            pgn_paths=self.pgn.paths(),
+            export_dir=self.export_dir.text().strip(),
+            contact_email=self.contact.text().strip(),
             history_days=0 if self.all_time.isChecked() else self.days.value(),
             stockfish_path=self.engine_path,
             sf_depth=self.depth.value(),
@@ -655,6 +802,29 @@ def start_update() -> None:
         show_progress()
 
 
+def export_games() -> None:
+    """Every account's stored games, written as PGN to a folder the user picks."""
+    cfg = settings.core_config()
+    if not cfg.extract.accounts and not cfg.extract.pgn_paths:
+        showWarning("Add an account or a PGN file in the settings first.")
+        return
+    folder = QFileDialog.getExistingDirectory(mw, "Export games to", cfg.extract.export_dir)
+    if not folder:
+        return
+
+    def work() -> dict[str, int]:
+        cache = SqliteCache(settings.CACHE_PATH)
+        try:
+            return export_all(cache, cfg.extract, folder)
+        finally:
+            cache.close()
+
+    def done(files: dict[str, int]) -> None:
+        tooltip(f"Exported {sum(files.values())} games to {len(files)} PGN files.", period=4000)
+
+    _bg(work, done, lambda e: showWarning(f"Exporting the games failed: {e}"))
+
+
 def open_settings(first_run: bool = False) -> None:
     SettingsDialog(mw, first_run=first_run).exec()
 
@@ -664,6 +834,7 @@ def setup_menu() -> None:
     for label, fn in (
         ("Update now", start_update),
         ("Show update progress", show_progress),
+        ("Export games…", export_games),
         ("Settings…", open_settings),
     ):
         a = menu.addAction(label)

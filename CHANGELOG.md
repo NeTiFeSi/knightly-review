@@ -5,6 +5,23 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Several accounts, yours or other players'.** The settings now have a table of accounts: any number of Lichess
+  and Chess.com usernames, each marked as yours or as another player's (a master, a rival, someone to compare
+  with). Puzzles still come from your games only; other players' games are downloaded and exported, ready for
+  later features. Your old Lichess and Chess.com usernames become accounts of yours.
+- **Games from PGN files.** Add PGN files, or folders of them, in the settings. Games where one of your names
+  plays become puzzles like your online games; a name listed as another player's is followed too.
+- **PGN export.** Choose an export folder to have every account's games written there as PGN after each update,
+  or use **Tools → Knightly Review → Export games…** once.
+- **An optional email for Chess.com**, sent with its downloads, as Chess.com asks of programs using its API.
+
+### Changed
+
+- Changing Stockfish's threads or memory no longer makes the next update analyse everything again. The first
+  update after this version does analyse again once, mostly from the searches already saved.
+
 ### Fixed
 
 - **Lichess games that were still being played during an update are no longer lost.** Each update moved past them,

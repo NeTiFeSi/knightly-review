@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 from .cache import SqliteCache
-from .config import Config
+from .config import Account, Config
 from .progress import Tracker, describe
 
 
@@ -75,8 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     up = sub.add_parser("update", help="fetch, analyse and write note specs as JSON")
-    up.add_argument("--lichess", default="")
-    up.add_argument("--chesscom", default="")
+    up.add_argument("--lichess", action="append", default=[], help="your Lichess username (repeatable)")
+    up.add_argument("--chesscom", action="append", default=[], help="your Chess.com username (repeatable)")
+    up.add_argument("--pgn", action="append", default=[], help="a PGN file or folder to read games from (repeatable)")
+    up.add_argument("--export", default="", help="folder to write every account's games to as PGN")
     up.add_argument("--stockfish", default="", help="Stockfish path (default: the first one found)")
     up.add_argument("--depth", type=int, help="Stockfish depth, every move searched (default 13)")
     up.add_argument("--cache", default=default_cache())
@@ -118,8 +120,12 @@ def main(argv: list[str] | None = None) -> int:
     from .jobs import run_update
 
     cfg = Config.from_dict(json.loads(Path(args.config).read_text()) if args.config else {})
-    cfg.extract.lichess_user = args.lichess or cfg.extract.lichess_user
-    cfg.extract.chesscom_user = args.chesscom or cfg.extract.chesscom_user
+    cfg.extract.accounts += [Account("lichess", n) for n in args.lichess] + [
+        Account("chesscom", n) for n in args.chesscom
+    ]
+    cfg.extract.__post_init__()  # drop duplicates
+    cfg.extract.pgn_paths += args.pgn
+    cfg.extract.export_dir = args.export or cfg.extract.export_dir
     if args.minutes is not None:
         cfg.build.analysis_minutes = args.minutes
     if args.max_cards is not None:
@@ -135,8 +141,8 @@ def main(argv: list[str] | None = None) -> int:
             print("Stockfish not found; pass --stockfish", file=sys.stderr)
             return 2
         cfg.engine.stockfish_path = found[0].path
-    if not (cfg.extract.lichess_user or cfg.extract.chesscom_user):
-        print("pass --lichess and/or --chesscom", file=sys.stderr)
+    if not cfg.extract.has_games():
+        print("pass --lichess, --chesscom or --pgn", file=sys.stderr)
         return 2
 
     def progress(stage: str, done: int, total: int, msg: str) -> None:

@@ -1,6 +1,9 @@
 Use **Tools → Knightly Review → Settings…** instead of editing this by hand.
 
-- `lichess_user`, `chesscom_user`: whose games to fetch. Either can be empty.
+- `accounts`: whose games to collect, a list of `{"source": "lichess" | "chesscom" | "pgn", "name": ..., "role": "me" | "other"}`. Puzzles are made from the games of your accounts (`"me"`); other players' games (`"other"`: masters, rivals, players to compare with) are downloaded and exported, and later stages will use them. A `"pgn"` account is a name as PGN headers write it (`"Carlsen, Magnus"`), looked for in the PGN files; the names of your site accounts are looked for there too. (Versions before 0.3 had `lichess_user` and `chesscom_user`; they become accounts of yours.)
+- `pgn_paths`: PGN files, or folders searched (with their subfolders) for `*.pgn`, to read games from. A file is read again when it changes. Games not starting from the usual position are skipped.
+- `export_dir`: when set, every account's stored games (all of them, whatever the look-back) are written there as `<site>-<name>.pgn` after new games arrive, plus `pgn-inputs.pgn` with the games of the PGN files. **Tools → Knightly Review → Export games…** does the same into a folder you pick.
+- `contact_email`: optional; added to the requests sent to Chess.com, whose API asks programs for a way to reach whoever runs them.
 - `stockfish_path` (required), `sf_depth` (the depth of the full search that confirms a puzzle, with every move scored; 13 by default), `scan_depth` (the depth of the cheap first scan; 10 by default, never deeper than `sf_depth`), `threads` (0 = half the CPU cores), `hash_mb` (Stockfish's hash table in MB of RAM).
 - `deck`: where new cards go.
 - `update_on_startup`, `update_every_hours` (0 = off): automatic updates while Anki is open.

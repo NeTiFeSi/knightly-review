@@ -20,9 +20,11 @@ class RateLimited(Exception):
     """The site asked us to slow down and retries ran out."""
 
 
-def session(token: str = "") -> requests.Session:
+def session(token: str = "", contact: str = "") -> requests.Session:
+    """`contact`: an email address added to the User-Agent, so the site can reach whoever runs this
+    (Chess.com's API asks for one)."""
     s = requests.Session()
-    s.headers["User-Agent"] = USER_AGENT
+    s.headers["User-Agent"] = f"{USER_AGENT} contact: {contact}" if contact else USER_AGENT
     if token:
         s.headers["Authorization"] = f"Bearer {token}"
     return s
