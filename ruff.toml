@@ -1,0 +1,4 @@
+# Matches core/pyproject.toml's requires-python. Rules are ruff's defaults; nothing is ignored.
+target-version = "py311"
+line-length = 120
+extend-exclude = ["addon/knightly_review/vendor", "card/node_modules"]

@@ -77,14 +77,20 @@ def vendor() -> None:
         src = next(tmp.glob(f"{name}-{version}/{name}"))
         vendor_tree(src, VENDOR / name, names)
     vendor_tree(ROOT / "core" / "knightly", VENDOR / "knightly", names)
-    licence = "\n".join(f"{n} {v}: AGPL-3.0-or-later compatible, see https://pypi.org/project/{n}/{v}/" for n, v, _ in packages)
+    licence = "\n".join(
+        f"{n} {v}: AGPL-3.0-or-later compatible, see https://pypi.org/project/{n}/{v}/" for n, v, _ in packages
+    )
     (VENDOR / "VENDORED.txt").write_text(licence + "\nknightly: this repository's core/ (AGPL-3.0-or-later)\n")
 
 
 def card() -> None:
     dist = ROOT / "card" / "dist"
-    need = [dist / "_knightly.js",
-            dist / "templates" / "front.html", dist / "templates" / "back.html", dist / "templates" / "style.css"]
+    need = [
+        dist / "_knightly.js",
+        dist / "templates" / "front.html",
+        dist / "templates" / "back.html",
+        dist / "templates" / "style.css",
+    ]
     missing = [str(p) for p in need if not p.exists()]
     if missing:
         sys.exit("card build missing (run `npm run build` in card/): " + ", ".join(missing))

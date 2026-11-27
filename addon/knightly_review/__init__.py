@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 try:
@@ -19,6 +20,8 @@ except ImportError:  # used as a library (card/tools, tests) without the Anki GU
     gui_hooks = mw = None
 
 from .config_block import rewrite, validate
+
+log = logging.getLogger(__name__)
 
 VERSION = "0.3.0"
 PREFIX = "kr:"
@@ -63,7 +66,7 @@ def _save(card, cfg: dict[str, Any]) -> dict[str, Any]:
     try:
         card.question(reload=True)
     except Exception:
-        pass
+        log.exception("could not re-render the card")
     return {"ok": True, "updated": replaced}
 
 
@@ -74,7 +77,7 @@ def _save_visits(card: Any, payload: str) -> dict:
     key, _, raw = payload.partition("|")
     counts = json.loads(raw)
     note = card.note()
-    if "Visits" not in note.keys() or not key or not isinstance(counts, dict):
+    if "Visits" not in note or not key or not isinstance(counts, dict):
         return {"ok": False}
     try:
         stored = json.loads(note["Visits"] or "{}")
@@ -100,17 +103,19 @@ def on_js_message(handled: tuple[bool, Any], message: str, context: Any) -> tupl
         return True, {"kr": 1, "version": VERSION}
     if message.startswith("kr:visits:"):  # which replies this card showed: kept in the note, so it syncs
         try:
-            return True, _save_visits(card, message[len("kr:visits:"):])
+            return True, _save_visits(card, message[len("kr:visits:") :])
         except Exception as e:
+            log.exception("could not save the visits")
             return True, {"ok": False, "error": str(e)}
     if message.startswith("kr:config:"):
         try:
-            cfg = json.loads(message[len("kr:config:"):])
+            cfg = json.loads(message[len("kr:config:") :])
         except ValueError:
             return True, {"ok": False, "error": "invalid JSON"}
         try:
             return True, _save(card, cfg)
         except Exception as e:  # report to the card instead of an error dialog
+            log.exception("could not save the settings")
             return True, {"ok": False, "error": str(e)}
     return handled
 

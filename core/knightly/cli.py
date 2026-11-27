@@ -6,9 +6,8 @@ import argparse
 import json
 import os
 import sys
-from pathlib import Path
-
 import threading
+from pathlib import Path
 
 from .cache import SqliteCache
 from .config import Config
@@ -17,7 +16,9 @@ from .progress import Tracker, describe
 
 def default_cache() -> str:
     base = os.environ.get("XDG_CACHE_HOME") or (
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "knightly") if sys.platform == "win32" else os.path.expanduser("~/.cache")
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "knightly")
+        if sys.platform == "win32"
+        else os.path.expanduser("~/.cache")
     )
     return os.path.join(base, "knightly", "cache.sqlite")
 
@@ -59,13 +60,13 @@ class _Bars:
             top = self._bar("stage", 0)
             top.set_description_str((d["message"] or "…")[:90])
             top.total, top.n = 1000, int(1000 * (d["stage_ratio"] or 0))
-            top.set_postfix_str(f'{d["stage"]} · {d["found"]} · {d["elapsed"]}')
+            top.set_postfix_str(f"{d['stage']} · {d['found']} · {d['elapsed']}")
             top.refresh()
             for i, (kind, e) in enumerate(d["engines"].items(), start=1):
                 b = self._bar(kind, i)
-                b.set_description_str(f'{e["label"]:<14}')
+                b.set_description_str(f"{e['label']:<14}")
                 b.total, b.n = 1000, int(1000 * (e["ratio"] or 0))
-                b.set_postfix_str(f'{e["detail"]} · {e["counts"]}')
+                b.set_postfix_str(f"{e['detail']} · {e['counts']}")
                 b.refresh()
 
 
@@ -148,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     tracker = Tracker()
     view = _Bars(tracker) if sys.stderr.isatty() else None
     if view:
-        progress = lambda *a: None  # noqa: E731  (the bars show everything; the messages go above them)
+        progress = lambda *a: None
     if view:
         view.start()
     try:

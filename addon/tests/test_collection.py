@@ -16,7 +16,9 @@ try:
 except ImportError:  # pragma: no cover
     Collection = None
 
-HAVE_BUILD = (ADDON / "knightly_review" / "vendor" / "knightly").is_dir() and (ADDON / "knightly_review" / "card").is_dir()
+HAVE_BUILD = (ADDON / "knightly_review" / "vendor" / "knightly").is_dir() and (
+    ADDON / "knightly_review" / "card"
+).is_dir()
 
 
 @unittest.skipUnless(Collection and HAVE_BUILD, "needs `anki` and `python3 build.py --dev`")
@@ -34,17 +36,18 @@ class CollectionTest(unittest.TestCase):
 
     KEY = "puzzle:5:abcdef123456"
 
-    def spec(self, key=KEY, cards="{{c1::1::1}}", pgn="1. e4 { [%kr 1] } e5 *",
-             tags=("knightly::phase::opening",)):
+    def spec(self, key=KEY, cards="{{c1::1::1}}", pgn="1. e4 { [%kr 1] } e5 *", tags=("knightly::phase::opening",)):
         from knightly_review.vendor.knightly import notes as kn
         from knightly_review.vendor.knightly.model import NoteSpec
 
-        return NoteSpec(key=key, pgn=pgn, cards=cards, notes="n",
-                        tags=["knightly", kn.note_key_tag(key), *tags], card_ids={})
+        return NoteSpec(
+            key=key, pgn=pgn, cards=cards, notes="n", tags=["knightly", kn.note_key_tag(key), *tags], card_ids={}
+        )
 
     def test_install_is_idempotent_and_keeps_config(self):
-        self.assertEqual(self.kc.ensure_installed(self.col, self.card_dir),
-                         ["_knightly.js updated", "note type created"])
+        self.assertEqual(
+            self.kc.ensure_installed(self.col, self.card_dir), ["_knightly.js updated", "note type created"]
+        )
         self.assertEqual(self.kc.ensure_installed(self.col, self.card_dir), [])
         nt = self.col.models.by_name(self.kc.MODEL)
         self.assertEqual([f["name"] for f in nt["flds"]], ["PGN", "Cards", "Notes", "Visits"])

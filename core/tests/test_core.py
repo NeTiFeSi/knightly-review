@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import multiprocessing
 import os
@@ -12,22 +13,62 @@ import threading
 import unittest
 from pathlib import Path
 
-import io
-
 import chess
 import chess.pgn
-
-from helpers import (FIXTURES, FRENCH, FakeAnalysis, score_for, sf_info, PUZZLE_FEN, SCHOLAR_MOVES, SCHOLAR_SCORES, SICILIAN, WHITE_MATES, FakeAnalyser,
-                     FakeResponse, FakeSession, S, ScriptedAnalyser, board_at, game_from, scholar_game, scores_with)
-from knightly import http, notes, progress, openings, phases, pipeline, puzzles, similar, sources, stats, statsview
+from helpers import (
+    FIXTURES,
+    FRENCH,
+    PUZZLE_FEN,
+    SCHOLAR_MOVES,
+    SCHOLAR_SCORES,
+    SICILIAN,
+    WHITE_MATES,
+    FakeAnalyser,
+    FakeAnalysis,
+    FakeResponse,
+    FakeSession,
+    S,
+    ScriptedAnalyser,
+    board_at,
+    game_from,
+    scholar_game,
+    score_for,
+    sf_info,
+)
+from knightly import (
+    http,
+    notes,
+    openings,
+    phases,
+    pipeline,
+    progress,
+    puzzles,
+    similar,
+    sources,
+    stats,
+    statsview,
+)
 from knightly.cache import SqliteCache, fen_key
 from knightly.config import Config
 from knightly.engine import discover, install
 from knightly.jobs import run_update
-from knightly.progress import Tracker
 from knightly.model import Eval, Game, Line, NoWdl, Score
-from knightly.select import (BLUNDER, BRILLIANT, DUBIOUS, GOOD, INTERESTING, MISTAKE, NEUTRAL, SINGULAR, Graded, build_card,
-                             build_punish, grade, line_material)
+from knightly.progress import Tracker
+from knightly.select import (
+    BLUNDER,
+    BRILLIANT,
+    DUBIOUS,
+    GOOD,
+    INTERESTING,
+    MISTAKE,
+    NEUTRAL,
+    SINGULAR,
+    Graded,
+    build_card,
+    build_punish,
+    grade,
+    line_material,
+)
 from knightly.sources import chesscom, lichess
 
 GOLDEN = FIXTURES / "generated_note.pgn"
@@ -231,13 +272,19 @@ class ChesscomTest(unittest.TestCase):
         self.assertEqual((g.source, g.time_class, g.user_is_white), ("chesscom", "correspondence", False))
         self.assertIsNone(chesscom.parse_game(month["games"][1], "knightlyme"))  # chess960
         c = tmpcache(self)
-        arch = {"archives": ["https://api.chess.com/pub/player/knightlyme/games/2026/09",
-                             "https://api.chess.com/pub/player/knightlyme/games/2026/10"]}
-        s = FakeSession([
-            ("/games/archives", FakeResponse(200, arch)),
-            ("/games/2026/10", [FakeResponse(200, month, {"ETag": 'W/"abc"'}), FakeResponse(304)]),
-            ("/games/2026/09", FakeResponse(200, {"games": []})),
-        ])
+        arch = {
+            "archives": [
+                "https://api.chess.com/pub/player/knightlyme/games/2026/09",
+                "https://api.chess.com/pub/player/knightlyme/games/2026/10",
+            ]
+        }
+        s = FakeSession(
+            [
+                ("/games/archives", FakeResponse(200, arch)),
+                ("/games/2026/10", [FakeResponse(200, month, {"ETag": 'W/"abc"'}), FakeResponse(304)]),
+                ("/games/2026/09", FakeResponse(200, {"games": []})),
+            ]
+        )
         now = 1793000000  # 2026-10-26: October is the current month
         self.assertEqual(chesscom.fetch(c, "KnightlyMe", session=s, history_days=60, now=now), 2)
         self.assertEqual(chesscom.fetch(c, "KnightlyMe", session=s, history_days=60, now=now), 0)
@@ -249,12 +296,14 @@ class ChesscomTest(unittest.TestCase):
         c = tmpcache(self)
         base = "https://api.chess.com/pub/player/knightlyme/games/"
         arch = {"archives": [base + "2019/03", base + "2026/09", base + "2026/10"]}
-        s = FakeSession([
-            ("/games/archives", FakeResponse(200, arch)),
-            ("/games/", FakeResponse(200, {"games": []})),
-        ])
+        s = FakeSession(
+            [
+                ("/games/archives", FakeResponse(200, arch)),
+                ("/games/", FakeResponse(200, {"games": []})),
+            ]
+        )
         now = 1793000000  # 2026-10-26
-        months = lambda: [u.rsplit("games/", 1)[1] for u, _ in s.requests if "/games/2" in u]  # noqa: E731
+        months = lambda: [u.rsplit("games/", 1)[1] for u, _ in s.requests if "/games/2" in u]
         chesscom.fetch(c, "KnightlyMe", session=s, history_days=30, now=now)
         self.assertEqual(months(), ["2026/09", "2026/10"])
         self.assertFalse(chesscom.needs_backfill(c, "KnightlyMe", 30, now=now))
@@ -287,8 +336,9 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(self.g([("a", 0, -1), ("b", 30, 0)]), {"a": SINGULAR, "b": BLUNDER})  # a pawn isn't enough
         self.assertEqual(self.g([("a", 0, -3)], legal=1), {"a": GOOD})  # forced: nothing to find
         # Winning a piece isn't a sacrifice, even if a (losing) line grabs even more.
-        self.assertEqual(self.g([("takes_knight", 0, 3), ("takes_queen", 50, 9)]),
-                         {"takes_knight": SINGULAR, "takes_queen": BLUNDER})
+        self.assertEqual(
+            self.g([("takes_knight", 0, 3), ("takes_queen", 50, 9)]), {"takes_knight": SINGULAR, "takes_queen": BLUNDER}
+        )
         # Giving back less than the material you're up still counts against the current balance.
         self.assertEqual(self.g([("a", 0, 2), ("b", 30, 5)], current=5), {"a": BRILLIANT, "b": BLUNDER})
 
@@ -296,8 +346,9 @@ class SelectTest(unittest.TestCase):
         nags = self.g([("sac", 0, -3), ("safe", 0.8, 0), ("bad", 8, 0)])
         self.assertEqual(nags, {"sac": INTERESTING, "safe": GOOD, "bad": DUBIOUS})
         # Two good moves that sacrifice the same: neither has a good alternative keeping more material.
-        self.assertEqual(self.g([("x", 0, -3), ("y", 1, -3), ("greedy", 25, 0)]),
-                         {"x": GOOD, "y": GOOD, "greedy": BLUNDER})
+        self.assertEqual(
+            self.g([("x", 0, -3), ("y", 1, -3), ("greedy", 25, 0)]), {"x": GOOD, "y": GOOD, "greedy": BLUNDER}
+        )
 
     def test_bad_move_bands_and_threshold(self):
         nags = self.g([("best", 0, 0), ("a", 5, 0), ("b", 10, 0), ("c", 10.5, 0), ("d", 20, 0), ("e", 21, 0)])
@@ -310,10 +361,16 @@ class SelectTest(unittest.TestCase):
 
     def test_forced_mate_needs_a_mating_move(self):
         def g(moves, legal=20):
-            return {m.move: m.nag for m in grade([Graded(mv, loss, 0, mate=mate) for mv, loss, mate in moves], legal, self.cfg)}
+            return {
+                m.move: m.nag
+                for m in grade([Graded(mv, loss, 0, mate=mate) for mv, loss, mate in moves], legal, self.cfg)
+            }
+
         # Any forced mate is good, however long; a won position without the mate is not.
-        self.assertEqual(g([("m3", 0, 3), ("m5", 0, 5), ("won", 0, None), ("worse", 15, None)]),
-                         {"m3": GOOD, "m5": GOOD, "won": DUBIOUS, "worse": MISTAKE})
+        self.assertEqual(
+            g([("m3", 0, 3), ("m5", 0, 5), ("won", 0, None), ("worse", 15, None)]),
+            {"m3": GOOD, "m5": GOOD, "won": DUBIOUS, "worse": MISTAKE},
+        )
         # The only move that keeps the mate is the singular move.
         self.assertEqual(g([("m2", 0, 2), ("won", 0, None)]), {"m2": SINGULAR, "won": DUBIOUS})
         # Being mated isn't a mate to keep: plain WDL grading.
@@ -327,8 +384,11 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(line_material(b, ["e2e4", "d7d5", "e4d5", "d8d5", "b1c3", "d5a5"], 4), 0)
         # A short line is continued by the engine when given one.
         short = chess.Board("4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1")
-        table = {fen_key(chess.Board("4k3/8/8/3P4/8/8/8/4K3 b - - 0 1").fen()):
-                 Eval(20, [Line(S(0, 0, 1000, 0), ["e8d7", "e1e2", "d7d6", "e2d3"])])}
+        table = {
+            fen_key(chess.Board("4k3/8/8/3P4/8/8/8/4K3 b - - 0 1").fen()): Eval(
+                20, [Line(S(0, 0, 1000, 0), ["e8d7", "e1e2", "d7d6", "e2d3"])]
+            )
+        }
         self.assertEqual(line_material(short, ["e4d5"], 4, FakeAnalyser(table=table)), 1)
 
     def test_line_material_in_between_move(self):
@@ -351,7 +411,16 @@ class SelectTest(unittest.TestCase):
 
     def test_build_card_a_small_loss_still_makes_a_puzzle(self):
         # The played move loses 2 %: not a good move (more than 1 % worse), so a puzzle; no NAG (normal play).
-        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"]), Line(S(500, 900, 100, 0), ["a7a6"])])}
+        table = {
+            PUZZLE_FEN: Eval(
+                20,
+                [
+                    Line(S(-30, 50, 850, 100), ["g7g6"]),
+                    Line(S(-25, 70, 850, 80), ["g8f6"]),
+                    Line(S(500, 900, 100, 0), ["a7a6"]),
+                ],
+            )
+        }
         card = build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg)
         self.assertEqual((card.played.nag, round(card.loss)), (NEUTRAL, 2))
 
@@ -360,8 +429,19 @@ class SelectTest(unittest.TestCase):
         self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), self.cfg))
 
     def test_build_card_min_loss(self):
-        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"]), Line(S(500, 900, 100, 0), ["a7a6"])])}
-        self.assertIsNone(build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), Config(min_loss=5)))
+        table = {
+            PUZZLE_FEN: Eval(
+                20,
+                [
+                    Line(S(-30, 50, 850, 100), ["g7g6"]),
+                    Line(S(-25, 70, 850, 80), ["g8f6"]),
+                    Line(S(500, 900, 100, 0), ["a7a6"]),
+                ],
+            )
+        }
+        self.assertIsNone(
+            build_card(board_at(SCHOLAR_MOVES, 5), 5, "g8f6", FakeAnalyser(table=table), Config(min_loss=5))
+        )
         self.assertEqual(Config(min_loss=3).min_loss_at(17), 3)
 
     def test_build_punish(self):
@@ -383,8 +463,10 @@ class PhasesTest(unittest.TestCase):
     def test_phase_at(self):
         self.assertEqual(phases.divide([]), (None, None))
         self.assertEqual(phases.divide(SCHOLAR_MOVES), (None, None))
-        self.assertEqual([phases.phase_at((16, 40), p) for p in (0, 15, 16, 39, 40)],
-                         ["opening", "opening", "middlegame", "middlegame", "endgame"])
+        self.assertEqual(
+            [phases.phase_at((16, 40), p) for p in (0, 15, 16, 39, 40)],
+            ["opening", "opening", "middlegame", "middlegame", "endgame"],
+        )
         self.assertEqual(phases.phase_at((None, None), 80), "opening")
 
     def test_endgame_needs_a_middlegame_before_it(self):
@@ -396,8 +478,10 @@ class PhasesTest(unittest.TestCase):
 
 AFTER_NF6 = fen_key(board_at(SCHOLAR_MOVES, 6).fen())
 # Black's Nf6?? is punished by Qxf7#; the other moves are not.
-PUNISH_TABLE = {PUZZLE_FEN: __import__("helpers").PUZZLE_EVAL,
-                AFTER_NF6: Eval(20, [Line(WHITE_MATES, ["h5f7"]), Line(S(300, 700, 300, 0), ["h5h4"])])}
+PUNISH_TABLE = {
+    PUZZLE_FEN: __import__("helpers").PUZZLE_EVAL,
+    AFTER_NF6: Eval(20, [Line(WHITE_MATES, ["h5f7"]), Line(S(300, 700, 300, 0), ["h5h4"])]),
+}
 
 
 class NotesTest(unittest.TestCase):
@@ -418,10 +502,22 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(n.key, puzzles.puzzle_key(PUZZLE_FEN, 5))
         self.assertEqual(n.new_cards, 2)
         # The tags describe the first puzzle only.
-        self.assertEqual(n.tags, ["knightly", notes.note_key_tag(n.key), "knightly::color::black", "knightly::motif::other",
-                                  "knightly::opening::king-s-pawn-game", "knightly::phase::opening", "knightly::rated",
-                                  "knightly::result::loss", "knightly::severity::blunder", "knightly::site::lichess",
-                                  "knightly::time::blitz"])
+        self.assertEqual(
+            n.tags,
+            [
+                "knightly",
+                notes.note_key_tag(n.key),
+                "knightly::color::black",
+                "knightly::motif::other",
+                "knightly::opening::king-s-pawn-game",
+                "knightly::phase::opening",
+                "knightly::rated",
+                "knightly::result::loss",
+                "knightly::severity::blunder",
+                "knightly::site::lichess",
+                "knightly::time::blitz",
+            ],
+        )
         self.assertNotIn("#0", n.pgn)
         self.assertNotIn("100.00", n.pgn)
 
@@ -437,8 +533,11 @@ class NotesTest(unittest.TestCase):
         self.assertEqual((n.cards, n.new_cards), ("{{c1::1::1}}", 1))
 
     def test_opponent_card_comment_and_tag(self):
-        table = {fen_key(board_at(SCHOLAR_MOVES, 2).fen()): Eval(20, [
-            Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])])}
+        table = {
+            fen_key(board_at(SCHOLAR_MOVES, 2).fen()): Eval(
+                20, [Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])]
+            )
+        }
         card = build_card(board_at(SCHOLAR_MOVES, 2), 2, "d1h5", FakeAnalyser(table=table), Config(), "Opponent")
         self.assertFalse(card.mine)
         self.assertTrue(card.comment.startswith("Opponent played Qh5 here, losing 22% win rate."))
@@ -454,10 +553,14 @@ class NotesTest(unittest.TestCase):
         self.assertIsNone(puzzles.parse_key("lichess:abcd:opening"))
 
     def test_notes_field(self):
-        text = notes.puzzle_notes("Opening", ['<div class="kr-stats" data-card="1">x</div>', ""],
-                                  ["Bd3 would also be a good move if x."])
-        self.assertEqual(text, 'Opening<br><div class="kr-stats" data-card="1">x</div><br><b>Similar positions</b>'
-                               "<br>Bd3 would also be a good move if x.")
+        text = notes.puzzle_notes(
+            "Opening", ['<div class="kr-stats" data-card="1">x</div>', ""], ["Bd3 would also be a good move if x."]
+        )
+        self.assertEqual(
+            text,
+            'Opening<br><div class="kr-stats" data-card="1">x</div><br><b>Similar positions</b>'
+            "<br>Bd3 would also be a good move if x.",
+        )
         self.assertEqual(notes.puzzle_notes("Opening", [], []), "Opening")
 
     def test_field_roundtrip(self):
@@ -483,17 +586,25 @@ def seed(test, games, user="knightlyme"):
 
 def recent(**kw):
     import time as _t
+
     kw.setdefault("end_ts", int(_t.time()) - 3600)
     return scholar_game(**kw)
 
 
-CFG = dict(lichess_user="KnightlyMe", stockfish_path="x")
+CFG = {"lichess_user": "KnightlyMe", "stockfish_path": "x"}
 # A second position like the scholar's (the bishop on b5 instead of c4), where Nf6 is also a mistake.
 B_MOVES = ["e2e4", "e7e5", "d1h5", "b8c6", "f1b5", "g8f6"]
 B_TABLE = {
-    fen_key(board_at(B_MOVES, 5).fen()): Eval(20, [
-        Line(S(-30, 50, 850, 100), ["g7g6", "h5f3"]), Line(S(-20, 55, 850, 95), ["d8e7", "b1c3"]),
-        Line(S(-10, 60, 850, 90), ["d8f6", "b1c3"]), Line(S(400, 800, 200, 0), ["g8f6", "h5f7"])])}
+    fen_key(board_at(B_MOVES, 5).fen()): Eval(
+        20,
+        [
+            Line(S(-30, 50, 850, 100), ["g7g6", "h5f3"]),
+            Line(S(-20, 55, 850, 95), ["d8e7", "b1c3"]),
+            Line(S(-10, 60, 850, 90), ["d8f6", "b1c3"]),
+            Line(S(400, 800, 200, 0), ["g8f6", "h5f7"]),
+        ],
+    )
+}
 
 
 class JobsTest(unittest.TestCase):
@@ -501,13 +612,20 @@ class JobsTest(unittest.TestCase):
         c = seed(self, [recent()])
         res = run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
         (note,) = res.notes
-        self.assertEqual((note.key, note.new_cards, note.cards), (puzzles.puzzle_key(PUZZLE_FEN, 5), 2, "{{c1::1::1}} {{c2::2::2}}"))
+        self.assertEqual(
+            (note.key, note.new_cards, note.cards), (puzzles.puzzle_key(PUZZLE_FEN, 5), 2, "{{c1::1::1}} {{c2::2::2}}")
+        )
         self.assertEqual(res.new_cards, 2)
         self.assertGreater(res.analysed_positions, 0)
         self.assertTrue(note.notes.startswith("Opening · <a href"))
         # Second run: the position is on a card already, and nothing about the note changed.
-        again = run_update(Config(**CFG), c, fetch=False, existing={note.key: note.pgn},
-                           analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE))
+        again = run_update(
+            Config(**CFG),
+            c,
+            fetch=False,
+            existing={note.key: note.pgn},
+            analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE),
+        )
         self.assertEqual((again.new_cards, again.notes), (0, []))
 
     def test_no_second_puzzle_when_the_reply_is_unknown(self):
@@ -516,8 +634,13 @@ class JobsTest(unittest.TestCase):
 
     def test_old_cards_keep_their_positions_off_the_list(self):
         old = "1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 { [%kr 1] } 4. Qxf7# *"
-        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, existing={"lichess:test0001:opening": old},
-                         analyser_factory=FakeAnalyser)
+        res = run_update(
+            Config(**CFG),
+            seed(self, [recent()]),
+            fetch=False,
+            existing={"lichess:test0001:opening": old},
+            analyser_factory=FakeAnalyser,
+        )
         self.assertEqual(res.notes, [])
 
     def test_ply_by_ply_and_the_card_cap(self):
@@ -525,7 +648,7 @@ class JobsTest(unittest.TestCase):
         sic = game_from(SICILIAN, white=False, id="s1", end_ts=now - 100)
         fr = game_from(FRENCH, white=False, id="f1", end_ts=now - 200)
         script = {"s1": {5: 30}, "f1": {1: 20}}
-        an = lambda *a: ScriptedAnalyser([sic, fr], script)  # noqa: E731
+        an = lambda *a: ScriptedAnalyser([sic, fr], script)
         res = run_update(Config(**CFG, max_new_cards=5), seed(self, [sic, fr]), fetch=False, analyser_factory=an)
         # Ply 1 (the French game's) before ply 5, though the Sicilian game is newer.
         self.assertEqual([n.key.split(":")[1] for n in res.notes], ["1", "5"])
@@ -535,24 +658,30 @@ class JobsTest(unittest.TestCase):
 
     def test_opponent_mistakes_come_at_their_ply(self):
         table = dict(PUNISH_TABLE)
-        table[fen_key(board_at(SCHOLAR_MOVES, 2).fen())] = Eval(20, [
-            Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])])
-        an = lambda *a: FakeAnalyser(table=table)  # noqa: E731
+        table[fen_key(board_at(SCHOLAR_MOVES, 2).fen())] = Eval(
+            20, [Line(S(30, 100, 850, 50), ["g1f3", "b8c6"]), Line(S(-200, 0, 600, 400), ["d1h5", "b8c6"])]
+        )
+        an = lambda *a: FakeAnalyser(table=table)
         c = seed(self, [recent()])
         ours = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
         self.assertEqual([n.key.split(":")[1] for n in ours.notes], ["5"])
-        both = run_update(Config(**CFG, include_opponent=True), seed(self, [recent()]), fetch=False, analyser_factory=an)
-        self.assertEqual([(n.key.split(":")[1], "knightly::opponent" in n.tags) for n in both.notes],
-                         [("2", True), ("5", False)])
+        both = run_update(
+            Config(**CFG, include_opponent=True), seed(self, [recent()]), fetch=False, analyser_factory=an
+        )
+        self.assertEqual(
+            [(n.key.split(":")[1], "knightly::opponent" in n.tags) for n in both.notes], [("2", True), ("5", False)]
+        )
 
     def test_repeated_positions_update_the_notes_stats(self):
         a, b = recent(), recent(id="test0002", end_ts=int(__import__("time").time()) - 60)
-        an = lambda *a_: FakeAnalyser(table=PUNISH_TABLE)  # noqa: E731
+        an = lambda *a_: FakeAnalyser(table=PUNISH_TABLE)
         c = seed(self, [a])
         first = run_update(Config(**CFG), c, fetch=False, analyser_factory=an)
         self.assertNotIn("Played before", first.notes[0].notes)
         c.put_games([b], "knightlyme")
-        res = run_update(Config(**CFG), c, fetch=False, existing={first.notes[0].key: first.notes[0].pgn}, analyser_factory=an)
+        res = run_update(
+            Config(**CFG), c, fetch=False, existing={first.notes[0].key: first.notes[0].pgn}, analyser_factory=an
+        )
         (changed,) = res.notes
         self.assertEqual((changed.key, changed.new_cards, res.new_cards), (first.notes[0].key, 0, 0))
         self.assertIn("2 games reached this position · White 2 (100%)", changed.notes)
@@ -582,8 +711,9 @@ class JobsTest(unittest.TestCase):
         self.assertIn("g6 would also be a good move if the white bishop on c4 was on b5.", changed.notes)
         self.assertIn("Nf6 would still be a bad move if the white bishop on c4 was on b5.", changed.notes)
         # Remembered: the similar position is not looked at again, nor is anything rewritten.
-        again = run_update(Config(**CFG), c, fetch=False, existing={key: first.notes[0].pgn}, force=True,
-                           analyser_factory=an)
+        again = run_update(
+            Config(**CFG), c, fetch=False, existing={key: first.notes[0].pgn}, force=True, analyser_factory=an
+        )
         self.assertEqual(again.notes, [])
 
     def test_a_similar_position_in_the_same_run_rewrites_the_note_just_made(self):
@@ -596,7 +726,10 @@ class JobsTest(unittest.TestCase):
             return f
 
         res = run_update(Config(**CFG), seed(self, [a, b]), fetch=False, analyser_factory=an)
-        self.assertEqual([(n.key, n.new_cards) for n in res.notes], [(puzzles.puzzle_key(PUZZLE_FEN, 5), 2), (puzzles.puzzle_key(PUZZLE_FEN, 5), 0)])
+        self.assertEqual(
+            [(n.key, n.new_cards) for n in res.notes],
+            [(puzzles.puzzle_key(PUZZLE_FEN, 5), 2), (puzzles.puzzle_key(PUZZLE_FEN, 5), 0)],
+        )
         self.assertIn("would also be a good move", res.notes[-1].notes)
         self.assertNotIn("would also be a good move", res.notes[0].notes)
 
@@ -608,19 +741,27 @@ class JobsTest(unittest.TestCase):
 
     def test_game_nags_grade_every_move(self):
         from knightly.select import game_nags
+
         cfg = Config(lichess_user="KnightlyMe", stockfish_path="x")
         g = scholar_game()
         from helpers import PUZZLE_EVAL, WHITE_MATES
         from knightly.cache import fen_key
+
         after = fen_key(board_at(SCHOLAR_MOVES, 6).fen())  # Nf6 allows mate: the search after the move shows it
         table = {PUZZLE_FEN: PUZZLE_EVAL, after: Eval(depth=20, lines=[Line(WHITE_MATES, ["h5f7"])])}
         nags = game_nags(g, FakeAnalyser(table=table), cfg)
         self.assertEqual(nags[5], 4)  # Nf6??; (the scripted one-line mate position also reads as an only move)
         # Black's only good move at the puzzle position: marked as a singular move.
-        table = {PUZZLE_FEN: Eval(depth=20, lines=[
-            Line(S(-30, 50, 850, 100), ["g8f6", "h5f7"]),
-            Line(S(300, 490, 500, 10), ["g7g6", "h5f3"]),
-            Line(S(300, 490, 500, 10), ["d8e7", "b1c3"])])}
+        table = {
+            PUZZLE_FEN: Eval(
+                depth=20,
+                lines=[
+                    Line(S(-30, 50, 850, 100), ["g8f6", "h5f7"]),
+                    Line(S(300, 490, 500, 10), ["g7g6", "h5f3"]),
+                    Line(S(300, 490, 500, 10), ["d8e7", "b1c3"]),
+                ],
+            )
+        }
         seen = []
         game_nags(g, FakeAnalyser(), cfg, progress=lambda i, n: seen.append((i, n)))
         self.assertEqual(seen, [(i, 7) for i in range(7)])  # one report before each position
@@ -641,7 +782,7 @@ class JobsTest(unittest.TestCase):
             calls.append(1)
             return FakeAnalyser(*a)
 
-        run = lambda cfg=cfg, **kw: run_update(cfg, c, fetch=False, analyser_factory=factory, **kw)  # noqa: E731
+        run = lambda cfg=cfg, **kw: run_update(cfg, c, fetch=False, analyser_factory=factory, **kw)
         first = run()
         existing = {first.notes[0].key: first.notes[0].pgn}
         self.assertFalse(run().skipped)  # cards were made last time and may never have been written
@@ -658,12 +799,20 @@ class JobsTest(unittest.TestCase):
 
     def test_on_note_gets_each_note_as_it_is_built(self):
         seen = []
-        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser, on_note=seen.append)
+        res = run_update(
+            Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser, on_note=seen.append
+        )
         self.assertEqual((res.new_cards, seen), (1, res.notes))
         # A cancel after the first note keeps it in the result.
         ev = threading.Event()
-        res = run_update(Config(**CFG), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser,
-                         on_note=lambda spec: ev.set(), cancel=ev)
+        res = run_update(
+            Config(**CFG),
+            seed(self, [recent()]),
+            fetch=False,
+            analyser_factory=FakeAnalyser,
+            on_note=lambda spec: ev.set(),
+            cancel=ev,
+        )
         self.assertEqual(len(res.notes), 1)
 
     def test_precalculate_only_analyses(self):
@@ -681,8 +830,13 @@ class JobsTest(unittest.TestCase):
 
     def test_progress_events(self):
         events = []
-        run_update(Config(**CFG, max_new_cards=3), seed(self, [recent()]), fetch=False, analyser_factory=FakeAnalyser,
-                   progress=lambda *e: events.append(e))
+        run_update(
+            Config(**CFG, max_new_cards=3),
+            seed(self, [recent()]),
+            fetch=False,
+            analyser_factory=FakeAnalyser,
+            progress=lambda *e: events.append(e),
+        )
         pos = [(d, t) for s, d, t, _ in events if s == "positions"]
         self.assertTrue(pos)
         self.assertTrue(all(0 <= d <= t for d, t in pos))
@@ -690,6 +844,7 @@ class JobsTest(unittest.TestCase):
 
     def test_newest_game_gets_a_shared_mistake(self):
         import time as _t
+
         now = int(_t.time())
         old_li = scholar_game(id="old", end_ts=now - 7200)
         new_cc = scholar_game(source="chesscom", id="new", end_ts=now - 60)
@@ -708,8 +863,11 @@ class JobsTest(unittest.TestCase):
             def score(self, board, depth):
                 raise http.Cancelled()
 
-        self.assertTrue(run_update(Config(**CFG), seed(self, [recent()]), fetch=False, cancel=ev,
-                                   analyser_factory=Cancelling).cancelled)
+        self.assertTrue(
+            run_update(
+                Config(**CFG), seed(self, [recent()]), fetch=False, cancel=ev, analyser_factory=Cancelling
+            ).cancelled
+        )
 
 
 class PipelineTest(unittest.TestCase):
@@ -725,8 +883,9 @@ class PipelineTest(unittest.TestCase):
     def mine(self, games, script, cfg=None, **kw):
         cfg = cfg or Config(sf_depth=13, max_new_cards=9)
         an = ScriptedAnalyser(games, script)
-        m = pipeline.Miner(sorted(games, key=lambda g: -g.end_ts), an, cfg, puzzles.Store(tmpcache(self)),
-                           want=cfg.max_new_cards, **kw)
+        m = pipeline.Miner(
+            sorted(games, key=lambda g: -g.end_ts), an, cfg, puzzles.Store(tmpcache(self)), want=cfg.max_new_cards, **kw
+        )
         m.run()
         return m, an
 
@@ -735,13 +894,15 @@ class PipelineTest(unittest.TestCase):
         g2 = game_from(["d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"], white=False, id="g2", end_ts=200)
         g3 = game_from(["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"], white=False, id="g3", end_ts=100)
         m, an = self.mine([g1, g2, g3], {"g1": {5: 30}, "g2": {5: 15}, "g3": {5: 0.2}})
-        child = lambda g: fen_key(board_at(g.moves, 6).fen())  # noqa: E731
-        at = lambda k, d: [i for i, s in enumerate(an.searched) if s == (k, d)]  # noqa: E731
+        child = lambda g: fen_key(board_at(g.moves, 6).fen())
+        at = lambda k, d: [i for i, s in enumerate(an.searched) if s == (k, d)]
         self.assertTrue(all(at(child(g), 5) for g in (g1, g2, g3)))  # every move of every position, first
         self.assertTrue(at(child(g1), 9) and at(child(g2), 9))
         self.assertLess(at(child(g1), 9)[0], at(child(g2), 9)[0])  # the bigger loss first
         self.assertEqual(at(child(g3), 9), [])  # 0.2 % is nothing: dropped at the first step
-        self.assertEqual([n.key for n in m.notes][:2], [puzzles.puzzle_key(board_at(g.moves, 5).fen(), 5) for g in (g1, g2)])
+        self.assertEqual(
+            [n.key for n in m.notes][:2], [puzzles.puzzle_key(board_at(g.moves, 5).fen(), 5) for g in (g1, g2)]
+        )
         self.assertEqual(len(m.notes), 2)
 
     def test_time_budget(self):
@@ -754,7 +915,9 @@ class PipelineTest(unittest.TestCase):
 
         sic = game_from(SICILIAN, white=False, id="s1", end_ts=200)
         cfg = Config(sf_depth=13, analysis_minutes=1, max_new_cards=5)
-        m = pipeline.Miner([sic], Slow([sic], {"s1": {5: 30}}), cfg, puzzles.Store(tmpcache(self)), want=5, clock=lambda: t[0])
+        m = pipeline.Miner(
+            [sic], Slow([sic], {"s1": {5: 30}}), cfg, puzzles.Store(tmpcache(self)), want=5, clock=lambda: t[0]
+        )
         m.run()
         self.assertEqual((m.analysed, m.notes, m.finished), (6, [], False))
 
@@ -774,15 +937,24 @@ class FollowTest(unittest.TestCase):
 
     def card(self, alternatives, mate=False):
         from knightly.model import CardSpec, Choice
-        return CardSpec(fen_key=fen_key(chess.STARTING_FEN), ply=0, played=Choice("a2a3", MISTAKE, S(0, 0, 1000, 0)),
-                        alternatives=[Choice(m, GOOD, S(0, 0, 1000, 0)) for m in alternatives], loss=10, mate=mate)
+
+        return CardSpec(
+            fen_key=fen_key(chess.STARTING_FEN),
+            ply=0,
+            played=Choice("a2a3", MISTAKE, S(0, 0, 1000, 0)),
+            alternatives=[Choice(m, GOOD, S(0, 0, 1000, 0)) for m in alternatives],
+            loss=10,
+            mate=mate,
+        )
 
     def tree(self, table, alternatives=("e2e4",), mate=False, solver=chess.WHITE, board=None, **kw):
         from knightly import follow
+
         card = self.card(alternatives, mate)
         an = FakeAnalyser(table=table)
-        follow.follow_puzzle(board or chess.Board(), card, an, Config(), solver=solver, seen=kw.pop("seen", set()),
-                             quick_depth=5, **kw)
+        follow.follow_puzzle(
+            board or chess.Board(), card, an, Config(), solver=solver, seen=kw.pop("seen", set()), quick_depth=5, **kw
+        )
         return card, an
 
     @staticmethod
@@ -796,7 +968,9 @@ class FollowTest(unittest.TestCase):
     def test_the_defender_branches_on_good_replies_and_the_solver_on_a_big_gap(self):
         e4, e4e5, e4c5 = self.key("e2e4"), self.key("e2e4", "e7e5"), self.key("e2e4", "c7c5")
         table = {
-            e4: _ev(("e7e5", score_for(48)), ("c7c5", score_for(48.5)), ("d7d6", score_for(51))),  # Black's view: 52, 51.5, 49
+            e4: _ev(
+                ("e7e5", score_for(48)), ("c7c5", score_for(48.5)), ("d7d6", score_for(51))
+            ),  # Black's view: 52, 51.5, 49
             e4e5: _ev(("g1f3", score_for(52)), ("b1c3", score_for(51.5)), ("f1c4", score_for(46))),  # gap 6: follow
             e4c5: _ev(("g1f3", score_for(52)), ("d2d4", score_for(51.6)), ("c2c3", score_for(48.5))),  # gap 3.5: stop
         }
@@ -836,8 +1010,10 @@ class FollowTest(unittest.TestCase):
 
     def test_the_solver_being_mated_ends_the_line(self):
         e4 = self.key("e2e4")
-        table = {e4: _ev(("e7e5", score_for(50)), ("c7c5", score_for(55))),
-                 self.key("e2e4", "e7e5"): _ev(("g1f3", _mate(-2)), ("b1c3", _mate(-2)))}  # White is mated either way
+        table = {
+            e4: _ev(("e7e5", score_for(50)), ("c7c5", score_for(55))),
+            self.key("e2e4", "e7e5"): _ev(("g1f3", _mate(-2)), ("b1c3", _mate(-2))),
+        }  # White is mated either way
         card, _ = self.tree(table, mate=True)
         self.assertEqual(card.alternatives[0].children[0].children, [])
 
@@ -859,6 +1035,7 @@ class FollowTest(unittest.TestCase):
 
     def test_draw_rules(self):
         from knightly.follow import draw_reason
+
         b = chess.Board()
         for m in ["g1f3", "g8f6", "f3g1", "f6g8"] * 2:
             b.push_uci(m)
@@ -876,8 +1053,9 @@ class FollowTest(unittest.TestCase):
 
     def test_decided_positions_make_no_puzzle(self):
         from knightly.select import decided
+
         b = board_at(SCHOLAR_MOVES, 5)
-        lines = lambda *pcts: {m: Line(score_for(100 - p), [m]) for m, p in zip(["g7g6", "d8e7", "d8f6"], pcts)}  # noqa: E731
+        lines = lambda *pcts: {m: Line(score_for(100 - p), [m]) for m, p in zip(["g7g6", "d8e7", "d8f6"], pcts)}
         self.assertTrue(decided(b, lines(60, 55, 52)))  # Black wins whatever it plays
         self.assertFalse(decided(b, lines(45, 40, 30)))  # loses whatever it plays
         self.assertIsNone(decided(b, lines(60, 55, 40)))
@@ -953,7 +1131,9 @@ class ProgressTest(unittest.TestCase):
         self.assertEqual(d["lc0"]["detail"], "idle")
         t.search_end("stockfish", ms=900)
         t.search_end("stockfish", cached=True)
-        self.assertEqual(progress.describe(t.snapshot())["engines"]["stockfish"]["counts"], "1 searched · 1 from the cache")
+        self.assertEqual(
+            progress.describe(t.snapshot())["engines"]["stockfish"]["counts"], "1 searched · 1 from the cache"
+        )
         t.search_start("lc0", chess.STARTING_FEN, 3, 1, 900)
         t.search_progress("lc0", ms=450)
         self.assertEqual(progress.describe(t.snapshot())["engines"]["lc0"]["detail"], "ply 3 · 0.5 of 0.9 s")
@@ -966,7 +1146,9 @@ class ProgressTest(unittest.TestCase):
         t.listen(progress.legacy_listener(lambda *a: calls.append(a)))
         t.found(0, 3)
         t.stage("analyse", "Ply 0 (0 of 3 puzzles found)", total=4, unit="moves", step="depth 5 of 13")
-        self.assertEqual(calls, [("analyse", 0, 3, "Ply 0 (0 of 3 puzzles found)"), ("positions", 0, 4, "depth 5 of 13")])
+        self.assertEqual(
+            calls, [("analyse", 0, 3, "Ply 0 (0 of 3 puzzles found)"), ("positions", 0, 4, "depth 5 of 13")]
+        )
 
     def test_engine_streams_progress_and_caches_like_analyse(self):
         from knightly.engine.analyse import Engine
@@ -977,8 +1159,10 @@ class ProgressTest(unittest.TestCase):
 
         class Proc:
             def analysis(self, board, limit, multipv, root_moves=None):
-                return FakeAnalysis([sf_info(5), sf_info(9), sf_info(13)], on_info=lambda i: seen.append(
-                    t.snapshot().engines["stockfish"].depth))
+                return FakeAnalysis(
+                    [sf_info(5), sf_info(9), sf_info(13)],
+                    on_info=lambda i: seen.append(t.snapshot().engines["stockfish"].depth),
+                )
 
         c = tmpcache(self)
         eng = Engine("stockfish", "x", Config(sf_depth=13), c, tracker=t)
@@ -1002,7 +1186,9 @@ class ProgressTest(unittest.TestCase):
 
         class Proc:
             def analysis(self, board, limit, multipv, root_moves=None):
-                a = FakeAnalysis([sf_info(5), sf_info(9), sf_info(13)], on_info=lambda i: cancel.set() if i["depth"] == 9 else None)
+                a = FakeAnalysis(
+                    [sf_info(5), sf_info(9), sf_info(13)], on_info=lambda i: cancel.set() if i["depth"] == 9 else None
+                )
                 made.append(a)
                 return a
 
@@ -1017,7 +1203,9 @@ class ProgressTest(unittest.TestCase):
         t = Tracker()
         stages = []
         t.listen(lambda s: stages.append((s.stage, s.done, s.total)))
-        res = run_update(Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE), tracker=t)
+        res = run_update(
+            Config(**CFG), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=PUNISH_TABLE), tracker=t
+        )
         self.assertEqual(res.new_cards, 2)
         self.assertTrue(stages)
         self.assertTrue(all(d <= tot for _, d, tot in stages if tot))
@@ -1053,8 +1241,13 @@ class SubNoteTest(unittest.TestCase):
     def go(self, games=None, existing=None, **kw):
         c = seed(self, games or [recent()])
         table = self.table()
-        return c, run_update(Config(**CFG, **kw), c, fetch=False, existing=existing or {},
-                             analyser_factory=lambda *a: FakeAnalyser(table=table))
+        return c, run_update(
+            Config(**CFG, **kw),
+            c,
+            fetch=False,
+            existing=existing or {},
+            analyser_factory=lambda *a: FakeAnalyser(table=table),
+        )
 
     def test_the_deepest_position_is_made_first_and_the_mistake_last(self):
         _, res = self.go()
@@ -1085,12 +1278,16 @@ class SubNoteTest(unittest.TestCase):
         # Black has two moves that are not good at the decision position: b6 (the best of them, 8 %) and a6 (9 %).
         table = self.table()
         x1 = fen_key(self.pos("d8e7", "b1c3").fen())
-        table[x1] = _ev(("g7g6", score_for(48)), ("h7h6", score_for(48.5)), ("b7b6", score_for(56)), ("a7a6", score_for(57)))
-        g2 = recent(id="g2", end_ts=int(__import__("time").time()) - 60,
-                    moves=SCHOLAR_MOVES[:5] + ["d8e7", "b1c3", "a7a6"])
+        table[x1] = _ev(
+            ("g7g6", score_for(48)), ("h7h6", score_for(48.5)), ("b7b6", score_for(56)), ("a7a6", score_for(57))
+        )
+        g2 = recent(
+            id="g2", end_ts=int(__import__("time").time()) - 60, moves=SCHOLAR_MOVES[:5] + ["d8e7", "b1c3", "a7a6"]
+        )
         c = seed(self, [recent(), g2])
-        res = run_update(Config(**CFG, max_new_cards=40), c, fetch=False,
-                         analyser_factory=lambda *a: FakeAnalyser(table=table))
+        res = run_update(
+            Config(**CFG, max_new_cards=40), c, fetch=False, analyser_factory=lambda *a: FakeAnalyser(table=table)
+        )
         sub = chess.pgn.read_game(io.StringIO(res.notes[0].pgn))
         self.assertEqual(sub.next().next().san(), "a6")  # played in a game, though b6 is the better mistake
         _, plain = self.go()
@@ -1114,8 +1311,9 @@ class SubNoteTest(unittest.TestCase):
         _, again = self.go(existing=existing)
         self.assertEqual(again.notes, [])
         # A game that makes the mistake at the position of a note is not a new puzzle.
-        g2 = recent(id="g2", end_ts=int(__import__("time").time()) - 60,
-                    moves=SCHOLAR_MOVES[:5] + ["d8e7", "b1c3", "b7b6"])
+        g2 = recent(
+            id="g2", end_ts=int(__import__("time").time()) - 60, moves=SCHOLAR_MOVES[:5] + ["d8e7", "b1c3", "b7b6"]
+        )
         table = self.table()
 
         def an(*_):
@@ -1132,8 +1330,13 @@ class SubNoteTest(unittest.TestCase):
         self.assertEqual(len(res.notes), 1)  # the deepest note (2 cards) reached the limit: the mistake waits
         existing = {n.key: n.pgn for n in res.notes}
         table = self.table()
-        res2 = run_update(Config(**CFG, max_new_cards=1), c, fetch=False, existing=existing,
-                          analyser_factory=lambda *a: FakeAnalyser(table=table))
+        res2 = run_update(
+            Config(**CFG, max_new_cards=1),
+            c,
+            fetch=False,
+            existing=existing,
+            analyser_factory=lambda *a: FakeAnalyser(table=table),
+        )
         self.assertEqual([n.key for n in res2.notes], [puzzles.puzzle_key(PUZZLE_FEN, 5)])
 
     def test_no_second_card_when_the_punish_position_is_a_card_already(self):
@@ -1163,8 +1366,9 @@ class StatsTest(unittest.TestCase):
         pos = stats.collect_positions([a, b, c])
         start = pos[fen_key(chess.Board().fen())]
         self.assertEqual((start.reached, {u: m.games for u, m in start.moves.items()}), (3, {"e2e4": 2, "g1f3": 1}))
-        self.assertEqual({u: (m.white, m.draw, m.black) for u, m in start.moves.items()},
-                         {"e2e4": (1, 0, 1), "g1f3": (0, 1, 0)})
+        self.assertEqual(
+            {u: (m.white, m.draw, m.black) for u, m in start.moves.items()}, {"e2e4": (1, 0, 1), "g1f3": (0, 1, 0)}
+        )
         # After 1.e4 e5 2.Nf3 Nf6 and 1.Nf3 Nf6 2.e4 e5: the same position at the same ply, two games.
         meet = pos[fen_key(board_at(["e2e4", "e7e5", "g1f3", "g8f6"], 4).fen())]
         self.assertEqual(meet.reached, 2)
@@ -1202,16 +1406,18 @@ class StatsViewTest(unittest.TestCase):
         self.assertIn('<div class="kr-stats" data-card="1">', statsview.section(1, two))
 
     def test_rows_bars_and_badges(self):
-        games = ([game_from(["e2e4"], white=True, id=f"e{i}", result="1-0") for i in range(3)]
-                 + [game_from(["e2e4"], white=True, id="ed", result="1/2-1/2")]
-                 + [game_from(["d2d4"], white=True, id="d1", result="0-1"), game_from(["a2a3"], white=True, id="a1")])
+        games = (
+            [game_from(["e2e4"], white=True, id=f"e{i}", result="1-0") for i in range(3)]
+            + [game_from(["e2e4"], white=True, id="ed", result="1/2-1/2")]
+            + [game_from(["d2d4"], white=True, id="d1", result="0-1"), game_from(["a2a3"], white=True, id="a1")]
+        )
         html_ = statsview.section(1, self.pos(games), nags={"e2e4": GOOD, "a2a3": MISTAKE}, mistake="a2a3")
         self.assertIn("6 games reached this position · White 4 (67%) · draws 1 (17%) · Black 1 (16%)", html_)
         self.assertIn('<span class="kr-stat-move">e4<b class="kr-stat-nag">!</b></span>', html_)
         self.assertIn("4 games · 67%", html_)
         self.assertLess(html_.index("e4"), html_.index("d4"))  # most played first
-        self.assertIn('kr-stat-row kr-good', html_)
-        self.assertIn('kr-stat-row kr-bad', html_)  # the mistake
+        self.assertIn("kr-stat-row kr-good", html_)
+        self.assertIn("kr-stat-row kr-bad", html_)  # the mistake
         self.assertIn('title="White 3 · draws 1 · Black 0"', html_)  # e4: 4 games, 1 draw, no Black win
 
     def test_only_six_rows_and_the_rest_in_one(self):
@@ -1255,8 +1461,12 @@ class SimilarTest(unittest.TestCase):
         w = "the pawn was on h4"
         self.assertEqual(similar.comment("Ng4", True, True, w), "Ng4 would also be a good move if the pawn was on h4.")
         self.assertEqual(similar.comment("Ng4", True, False, w), "Ng4 would not be a good move if the pawn was on h4.")
-        self.assertEqual(similar.comment("Be3", False, True, w), "Be3 is not a good move, but it would be if the pawn was on h4.")
-        self.assertEqual(similar.comment("Be3", False, False, w), "Be3 would still be a bad move if the pawn was on h4.")
+        self.assertEqual(
+            similar.comment("Be3", False, True, w), "Be3 is not a good move, but it would be if the pawn was on h4."
+        )
+        self.assertEqual(
+            similar.comment("Be3", False, False, w), "Be3 would still be a bad move if the pawn was on h4."
+        )
 
 
 class AnalyserTest(unittest.TestCase):
@@ -1342,9 +1552,15 @@ class AnalyserTest(unittest.TestCase):
 
 class EngineTest(unittest.TestCase):
     def test_pick_asset(self):
-        assets = [{"name": n} for n in (
-            "stockfish-linux-x86-64-universal.tar.gz", "stockfish-linux-arm64-universal.tar.gz",
-            "stockfish-macos-universal.tar.gz", "stockfish-windows-x86-64-universal.zip")]
+        assets = [
+            {"name": n}
+            for n in (
+                "stockfish-linux-x86-64-universal.tar.gz",
+                "stockfish-linux-arm64-universal.tar.gz",
+                "stockfish-macos-universal.tar.gz",
+                "stockfish-windows-x86-64-universal.zip",
+            )
+        ]
         self.assertEqual(install.pick_asset(assets, "linux", "x86_64")["name"], assets[0]["name"])
         self.assertEqual(install.pick_asset(assets, "linux", "aarch64")["name"], assets[1]["name"])
         self.assertEqual(install.pick_asset(assets, "darwin", "arm64")["name"], assets[2]["name"])
@@ -1370,9 +1586,11 @@ class EngineTest(unittest.TestCase):
         def fake(name: str, wdl: bool) -> Path:
             opt = "print('option name UCI_ShowWDL type check default false'); " if wdl else ""
             p = d / name
-            p.write_text(f"#!{sys.executable}\nimport sys\nfor l in sys.stdin:\n"
-                         f"    if l.strip()=='uci': print('id name {name}'); {opt}print('uciok'); sys.stdout.flush()\n"
-                         "    if l.strip()=='quit': break\n")
+            p.write_text(
+                f"#!{sys.executable}\nimport sys\nfor l in sys.stdin:\n"
+                f"    if l.strip()=='uci': print('id name {name}'); {opt}print('uciok'); sys.stdout.flush()\n"
+                "    if l.strip()=='quit': break\n"
+            )
             p.chmod(p.stat().st_mode | stat.S_IXUSR)
             return p
 
@@ -1393,6 +1611,7 @@ class EngineTest(unittest.TestCase):
         not_engine.write_text("#!/bin/sh\necho hello\n")
         not_engine.chmod(0o755)
         self.assertIsNone(discover.probe_details(str(not_engine)))
+
 
 if __name__ == "__main__":
     unittest.main()

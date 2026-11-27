@@ -1,7 +1,6 @@
 import unittest
 
 import chess
-
 from knightly import motifs
 
 
@@ -33,8 +32,10 @@ class MotifTest(unittest.TestCase):
         self.assertIn("sacrifice", found("4k3/8/8/8/8/8/8/4K2R b - - 0 1", "e8d8", "h1h8", sacrifice=True))
 
     def test_slugs(self):
-        self.assertEqual([motifs.slug(t) for t in ("backRankMate", "mateIn2", "xRayAttack", "fork")],
-                         ["back-rank-mate", "mate-in-2", "x-ray-attack", "fork"])
+        self.assertEqual(
+            [motifs.slug(t) for t in ("backRankMate", "mateIn2", "xRayAttack", "fork")],
+            ["back-rank-mate", "mate-in-2", "x-ray-attack", "fork"],
+        )
 
 
 if __name__ == "__main__":

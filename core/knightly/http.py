@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import requests
 
@@ -27,7 +28,7 @@ def session(token: str = "") -> requests.Session:
     return s
 
 
-def sleep(seconds: float, cancel: Optional[threading.Event]) -> None:
+def sleep(seconds: float, cancel: threading.Event | None) -> None:
     if cancel is None:
         time.sleep(seconds)
     elif cancel.wait(seconds):
@@ -38,10 +39,10 @@ def get(
     s: requests.Session,
     url: str,
     *,
-    cancel: Optional[threading.Event] = None,
+    cancel: threading.Event | None = None,
     retries: int = 2,
     wait_429: float = 60.0,
-    on_wait: Optional[Callable[[float], None]] = None,
+    on_wait: Callable[[float], None] | None = None,
     **kw: Any,
 ) -> requests.Response:
     """GET that waits `wait_429` seconds (or Retry-After) on HTTP 429, then retries."""

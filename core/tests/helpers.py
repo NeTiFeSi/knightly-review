@@ -5,14 +5,13 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Optional
 
 import chess
-
 from knightly.cache import fen_key
 from knightly.model import Eval, Game, Line, Score
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
 
 def S(cp: int, w: int, d: int, l: int) -> Score:
     """A score with WDL (per mille, White's view)."""
@@ -23,16 +22,35 @@ WHITE_MATES = Score(mate=1, wdl=(1000, 0, 0))
 
 # 1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6?? 4. Qxf7#  — the user plays Black.
 SCHOLAR_MOVES = ["e2e4", "e7e5", "d1h5", "b8c6", "f1c4", "g8f6", "h5f7"]
-SCHOLAR_SCORES = [S(30, 100, 850, 50), S(30, 100, 850, 50), S(30, 100, 850, 50), S(-30, 50, 850, 100),
-                  S(-20, 55, 850, 95), S(-30, 50, 850, 100), WHITE_MATES, Score(cp=10000, wdl=(1000, 0, 0))]
+SCHOLAR_SCORES = [
+    S(30, 100, 850, 50),
+    S(30, 100, 850, 50),
+    S(30, 100, 850, 50),
+    S(-30, 50, 850, 100),
+    S(-20, 55, 850, 95),
+    S(-30, 50, 850, 100),
+    WHITE_MATES,
+    Score(cp=10000, wdl=(1000, 0, 0)),
+]
 
 
 def scholar_game(**kw) -> Game:
-    d = dict(
-        source="lichess", id="test0001", url="https://lichess.org/test0001/black", white="Opponent",
-        black="KnightlyMe", user_is_white=False, end_ts=1793000000, result="1-0", moves=list(SCHOLAR_MOVES),
-        time_class="blitz", rated=True, white_elo="1500", black_elo="1480", event="Rated blitz game",
-    )
+    d = {
+        "source": "lichess",
+        "id": "test0001",
+        "url": "https://lichess.org/test0001/black",
+        "white": "Opponent",
+        "black": "KnightlyMe",
+        "user_is_white": False,
+        "end_ts": 1793000000,
+        "result": "1-0",
+        "moves": list(SCHOLAR_MOVES),
+        "time_class": "blitz",
+        "rated": True,
+        "white_elo": "1500",
+        "black_elo": "1480",
+        "event": "Rated blitz game",
+    }
     d.update(kw)
     return Game(**d)
 
@@ -46,12 +64,15 @@ def board_at(moves: list[str], ply: int) -> chess.Board:
 
 PUZZLE_FEN = fen_key(board_at(SCHOLAR_MOVES, 5).fen())
 # Black to move: g6, Qe7 and Qf6 are all within 2 % of the best; Nf6 allows mate.
-PUZZLE_EVAL = Eval(depth=20, lines=[
-    Line(S(-30, 50, 850, 100), ["g7g6", "h5f3"]),
-    Line(S(-20, 55, 850, 95), ["d8e7", "b1c3"]),
-    Line(S(-10, 60, 850, 90), ["d8f6", "b1c3"]),
-    Line(WHITE_MATES, ["g8f6", "h5f7"]),
-])
+PUZZLE_EVAL = Eval(
+    depth=20,
+    lines=[
+        Line(S(-30, 50, 850, 100), ["g7g6", "h5f3"]),
+        Line(S(-20, 55, 850, 95), ["d8e7", "b1c3"]),
+        Line(S(-10, 60, 850, 90), ["d8f6", "b1c3"]),
+        Line(WHITE_MATES, ["g8f6", "h5f7"]),
+    ],
+)
 
 
 def positions_scored(moves: list[str], scores: list[Score]) -> dict[str, Score]:
@@ -68,7 +89,7 @@ def positions_scored(moves: list[str], scores: list[Score]) -> dict[str, Score]:
 class FakeAnalyser:
     """Scripted evals instead of an engine; other positions are a dead draw with no line."""
 
-    def __init__(self, cfg=None, cache=None, cancel=None, table: Optional[dict[str, Eval]] = None):
+    def __init__(self, cfg=None, cache=None, cancel=None, table: dict[str, Eval] | None = None):
         self.table = {PUZZLE_FEN: PUZZLE_EVAL} if table is None else table
         self.stats = {"fake": 0}
         self.calls = 0
@@ -156,8 +177,14 @@ FRENCH = ["e2e4", "e7e6", "d2d4", "d7d5"]
 
 
 def game_from(moves: list[str], *, white: bool, **kw) -> Game:
-    d = dict(moves=list(moves), user_is_white=white, white="KnightlyMe" if white else "Opponent",
-             black="Opponent" if white else "KnightlyMe", url="", result="1-0")
+    d = {
+        "moves": list(moves),
+        "user_is_white": white,
+        "white": "KnightlyMe" if white else "Opponent",
+        "black": "Opponent" if white else "KnightlyMe",
+        "url": "",
+        "result": "1-0",
+    }
     d.update(kw)
     return scholar_game(**d)
 
@@ -231,6 +258,13 @@ class FakeAnalysis:
 
 def sf_info(depth, move="e2e4", cp=20, nodes=1000, nps=500000, time_s=0.1):
     import chess.engine
-    return {"depth": depth, "nodes": nodes, "nps": nps, "time": time_s, "pv": [chess.Move.from_uci(move)],
-            "score": chess.engine.PovScore(chess.engine.Cp(cp), chess.WHITE),
-            "wdl": chess.engine.PovWdl(chess.engine.Wdl(300, 650, 50), chess.WHITE)}
+
+    return {
+        "depth": depth,
+        "nodes": nodes,
+        "nps": nps,
+        "time": time_s,
+        "pv": [chess.Move.from_uci(move)],
+        "score": chess.engine.PovScore(chess.engine.Cp(cp), chess.WHITE),
+        "wdl": chess.engine.PovWdl(chess.engine.Wdl(300, 650, 50), chess.WHITE),
+    }

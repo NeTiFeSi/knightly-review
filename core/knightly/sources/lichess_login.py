@@ -13,7 +13,6 @@ import hashlib
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from .. import http
@@ -37,9 +36,9 @@ class LoginFlow:
         self.state = secrets.token_urlsafe(16)
         self.scopes = scopes
         self._done = threading.Event()
-        self._code: Optional[str] = None
-        self._error: Optional[str] = None
-        self._server: Optional[HTTPServer] = None
+        self._code: str | None = None
+        self._error: str | None = None
+        self._server: HTTPServer | None = None
 
     @property
     def redirect_uri(self) -> str:
@@ -50,7 +49,7 @@ class LoginFlow:
         flow = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):  # noqa: N802
+            def do_GET(self):
                 q = parse_qs(urlparse(self.path).query)
                 if "state" not in q and "error" not in q:
                     self.send_response(404)
@@ -79,19 +78,23 @@ class LoginFlow:
         self._server = HTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         challenge = base64.urlsafe_b64encode(hashlib.sha256(self.verifier.encode()).digest()).rstrip(b"=").decode()
-        return AUTHORIZE + "?" + urlencode(
-            {
-                "response_type": "code",
-                "client_id": CLIENT_ID,
-                "redirect_uri": self.redirect_uri,
-                "code_challenge_method": "S256",
-                "code_challenge": challenge,
-                "scope": " ".join(self.scopes),
-                "state": self.state,
-            }
+        return (
+            AUTHORIZE
+            + "?"
+            + urlencode(
+                {
+                    "response_type": "code",
+                    "client_id": CLIENT_ID,
+                    "redirect_uri": self.redirect_uri,
+                    "code_challenge_method": "S256",
+                    "code_challenge": challenge,
+                    "scope": " ".join(self.scopes),
+                    "state": self.state,
+                }
+            )
         )
 
-    def wait(self, timeout: float = 300, cancel: Optional[threading.Event] = None) -> str:
+    def wait(self, timeout: float = 300, cancel: threading.Event | None = None) -> str:
         """Block until the browser comes back; return the access token."""
         try:
             step = 0.25

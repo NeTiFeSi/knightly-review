@@ -10,16 +10,16 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
 
 NAMES = ("stockfish", "lc0")
 STOCKFISH, LC0 = "stockfish", "lc0"
 
 
-def kind_of(name: str) -> Optional[str]:
-    """"stockfish" or "lc0" from an engine's `id name`, else None (unsupported)."""
+def kind_of(name: str) -> str | None:
+    """ "stockfish" or "lc0" from an engine's `id name`, else None (unsupported)."""
     n = name.lower()
     if "stockfish" in n:
         return STOCKFISH
@@ -46,13 +46,13 @@ def popen_kwargs() -> dict:
 WDL_OPTION = "option name UCI_ShowWDL"
 
 
-def probe(path: str, timeout: float = 10.0) -> Optional[str]:
+def probe(path: str, timeout: float = 10.0) -> str | None:
     """The engine's `id name` if `path` is Stockfish or Lc0 and reports win/draw/loss, else None."""
     d = probe_details(path, timeout)
     return d[0] if d and d[1] and kind_of(d[0]) else None
 
 
-def probe_details(path: str, timeout: float = 10.0) -> Optional[tuple[str, bool]]:
+def probe_details(path: str, timeout: float = 10.0) -> tuple[str, bool] | None:
     """(`id name`, supports UCI_ShowWDL) if `path` speaks UCI, else None."""
     try:
         p = subprocess.Popen(
@@ -79,7 +79,7 @@ def probe_details(path: str, timeout: float = 10.0) -> Optional[tuple[str, bool]
     return "UCI engine", wdl
 
 
-def _candidates(engines_dir: Optional[str]) -> Iterable[tuple[str, str]]:
+def _candidates(engines_dir: str | None) -> Iterable[tuple[str, str]]:
     exe = ".exe" if sys.platform == "win32" else ""
     if engines_dir and os.path.isdir(engines_dir):
         for p in sorted(glob.glob(os.path.join(engines_dir, "**", f"stockfish*{exe}"), recursive=True), reverse=True):
@@ -96,7 +96,9 @@ def _candidates(engines_dir: Optional[str]) -> Iterable[tuple[str, str]]:
     elif sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA", "")
         if local:
-            for p in glob.glob(os.path.join(local, "Microsoft", "WinGet", "Packages", "Stockfish*", "**", "*.exe"), recursive=True):
+            for p in glob.glob(
+                os.path.join(local, "Microsoft", "WinGet", "Packages", "Stockfish*", "**", "*.exe"), recursive=True
+            ):
                 yield p, "winget"
             for name in NAMES:
                 yield os.path.join(local, "Microsoft", "WinGet", "Links", f"{name}.exe"), "winget"
@@ -112,8 +114,7 @@ def _candidates(engines_dir: Optional[str]) -> Iterable[tuple[str, str]]:
                 yield os.path.join(d, name), "system"
 
 
-def discover(engines_dir: Optional[str] = None, custom: Optional[str] = None,
-             kind: Optional[str] = None) -> list[EngineInfo]:
+def discover(engines_dir: str | None = None, custom: str | None = None, kind: str | None = None) -> list[EngineInfo]:
     """Supported engines (of `kind`, if given), best guess first: a custom path, then downloaded, then installed."""
     seen: set[str] = set()
     found: list[EngineInfo] = []

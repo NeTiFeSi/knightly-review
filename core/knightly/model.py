@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -39,7 +39,7 @@ class Game:
         return asdict(self)
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "Game":
+    def from_json(cls, d: dict[str, Any]) -> Game:
         d = {k: v for k, v in d.items() if k != "site_evals"}  # older caches stored Lichess's evals
         return cls(**d)
 
@@ -56,9 +56,9 @@ class Score:
     estimate in per mille, White's view; all judgements use it.
     """
 
-    cp: Optional[int] = None
-    mate: Optional[int] = None
-    wdl: Optional[tuple[int, int, int]] = None
+    cp: int | None = None
+    mate: int | None = None
+    wdl: tuple[int, int, int] | None = None
 
     def win_pct(self, white: bool = True) -> float:
         """Expected score 0..100 for the given side: (wins + draws / 2), from the engine's WDL."""
@@ -66,7 +66,7 @@ class Score:
             raise NoWdl("score has no WDL")
         w, d, l = self.wdl
         total = (w + d + l) or 1
-        own, other = (w, l) if white else (l, w)
+        own, _other = (w, l) if white else (l, w)
         return 100 * (own + d / 2) / total
 
     def pgn(self) -> str:
@@ -82,7 +82,7 @@ class Score:
         return d
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "Score":
+    def from_json(cls, d: dict[str, Any]) -> Score:
         wdl = d.get("wdl")
         return cls(cp=d.get("cp"), mate=d.get("mate"), wdl=tuple(wdl) if wdl else None)
 
@@ -113,7 +113,7 @@ class Eval:
         }
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "Eval":
+    def from_json(cls, d: dict[str, Any]) -> Eval:
         return cls(
             depth=d["depth"],
             source=d.get("source", "engine"),
@@ -129,7 +129,7 @@ class Choice:
     move: str  # UCI
     nag: int
     score: Score  # after the move (White's view)
-    children: list["Choice"] = field(default_factory=list)  # what follows the move, best first (the solution tree)
+    children: list[Choice] = field(default_factory=list)  # what follows the move, best first (the solution tree)
     comment: str = ""  # shown with the move (why the line ends here…)
     tag: int = 0  # cloze number of the puzzle whose answer this move is (written as [%kr N])
 

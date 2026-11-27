@@ -26,18 +26,19 @@ from __future__ import annotations
 import heapq
 import math
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional
 
 import chess
 
-from . import notes as notes_mod, similar, stats, statsview
+from . import notes as notes_mod
+from . import similar, stats, statsview
 from .cache import fen_key
 from .config import Config
 from .engine.analyse import terminal
 from .follow import Decision, follow_puzzle, trimmed
+from .model import CardSpec, Game, NoteSpec, Score
 from .progress import Tracker
-from .model import CardSpec, Choice, Game, NoteSpec, Score
 from .puzzles import Puzzle, Store, puzzle_id
 from .select import ACCEPTED, build_card, build_punish, game_nags, grade_position
 
@@ -78,11 +79,22 @@ class Unit:
 
 
 class Miner:
-    def __init__(self, games: Iterable[Game], analyser, cfg: Config, store: Store, *, want: int,
-                 known: Iterable[Puzzle] = (), claimed: Iterable[str] = (), existing: Optional[dict[str, str]] = None,
-                 make: bool = True, tracker: Optional[Tracker] = None,
-                 on_note: Optional[Callable[[NoteSpec], None]] = None,
-                 clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        games: Iterable[Game],
+        analyser,
+        cfg: Config,
+        store: Store,
+        *,
+        want: int,
+        known: Iterable[Puzzle] = (),
+        claimed: Iterable[str] = (),
+        existing: dict[str, str] | None = None,
+        make: bool = True,
+        tracker: Tracker | None = None,
+        on_note: Callable[[NoteSpec], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         """`games` newest first. `known`: the puzzles already in the collection; `claimed`: fen keys of
         the positions of every card already in the collection (never made twice, whatever the ply); `existing`: note key → PGN of the collection's notes.
         `make=False` (pre-calculating): analyse and warm the cache, make and change no notes."""
@@ -128,7 +140,7 @@ class Miner:
             return f"{step} ({done} {what}{budget})"
         return f"{step} ({done} of {self.want} {what}{budget})"
 
-    def _say(self, step: str, detail: str = "", position: Optional[str] = None) -> None:
+    def _say(self, step: str, detail: str = "", position: str | None = None) -> None:
         """Change the message of the current stage (a forced update when it differs)."""
         self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
         if position is not None:
@@ -152,7 +164,7 @@ class Miner:
             self.sc[k] = (s, d)
         self.tracker.advance()
 
-    def _pct(self, u: Unit, move: str) -> Optional[float]:
+    def _pct(self, u: Unit, move: str) -> float | None:
         cur = self.sc.get(fen_key(u.child[move]))
         return None if cur is None else cur[0].win_pct(u.board.turn == chess.WHITE)
 
@@ -174,7 +186,9 @@ class Miner:
         if level == 0:
             moves = list(u.child)
         else:
-            by_score = sorted((m for m in u.child if self._pct(u, m) is not None), key=lambda m: -(self._pct(u, m) or 0))
+            by_score = sorted(
+                (m for m in u.child if self._pct(u, m) is not None), key=lambda m: -(self._pct(u, m) or 0)
+            )
             moves = list(dict.fromkeys([*u.played, *by_score[:EXTRA_LINES]]))
         if level:
             self.tracker.plan(len(moves))
@@ -223,8 +237,13 @@ class Miner:
         self.tracker.plies(ply, max(self.by_ply, default=0))
         self.tracker.found(self.cards if self.make else self.found, 0 if self.want >= UNBOUNDED else self.want)
         self.tracker.budget(None if self.deadline == math.inf else max(0.0, (self.deadline - self.clock()) / 60))
-        self.tracker.stage("analyse", self._msg(step), total=sum(len(u.child) for u in units), unit="moves",
-                           step=f"depth {self.scan[0]} of {self.cfg.sf_depth}")
+        self.tracker.stage(
+            "analyse",
+            self._msg(step),
+            total=sum(len(u.child) for u in units),
+            unit="moves",
+            step=f"depth {self.scan[0]} of {self.cfg.sf_depth}",
+        )
         for i, u in enumerate(units):
             self.tracker.position(f"ply {ply}: position {i + 1} of {len(units)}")
             self._search(u, 0)
@@ -239,9 +258,12 @@ class Miner:
                 break  # the heap is ordered: everything left is below too
             if u.level < len(self.scan) - 1:
                 u.level += 1
-                self._say(f"Ply {ply}, {who}: checking the biggest losses at depth {self.scan[u.level]} "
-                          f"of {self.cfg.sf_depth}", f"depth {self.scan[u.level]} of {self.cfg.sf_depth}",
-                          f"ply {ply}: a move losing {-neg:.0f} % · {len(heap) + 1} candidates")
+                self._say(
+                    f"Ply {ply}, {who}: checking the biggest losses at depth {self.scan[u.level]} "
+                    f"of {self.cfg.sf_depth}",
+                    f"depth {self.scan[u.level]} of {self.cfg.sf_depth}",
+                    f"ply {ply}: a move losing {-neg:.0f} % · {len(heap) + 1} candidates",
+                )
                 self._search(u, u.level)
                 n += 1
                 heapq.heappush(heap, (-self.loss(u), n, u))
@@ -252,8 +274,11 @@ class Miner:
 
     def _confirm(self, u: Unit, ply: int) -> None:
         """Full-strength look at the position's worst played moves; the first that is no good move makes the puzzle."""
-        self._say(f"Ply {ply}: making a puzzle at full strength", f"depth {self.cfg.sf_depth} of {self.cfg.sf_depth}, every move",
-                  f"ply {ply}: a move losing {self.loss(u):.0f} %")
+        self._say(
+            f"Ply {ply}: making a puzzle at full strength",
+            f"depth {self.cfg.sf_depth} of {self.cfg.sf_depth}, every move",
+            f"ply {ply}: a move losing {self.loss(u):.0f} %",
+        )
         self.tracker.plan(1)
         game_opponent = ""
         worst = sorted(self._losses(u).items(), key=lambda kv: -kv[1])[:CONFIRM_TRIES]
@@ -275,7 +300,7 @@ class Miner:
             return
 
     # --- making notes
-    def _scores_of(self, game: Game) -> list[Optional[Score]]:
+    def _scores_of(self, game: Game) -> list[Score | None]:
         keys, b = [], chess.Board()
         keys.append(fen_key(b.fen()))
         for m in game.moves:
@@ -290,15 +315,17 @@ class Miner:
             label = f"Grading the moves of {game.white} – {game.black}"
             with self.tracker.sub("cards", label, total=len(game.moves), unit="positions", step="grading the moves"):
                 self._graded[game.key] = game_nags(  # puzzle plies are graded in full already
-                    game, self.an, self.cfg, skip, lambda i, n: self.tracker.advance() if i else None)
+                    game, self.an, self.cfg, skip, lambda i, n: self.tracker.advance() if i else None
+                )
         return self._graded[game.key]
 
     def _stats_sections(self, p: Puzzle) -> list[str]:
         """The explorer tables of the note's two positions (each only when two games reached it)."""
         out = [statsview.section(1, self.by_fen.get(fen_key(p.fen)), nags=p.moves, mistake=p.played)]
         if p.after_fen:
-            out.append(statsview.section(2, self.by_fen.get(fen_key(p.after_fen)), "After the mistake: ",
-                                         nags=p.after_moves))
+            out.append(
+                statsview.section(2, self.by_fen.get(fen_key(p.after_fen)), "After the mistake: ", nags=p.after_moves)
+            )
         return out
 
     def _notes_of(self, p: Puzzle) -> str:
@@ -323,18 +350,28 @@ class Miner:
         second = build_punish(after.copy(stack=False), ply + 1, played_san, self.an, self.cfg, mine=card.mine)
         seen = {fen_key(hist.fen()), fen_key(after.fen())}
         quick = self.scan[0]
-        decisions = follow_puzzle(hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick,
-                                  tracker=self.tracker)
+        decisions = follow_puzzle(
+            hist, card, self.an, self.cfg, solver=hist.turn, seen=seen, quick_depth=quick, tracker=self.tracker
+        )
         if second is not None:
-            decisions += follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=seen,
-                                       quick_depth=quick, include_played=True, tracker=self.tracker)
+            decisions += follow_puzzle(
+                after,
+                second,
+                self.an,
+                self.cfg,
+                solver=after.turn,
+                seen=seen,
+                quick_depth=quick,
+                include_played=True,
+                tracker=self.tracker,
+            )
         for d in sorted(decisions, key=lambda d: -d.depth):  # the leaves first, then towards the root
             self._sub_note(d, game)
             if self.cards >= self.want:
                 raise _Stop()
         self._root_note(u, game, card, second, after)
 
-    def _root_note(self, u: Unit, game: Game, card: CardSpec, second: Optional[CardSpec], after: chess.Board) -> None:
+    def _root_note(self, u: Unit, game: Game, card: CardSpec, second: CardSpec | None, after: chess.Board) -> None:
         ply = card.ply
         if second is not None and fen_key(after.fen()) in self.claimed:
             second = None  # that position is a card already
@@ -342,18 +379,25 @@ class Miner:
         card.alternatives = [trimmed(c, 1) for c in card.alternatives]
         if second is not None:
             second.played, second.alternatives = trimmed(second.played, 1), [trimmed(c, 1) for c in second.alternatives]
-        p = Puzzle(key=notes_mod.puzzle_key(card.fen_key, ply), fen=u.board.fen(), ply=ply,
-                   moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},
-                   played=card.played.move, after_fen=after.fen() if second else "", after_ply=ply + 1 if second else 0,
-                   head=notes_mod.puzzle_head(game, card),
-                   after_moves=self._moves_of(second))
+        p = Puzzle(
+            key=notes_mod.puzzle_key(card.fen_key, ply),
+            fen=u.board.fen(),
+            ply=ply,
+            moves={card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}},
+            played=card.played.move,
+            after_fen=after.fen() if second else "",
+            after_ply=ply + 1 if second else 0,
+            head=notes_mod.puzzle_head(game, card),
+            after_moves=self._moves_of(second),
+        )
         p.notes = self._notes_of(p)
-        spec = notes_mod.build_puzzle(game, self._scores_of(game), card, second, p.notes, self.cfg.inaccuracy,
-                                      self._nags(game, {ply}))
+        spec = notes_mod.build_puzzle(
+            game, self._scores_of(game), card, second, p.notes, self.cfg.inaccuracy, self._nags(game, {ply})
+        )
         self._emit(p, spec)
 
     @staticmethod
-    def _moves_of(card: Optional[CardSpec]) -> dict[str, int]:
+    def _moves_of(card: CardSpec | None) -> dict[str, int]:
         return {} if card is None else {card.played.move: card.played.nag, **{c.move: c.nag for c in card.alternatives}}
 
     def _emit(self, p: Puzzle, spec: NoteSpec) -> None:
@@ -388,32 +432,60 @@ class Miner:
         loss = max(0.0, best.score.win_pct(white) - mistake.score.win_pct(white))
         best_san = board.san(chess.Move.from_uci(best.move))
         mistake_san = board.san(chess.Move.from_uci(mistake.move))
-        comment = (f"{mistake_san} loses {loss:.0f}% win rate. {best_san} was best." if mine else
-                   f"{mistake_san} loses {loss:.0f}% win rate for your opponent here. {best_san} was best.")
+        comment = (
+            f"{mistake_san} loses {loss:.0f}% win rate. {best_san} was best."
+            if mine
+            else f"{mistake_san} loses {loss:.0f}% win rate for your opponent here. {best_san} was best."
+        )
         others = [trimmed(c, 1) for c in d.choices if c is not mistake]
-        first = CardSpec(fen_key=key, ply=d.ply, played=trimmed(mistake, 0), alternatives=others, loss=loss,
-                         comment=comment, mine=mine)
+        first = CardSpec(
+            fen_key=key,
+            ply=d.ply,
+            played=trimmed(mistake, 0),
+            alternatives=others,
+            loss=loss,
+            comment=comment,
+            mine=mine,
+        )
         after = board.copy(stack=False)
         after.push_uci(mistake.move)
         second = None
         if fen_key(after.fen()) not in self.claimed:
             second = build_punish(after.copy(stack=False), d.ply + 1, mistake_san, self.an, self.cfg, mine=mine)
         if second is not None:
-            follow_puzzle(after, second, self.an, self.cfg, solver=after.turn, seen=set(), quick_depth=self.scan[0],
-                          include_played=True, tracker=self.tracker, max_plies=2)
+            follow_puzzle(
+                after,
+                second,
+                self.an,
+                self.cfg,
+                solver=after.turn,
+                seen=set(),
+                quick_depth=self.scan[0],
+                include_played=True,
+                tracker=self.tracker,
+                max_plies=2,
+            )
             second.played = trimmed(second.played, 1)
             second.alternatives = [trimmed(c, 1) for c in second.alternatives]
-        p = Puzzle(key=notes_mod.puzzle_key(key, d.ply), fen=d.fen, ply=d.ply,
-                   moves={mistake.move: mistake.nag, **{c.move: c.nag for c in others}}, played=mistake.move,
-                   after_fen=after.fen() if second else "", after_ply=d.ply + 1 if second else 0,
-                   head=notes_mod.puzzle_head(game, first), after_moves=self._moves_of(second))
+        p = Puzzle(
+            key=notes_mod.puzzle_key(key, d.ply),
+            fen=d.fen,
+            ply=d.ply,
+            moves={mistake.move: mistake.nag, **{c.move: c.nag for c in others}},
+            played=mistake.move,
+            after_fen=after.fen() if second else "",
+            after_ply=d.ply + 1 if second else 0,
+            head=notes_mod.puzzle_head(game, first),
+            after_moves=self._moves_of(second),
+        )
         p.notes = self._notes_of(p)
-        spec = notes_mod.build_puzzle(game, [], first, second, p.notes, self.cfg.inaccuracy,
-                                      lead=(d.before_fen, trimmed(d.reply, 0)))
+        spec = notes_mod.build_puzzle(
+            game, [], first, second, p.notes, self.cfg.inaccuracy, lead=(d.before_fen, trimmed(d.reply, 0))
+        )
         self._emit(p, spec)
 
-    def _similar(self, board: chess.Board) -> Optional[Puzzle]:
-        best: Optional[tuple[int, Puzzle]] = None
+    def _similar(self, board: chess.Board) -> Puzzle | None:
+        best: tuple[int, Puzzle] | None = None
         for p in self.known.values():
             if not p.stored:
                 continue
@@ -434,8 +506,11 @@ class Miner:
         for m in dict.fromkeys([*p.good(), p.played]):
             if m not in nag_here:  # not a legal move here: nothing to say
                 continue
-            out.append(similar.comment(old.san(chess.Move.from_uci(m)), p.moves.get(m) in ACCEPTED,
-                                       nag_here[m] in ACCEPTED, why))
+            out.append(
+                similar.comment(
+                    old.san(chess.Move.from_uci(m)), p.moves.get(m) in ACCEPTED, nag_here[m] in ACCEPTED, why
+                )
+            )
         bid = puzzle_id(u.pos.fen, ply)
         p.links[bid] = out
         self.merged.add(bid)
@@ -452,8 +527,15 @@ class Miner:
             return
         p.notes = text
         self.store.put(p)
-        spec = NoteSpec(key=p.key, pgn=self.existing.get(p.key) or p.pgn, cards=p.cards, notes=text, tags=p.tags,
-                        card_ids=p.card_ids, new_cards=0)
+        spec = NoteSpec(
+            key=p.key,
+            pgn=self.existing.get(p.key) or p.pgn,
+            cards=p.cards,
+            notes=text,
+            tags=p.tags,
+            card_ids=p.card_ids,
+            new_cards=0,
+        )
         self.notes.append(spec)
         self.on_note(spec)
 

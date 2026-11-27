@@ -18,9 +18,9 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Callable, Optional
 
 STOCKFISH, LC0 = "stockfish", "lc0"
 
@@ -52,13 +52,13 @@ class Snapshot:
     done: int = 0
     total: int = 0
     rate: float = 0.0  # units per second
-    eta: Optional[float] = None  # seconds left for the stage, when known
+    eta: float | None = None  # seconds left for the stage, when known
     found: int = 0
     want: int = 0
     ply: int = -1
     max_ply: int = 0
     position: str = ""  # the position being worked on, in words
-    minutes_left: Optional[float] = None
+    minutes_left: float | None = None
     elapsed: float = 0.0
     engines: dict = field(default_factory=dict)  # kind → EngineStats
 
@@ -99,8 +99,9 @@ class Tracker:
         """Start a step (forced update): `kind` is fetch, analyse, cards, start, done or error."""
         with self._lock:
             self._samples.clear()
-            self._s = replace(self._s, stage=kind, message=message, step=step, unit=unit, done=0, total=total,
-                              rate=0.0, eta=None)
+            self._s = replace(
+                self._s, stage=kind, message=message, step=step, unit=unit, done=0, total=total, rate=0.0, eta=None
+            )
         self._emit(True)
 
     @contextmanager
@@ -113,12 +114,21 @@ class Tracker:
             yield
         finally:
             with self._lock:
-                self._s = replace(self._s, stage=saved.stage, message=saved.message, step=saved.step, unit=saved.unit,
-                                  done=saved.done, total=saved.total, rate=saved.rate, eta=saved.eta)
+                self._s = replace(
+                    self._s,
+                    stage=saved.stage,
+                    message=saved.message,
+                    step=saved.step,
+                    unit=saved.unit,
+                    done=saved.done,
+                    total=saved.total,
+                    rate=saved.rate,
+                    eta=saved.eta,
+                )
                 self._samples = deque(samples, maxlen=30)
             self._emit(True)
 
-    def message(self, message: str, *, step: Optional[str] = None, force: bool = True) -> None:
+    def message(self, message: str, *, step: str | None = None, force: bool = True) -> None:
         with self._lock:
             self._s = replace(self._s, message=message, step=self._s.step if step is None else step)
         self._emit(force)
@@ -138,7 +148,7 @@ class Tracker:
             self._s = replace(self._s, done=done, rate=rate, eta=eta)
         self._emit(False)
 
-    def _rate(self, done: int, total: int) -> tuple[float, Optional[float]]:
+    def _rate(self, done: int, total: int) -> tuple[float, float | None]:
         if len(self._samples) < 2:
             return 0.0, None
         (t0, d0), (t1, d1) = self._samples[0], self._samples[-1]
@@ -161,7 +171,7 @@ class Tracker:
         with self._lock:
             self._s = replace(self._s, position=text)
 
-    def budget(self, minutes_left: Optional[float]) -> None:
+    def budget(self, minutes_left: float | None) -> None:
         with self._lock:
             self._s = replace(self._s, minutes_left=minutes_left)
 
@@ -175,8 +185,9 @@ class Tracker:
         self._engine(kind, name=name, enabled=enabled)
 
     def search_start(self, kind: str, fen: str, ply: int, multipv: int, target: int) -> None:
-        self._engine(kind, busy=True, fen=fen, ply=ply, multipv=multipv, target=target, depth=0, nodes=0, nps=0,
-                     elapsed_ms=0)
+        self._engine(
+            kind, busy=True, fen=fen, ply=ply, multipv=multipv, target=target, depth=0, nodes=0, nps=0, elapsed_ms=0
+        )
         self._emit(True)
 
     def search_progress(self, kind: str, depth: int = 0, nodes: int = 0, nps: int = 0, ms: int = 0) -> None:
@@ -185,8 +196,13 @@ class Tracker:
     def search_end(self, kind: str, cached: bool = False, ms: int = 0) -> None:
         with self._lock:
             e = self._s.engines.get(kind, EngineStats())
-            self._engine(kind, busy=False, cached=e.cached + (1 if cached else 0),
-                         searches=e.searches + (0 if cached else 1), ms=e.ms + ms)
+            self._engine(
+                kind,
+                busy=False,
+                cached=e.cached + (1 if cached else 0),
+                searches=e.searches + (0 if cached else 1),
+                ms=e.ms + ms,
+            )
         self._emit(False)
 
     # --- reading
@@ -198,7 +214,7 @@ class Tracker:
 # ---------------------------------------------------------------- texts
 
 
-def _clock_text(seconds: Optional[float]) -> str:
+def _clock_text(seconds: float | None) -> str:
     if seconds is None:
         return ""
     s = int(seconds)
@@ -211,8 +227,11 @@ def describe_engine(kind: str, e: EngineStats) -> dict:
     if e.busy and e.target:
         ratio = min(1.0, (e.depth / e.target) if kind == STOCKFISH else (e.elapsed_ms / e.target))
         where = f"ply {e.ply} · " if e.ply >= 0 else ""
-        now = (f"depth {e.depth} of {e.target}" if kind == STOCKFISH
-               else f"{e.elapsed_ms / 1000:.1f} of {e.target / 1000:.1f} s")
+        now = (
+            f"depth {e.depth} of {e.target}"
+            if kind == STOCKFISH
+            else f"{e.elapsed_ms / 1000:.1f} of {e.target / 1000:.1f} s"
+        )
         lines = f" · {e.multipv} lines" if e.multipv > 1 else ""
         speed = f" · {e.nps / 1000:.0f} knps" if e.nps else ""
         detail = f"{where}{now}{lines}{speed}"

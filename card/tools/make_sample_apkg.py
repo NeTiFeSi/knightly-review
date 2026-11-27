@@ -5,6 +5,7 @@ Usage: python tools/make_sample_apkg.py [PGN_FILE ...] [-o OUT.apkg]
 Requires `npm run build` first and Anki's own Python package (`pip install anki`,
 or run it with the Python that Anki itself uses).
 """
+
 import argparse
 import hashlib
 import html
@@ -90,8 +91,9 @@ def main() -> None:
             out = str(Path(args.out).resolve())
             col.export_anki_package(
                 out_path=out,
-                options=ExportAnkiPackageOptions(with_scheduling=False, with_deck_configs=False,
-                                                 with_media=True, legacy=True),
+                options=ExportAnkiPackageOptions(
+                    with_scheduling=False, with_deck_configs=False, with_media=True, legacy=True
+                ),
                 limit=DeckIdLimit(did),
             )
         finally:

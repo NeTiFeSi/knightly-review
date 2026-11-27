@@ -7,14 +7,12 @@ naming what differs ("… if the white pawn on h3 was on h4").
 
 from __future__ import annotations
 
-from typing import Optional
-
 import chess
 
 MAX_SQUARES = 2  # how many squares may differ
 
 
-def diff(a: chess.Board, b: chess.Board) -> list[tuple[chess.Square, Optional[chess.Piece], Optional[chess.Piece]]]:
+def diff(a: chess.Board, b: chess.Board) -> list[tuple[chess.Square, chess.Piece | None, chess.Piece | None]]:
     """The squares where the two boards differ: (square, piece in a, piece in b)."""
     pa, pb = a.piece_map(), b.piece_map()
     return [(sq, pa.get(sq), pb.get(sq)) for sq in sorted(set(pa) | set(pb)) if pa.get(sq) != pb.get(sq)]

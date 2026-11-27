@@ -37,8 +37,8 @@ Grading (NAGs) of the candidate moves at a puzzle position:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional
 
 import chess
 
@@ -61,7 +61,7 @@ def material(board: chess.Board, color: chess.Color) -> int:
     return sum(v * (len(board.pieces(pt, color)) - len(board.pieces(pt, not color))) for pt, v in VALUES.items())
 
 
-def _capture_gain(board: chess.Board, sq: chess.Square) -> Optional[int]:
+def _capture_gain(board: chess.Board, sq: chess.Square) -> int | None:
     """Net material the side to move wins by capturing on `sq` with its cheapest piece, then
     letting the exchange there run (either side may stop); None when it has no capture there."""
     caps = [m for m in board.legal_moves if m.to_square == sq and board.is_capture(m)]
@@ -81,8 +81,9 @@ def _recapture_owed(board: chess.Board, sq: chess.Square) -> bool:
     return gain is not None and gain >= 0
 
 
-def _settled(board: chess.Board, last: chess.Move, after_board_capture: bool, nxt: Optional[chess.Move],
-             owed: bool = False) -> bool:
+def _settled(
+    board: chess.Board, last: chess.Move, after_board_capture: bool, nxt: chess.Move | None, owed: bool = False
+) -> bool:
     """No exchange or check in progress: counting material here doesn't cut a trade in half.
 
     `owed`: a recapture that was available right after the last capture on its square hasn't
@@ -103,11 +104,15 @@ def line_material(board: chess.Board, moves: list[str], plies: int, analyser=Non
     b = board.copy(stack=False)
     seq = list(moves)
     done = 0
-    last: Optional[chess.Move] = None
+    last: chess.Move | None = None
     captured = False
-    owed: Optional[tuple[chess.Square, Optional[chess.Piece]]] = None  # square and capturer of a trade still to be finished
+    owed: tuple[chess.Square, chess.Piece | None] | None = None  # square and capturer of a trade still to be finished
     while done < plies + EXTRA_PLIES and not b.is_game_over():
-        if done >= len(seq) and analyser is not None and (done < plies or (last and not _settled(b, last, captured, None, owed is not None))):
+        if (
+            done >= len(seq)
+            and analyser is not None
+            and (done < plies or (last and not _settled(b, last, captured, None, owed is not None)))
+        ):
             ev = analyser.evaluate(b, multipv=1)
             seq += ev.lines[0].moves if ev.lines else []
         if done >= len(seq):
@@ -136,7 +141,7 @@ class Graded:
     loss: float  # expected-score points below the best move
     material: int  # short-term material balance along the line
     nag: int = 0
-    mate: Optional[int] = None  # forced mate in this many moves, from the mover's side (negative: getting mated)
+    mate: int | None = None  # forced mate in this many moves, from the mover's side (negative: getting mated)
 
 
 def grade(moves: list[Graded], legal_moves: int, cfg: Config, current: int = 0) -> list[Graded]:
@@ -187,8 +192,9 @@ def quick_nag(loss: float, inaccuracy: float) -> int:
 GAME_LINES = 3  # enough to tell an only good move (the second line is worse) and the good moves apart
 
 
-def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = (),
-              progress: Optional[Callable[[int, int], None]] = None) -> dict[int, int]:
+def game_nags(
+    game: Game, analyser, cfg: Config, skip: Iterable[int] = (), progress: Callable[[int, int], None] | None = None
+) -> dict[int, int]:
     """NAG of the played move at each ply of `game` that has one, graded like a puzzle position's moves.
 
     Plies in `skip` (the puzzle cards, graded in full there) and positions with a single legal move are left
@@ -211,8 +217,15 @@ def game_nags(game: Game, analyser, cfg: Config, skip: Iterable[int] = (),
     return out
 
 
-def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[str] = None,
-                   ply: int = 99, lines: Optional[int] = None, sf_only: bool = False) -> tuple[list[Graded], dict[str, Line]]:
+def grade_position(
+    board: chess.Board,
+    analyser,
+    cfg: Config,
+    extra: str | None = None,
+    ply: int = 99,
+    lines: int | None = None,
+    sf_only: bool = False,
+) -> tuple[list[Graded], dict[str, Line]]:
     """Deep multi-line analysis of `board`, graded. `extra` (e.g. the move played) is analysed too.
 
     `lines`: how many lines to analyse instead of the configured number. `sf_only`: Stockfish alone
@@ -230,14 +243,18 @@ def grade_position(board: chess.Board, analyser, cfg: Config, extra: Optional[st
     white = board.turn == chess.WHITE
     best = max(l.score.win_pct(white) for l in by_move.values())
     graded = [
-        Graded(m, max(0.0, best - l.score.win_pct(white)), line_material(board, l.moves, cfg.sacrifice_plies, analyser),
-               mate=None if l.score.mate is None else (l.score.mate if white else -l.score.mate))
+        Graded(
+            m,
+            max(0.0, best - l.score.win_pct(white)),
+            line_material(board, l.moves, cfg.sacrifice_plies, analyser),
+            mate=None if l.score.mate is None else (l.score.mate if white else -l.score.mate),
+        )
         for m, l in by_move.items()
     ]
     return grade(graded, board.legal_moves.count(), cfg, material(board, board.turn)), by_move
 
 
-def decided(board: chess.Board, by_move: dict[str, Line]) -> Optional[bool]:
+def decided(board: chess.Board, by_move: dict[str, Line]) -> bool | None:
     """Whether no move can change the result for the side to move: True when even the worst move still
     scores above 50 % (it wins whatever it plays), False when even the best scores below 50 % (it loses
     whatever it plays), None otherwise. Positions with a forced mate in any line are never decided."""
@@ -258,8 +275,9 @@ def decided_text(board: chess.Board, verdict: bool) -> str:
     return f"The game is decided: {chess.COLOR_NAMES[winner].capitalize()} is winning."
 
 
-def _choices(graded: list[Graded], by_move: dict[str, Line], cfg: Config,
-             played: Optional[str] = None) -> tuple[Optional[Choice], list[Choice]]:
+def _choices(
+    graded: list[Graded], by_move: dict[str, Line], cfg: Config, played: str | None = None
+) -> tuple[Choice | None, list[Choice]]:
     """The graded moves as the card's choices: (the played move's, the others best first)."""
     others: list[Choice] = []
     played_choice = None
@@ -273,8 +291,16 @@ def _choices(graded: list[Graded], by_move: dict[str, Line], cfg: Config,
     return played_choice, others
 
 
-def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
-               opponent: str = "", min_loss: Optional[float] = None, tag_motifs: bool = True) -> Optional[CardSpec]:
+def build_card(
+    board: chess.Board,
+    ply: int,
+    played: str,
+    analyser,
+    cfg: Config,
+    opponent: str = "",
+    min_loss: float | None = None,
+    tag_motifs: bool = True,
+) -> CardSpec | None:
     """Deep-analyse the puzzle position and grade its candidate moves.
 
     None when the position isn't a fair puzzle: only one legal move, or the deep look says the
@@ -304,7 +330,11 @@ def build_card(board: chess.Board, ply: int, played: str, analyser, cfg: Config,
     cp = motifs_mod.MATE_CP * (1 if sc.mate > 0 else -1) if sc.mate is not None else (sc.cp or 0)
     if board.turn == chess.BLACK:
         cp = -cp
-    found = [] if not tag_motifs else motifs_mod.detect(board, best_line.moves, cp, choices[0].nag in (BRILLIANT, INTERESTING))
+    found = (
+        []
+        if not tag_motifs
+        else motifs_mod.detect(board, best_line.moves, cp, choices[0].nag in (BRILLIANT, INTERESTING))
+    )
     best_san = board.san(chess.Move.from_uci(choices[0].move))
     played_san = board.san(chess.Move.from_uci(played))
     if opponent:
@@ -329,8 +359,9 @@ def _mates(graded: list[Graded], move: str) -> bool:
     return g is not None and g.mate is not None and g.mate > 0
 
 
-def build_punish(board: chess.Board, ply: int, played_san: str, analyser, cfg: Config,
-                 mine: bool = True) -> Optional[CardSpec]:
+def build_punish(
+    board: chess.Board, ply: int, played_san: str, analyser, cfg: Config, mine: bool = True
+) -> CardSpec | None:
     """The second puzzle of a mistake: `board` is the position after the bad move (`ply` half-moves played),
     and the answer is the best reply. The card's main move is that reply, the other moves are graded as usual.
 

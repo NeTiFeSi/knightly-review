@@ -6,8 +6,8 @@ recomputed from the games in the look-back on every run, so adding games just up
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
 
 import chess
 
@@ -19,8 +19,8 @@ from .model import Game
 class MoveStat:
     mine: int = 0  # times the user played it here
     opp: int = 0  # times an opponent played it here
-    mine_game: Optional[Game] = None  # the newest game where the user played it
-    opp_game: Optional[Game] = None
+    mine_game: Game | None = None  # the newest game where the user played it
+    opp_game: Game | None = None
 
     @property
     def total(self) -> int:

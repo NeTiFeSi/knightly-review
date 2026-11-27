@@ -14,8 +14,8 @@ import shutil
 from pathlib import Path
 
 # `import chess`, `import chess.pgn`, `from chess import X`, `from chess.engine import Y`
-_IMPORT = re.compile(r"^(?P<indent>[ \t]*)import (?P<mod>[\w.]+)[ \t]*(?P<rest>(#.*)?)$", re.M)
-_FROM = re.compile(r"^(?P<indent>[ \t]*)from (?P<mod>[\w.]+) import ", re.M)
+_IMPORT = re.compile(r"^(?P<indent>[ \t]*)import (?P<mod>[\w.]+)[ \t]*(?P<rest>(#.*)?)$", re.MULTILINE)
+_FROM = re.compile(r"^(?P<indent>[ \t]*)from (?P<mod>[\w.]+) import ", re.MULTILINE)
 
 
 def rewrite_imports(source: str, names: set[str], depth: int) -> str:
