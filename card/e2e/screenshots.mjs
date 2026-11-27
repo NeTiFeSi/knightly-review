@@ -14,7 +14,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import * as card from './lib/card.mjs';
-import { CARD_DIR, puppeteer, until as poll, wait } from './lib/common.mjs';
+import { CARD_DIR, puppeteer, SAMPLE_DECK, until as poll, wait } from './lib/common.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -118,6 +118,12 @@ async function main() {
   const errors = [];
   try {
     const record = (name, action) => recordWith(() => (REAL ? anki.page() : page), name, action);
+    if (REAL) {
+      // The pictures show card 1: make every sample card new again, so Anki serves them in order (earlier e2e
+      // runs grade cards "Again", which leaves another one first).
+      const ids = await anki.ac('findCards', { query: `deck:"${SAMPLE_DECK}"` });
+      await anki.ac('forgetCards', { cards: ids });
+    }
     let page = REAL ? await anki.openDeck() : await browser.newPage();
     page.on('pageerror', e => errors.push(e.message));
     if (!REAL) await page.goto(url, { waitUntil: 'load' });
@@ -135,9 +141,10 @@ async function main() {
       await card.waitMounted(page, 'front');
     };
     // Shoot just the card, not the harness bar.
-    const shot = async name => {
+    // `whole`: the card container (the Notes block, with the explorer stats, sits outside `.kr-root`).
+    const shot = async (name, whole = false) => {
       if (REAL) page = await anki.page();
-      const el = await page.$(REAL ? '.kr-root' : '#qa');
+      const el = await page.$(REAL && !whole ? '.kr-root' : '#qa');
       await el.screenshot({ path: OUT + name + '.png' });
       console.log('wrote docs/img/' + name + '.png');
     };
@@ -169,7 +176,7 @@ async function main() {
     await card.play(page, sol.rejected.uci, 'mouse');
     await until(page);
     await wait(500);
-    await shot('back');
+    await shot('back', true);
 
     // 5. Solved.
     await fresh();

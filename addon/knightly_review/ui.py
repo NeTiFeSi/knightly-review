@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import ClassVar
 
@@ -41,6 +42,8 @@ from .vendor.knightly.engine import install as ki
 from .vendor.knightly.sources import lichess as kl
 from .vendor.knightly.sources.lichess_login import LoginFlow
 
+log = logging.getLogger(__name__)
+
 
 def _bg(work, done, fail=None) -> None:
     """Run `work()` in a thread, then `done(result)` or `fail(exc)` on the main thread."""
@@ -48,7 +51,8 @@ def _bg(work, done, fail=None) -> None:
     def run():
         try:
             r = work()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
+            log.exception("background task failed")
             err = e  # `e` is unbound once the except block ends; the callback runs later
             mw.taskman.run_on_main(lambda: (fail or (lambda x: showWarning(str(x))))(err))
             return
