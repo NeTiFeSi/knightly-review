@@ -5,6 +5,7 @@ Pure Python (no aqt), so it can be tested outside Anki. Mirrors card/src/cardRef
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -57,11 +58,9 @@ def validate(cfg: Any) -> str | None:
             return f"{key} must be one of {', '.join(spec[1])}"
         if kind == "num":
             _, lo, hi, integer = spec
-            if not _is_num(v) or v != v or not lo <= v <= hi or (integer and v != int(v)):
+            if not _is_num(v) or math.isnan(v) or not lo <= v <= hi or (integer and v != int(v)):
                 return f"{key} must be a number from {lo} to {hi}"
-        if kind == "nags" and not (
-            isinstance(v, list) and all(_is_num(x) and x == int(x) and x > 0 for x in v)
-        ):
+        if kind == "nags" and not (isinstance(v, list) and all(_is_num(x) and x == int(x) and x > 0 for x in v)):
             return f"{key} must be a list of NAG numbers"
     return None
 

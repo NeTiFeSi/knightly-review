@@ -11,14 +11,14 @@ the middlegame it never goes back to the opening.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 import chess
 
 OPENING, MIDDLEGAME, ENDGAME = "opening", "middlegame", "endgame"
 PHASES = (OPENING, MIDDLEGAME, ENDGAME)
 
-Division = tuple[Optional[int], Optional[int]]  # (middlegame start ply, endgame start ply)
+Division = tuple[int | None, int | None]  # (middlegame start ply, endgame start ply)
 
 _REGIONS = [0x0303 << (x + 8 * y) for y in range(7) for x in range(7)]  # 2×2 squares
 
@@ -29,14 +29,20 @@ def _majors_and_minors(board: chess.Board) -> int:
 
 def _backrank_sparse(board: chess.Board) -> bool:
     """A thin back rank means the pieces have been developed."""
-    return (chess.popcount(chess.BB_RANK_1 & board.occupied_co[chess.WHITE]) < 4
-            or chess.popcount(chess.BB_RANK_8 & board.occupied_co[chess.BLACK]) < 4)
+    return (
+        chess.popcount(chess.BB_RANK_1 & board.occupied_co[chess.WHITE]) < 4
+        or chess.popcount(chess.BB_RANK_8 & board.occupied_co[chess.BLACK]) < 4
+    )
 
 
 def _score(y: int, white: int, black: int) -> int:
     if white == 0:
-        return {1: 1 + y, 2: 2 + (6 - y) if y < 6 else 0, 3: 3 + (7 - y) if y < 7 else 0,
-                4: 3 + (7 - y) if y < 7 else 0}.get(black, 0)
+        return {
+            1: 1 + y,
+            2: 2 + (6 - y) if y < 6 else 0,
+            3: 3 + (7 - y) if y < 7 else 0,
+            4: 3 + (7 - y) if y < 7 else 0,
+        }.get(black, 0)
     if white == 1:
         return {0: 1 + (8 - y), 1: 5 + abs(4 - y), 2: 4 + (7 - y), 3: 5 + (7 - y)}.get(black, 0)
     if white == 2:
@@ -71,12 +77,14 @@ def divide_boards(boards: Iterable[chess.Board]) -> Division:
 
 def divide(moves: list[str]) -> Division:
     """The division of a game (UCI moves from the start position); ply i is the position before move i."""
+
     def boards() -> Iterable[chess.Board]:
         b = chess.Board()
         yield b.copy(stack=False)
         for u in moves:
             b.push_uci(u)
             yield b.copy(stack=False)
+
     return divide_boards(boards())
 
 

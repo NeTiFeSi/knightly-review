@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import chess
 
@@ -21,7 +21,7 @@ API = "https://lichess.org"
 SPEEDS = {"ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence"}
 
 
-def parse_game(d: dict, user: str) -> Optional[Game]:
+def parse_game(d: dict, user: str) -> Game | None:
     """One NDJSON record → Game, or None for variants, imported positions or games without the user."""
     if d.get("variant", "standard") != "standard" or d.get("initialFen"):
         return None
@@ -90,11 +90,11 @@ def fetch(
     *,
     token: str = "",
     history_days: int = 90,
-    time_classes: Optional[list[str]] = None,
+    time_classes: list[str] | None = None,
     rated_only: bool = False,
-    max_games: Optional[int] = None,
-    cancel: Optional[threading.Event] = None,
-    progress: Optional[Callable[[str], None]] = None,
+    max_games: int | None = None,
+    cancel: threading.Event | None = None,
+    progress: Callable[[str], None] | None = None,
     session=None,
 ) -> int:
     """Download the user's games newer than the last fetch into the cache. Returns how many are new.

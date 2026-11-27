@@ -6,23 +6,22 @@ import html
 import io
 import re
 import time
-from typing import Optional
 
 import chess
 import chess.pgn
 
 from . import openings, phases
 from .cache import fen_key
+from .config import Config
 from .engine.analyse import MATED
 from .model import CardSpec, Choice, Game, NoteSpec, Score
-from .config import Config
 from .puzzles import parse_key, puzzle_key
 from .select import BLUNDER, DUBIOUS, MISTAKE, quick_nag
 
 KR_TAG = re.compile(r"\[%kr\s+(\d+)\s*\]")
 NOTE_TAG = "knightly"
 PUZZLE_TAG = f"{NOTE_TAG}::puzzle::"
-_PUZZLE_TAG_RE = re.compile(re.escape(PUZZLE_TAG) + r"(\d+)-([0-9a-f]+)$", re.I)
+_PUZZLE_TAG_RE = re.compile(re.escape(PUZZLE_TAG) + r"(\d+)-([0-9a-f]+)$", re.IGNORECASE)
 SEVERITY = {BLUNDER: "blunder", MISTAKE: "mistake", DUBIOUS: "inaccuracy"}
 RESULT = {1.0: "win", 0.5: "draw", 0.0: "loss"}
 
@@ -35,7 +34,7 @@ def note_key_tag(key: str) -> str:
     return f"{PUZZLE_TAG}{parsed[0]:03d}-{parsed[1]}"
 
 
-def key_from_tags(tags: list[str]) -> Optional[str]:
+def key_from_tags(tags: list[str]) -> str | None:
     """The note key that `note_key_tag` made, from a note's tags (None for a note that is not a puzzle note)."""
     for t in tags:
         m = _PUZZLE_TAG_RE.match(t)
@@ -45,7 +44,7 @@ def key_from_tags(tags: list[str]) -> Optional[str]:
 
 
 def field_to_pgn(field: str) -> str:
-    return html.unescape(re.sub(r"<br\s*/?>", "\n", field, flags=re.I))
+    return html.unescape(re.sub(r"<br\s*/?>", "\n", field, flags=re.IGNORECASE))
 
 
 def pgn_to_field(pgn: str) -> str:
@@ -69,7 +68,7 @@ def card_ids(pgn: str) -> dict[str, int]:
     return out
 
 
-def _eval(s: Optional[Score]) -> str:
+def _eval(s: Score | None) -> str:
     if s is None or (s.mate is None and abs(s.cp or 0) >= MATED):
         return ""
     return f"[%eval {s.pgn()}]"
@@ -89,8 +88,9 @@ def _write_choice(parent: chess.pgn.GameNode, ch: Choice) -> chess.pgn.GameNode:
     return v
 
 
-def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardSpec, number: int,
-               after: Optional[Score] = None) -> None:
+def write_card(
+    parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardSpec, number: int, after: Score | None = None
+) -> None:
     """Tag `node` (the played move, after `parent`) as cloze `number`, add the card's alternatives as variations
     and what follows the played move (the punishment) as its continuation."""
     node.nags = {card.played.nag} - {0}
@@ -101,8 +101,14 @@ def write_card(parent: chess.pgn.GameNode, node: chess.pgn.GameNode, card: CardS
         _write_choice(node, child)
 
 
-def _puzzle_pgn(game: Game, scores: list[Optional[Score]], first: CardSpec, inaccuracy: float = Config.inaccuracy,
-                nags: Optional[dict[int, int]] = None, lead: Optional[tuple[str, Choice]] = None) -> str:
+def _puzzle_pgn(
+    game: Game,
+    scores: list[Score | None],
+    first: CardSpec,
+    inaccuracy: float = Config.inaccuracy,
+    nags: dict[int, int] | None = None,
+    lead: tuple[str, Choice] | None = None,
+) -> str:
     """The game up to the mistake (every earlier move with its NAG: `nags`, ply → NAG, see select.game_nags,
     else ?!, ?, ?? from the loss shown by `scores`), then the mistake tagged `[%kr 1]` with the solution trees.
     `lead` = (FEN, move): instead of the game's moves, the note starts from that position and plays that move (the
@@ -207,13 +213,13 @@ def puzzle_notes(head: str, sections: list[str], links: list[str]) -> str:
 
 def build_puzzle(
     game: Game,
-    scores: list[Optional[Score]],
+    scores: list[Score | None],
     first: CardSpec,
-    second: Optional[CardSpec],
+    second: CardSpec | None,
     notes: str,
     inaccuracy: float = Config.inaccuracy,
-    nags: Optional[dict[int, int]] = None,
-    lead: Optional[tuple[str, Choice]] = None,
+    nags: dict[int, int] | None = None,
+    lead: tuple[str, Choice] | None = None,
 ) -> NoteSpec:
     """The note of one mistake: cloze 1 is the position before it, cloze 2 (when there is one) the position
     after it, where the best reply punishes it. Tags describe the first puzzle only.

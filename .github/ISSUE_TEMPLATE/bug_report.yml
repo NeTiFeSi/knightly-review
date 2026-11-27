@@ -1,0 +1,36 @@
+name: Bug report
+description: Something doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: anki
+    attributes:
+      label: Anki version and operating system
+      description: Help → About in Anki. For AnkiDroid or AnkiMobile, say which app and version.
+      placeholder: "Anki 25.07.5 on Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: kr
+    attributes:
+      label: Knightly Review version
+      description: The release you installed (see the add-on's file name or the Releases page).
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Engine
+      description: Stockfish version, and Lc0 if enabled (Tools → Knightly Review → Settings).
+  - type: textarea
+    id: log
+    attributes:
+      label: Error message or log
+      description: The text of any error window, or the log from the progress window. Leave out tokens and personal data.
+      render: text

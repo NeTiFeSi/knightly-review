@@ -1,4 +1,5 @@
 // Bundle entry. Exposed as the global `KnightlyReview`; the templates call mount().
+import pkg from '../package.json';
 import { App, renderError } from './app';
 import { checkConfig, configDiff, DEFAULT_CONFIG, readCard } from './cardRef';
 import { addonAvailable, addonHello, isDesktop, loadOverrides, saveOverrides, storageWorks } from './settings';
@@ -120,4 +121,4 @@ function openSettings(root: HTMLElement, cfg: ReturnType<typeof loadConfig>): vo
   p.focus();
 }
 
-export const version = '0.1.0';
+export const version: string = pkg.version;

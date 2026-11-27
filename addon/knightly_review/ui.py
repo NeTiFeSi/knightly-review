@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Optional
+from typing import ClassVar
 
 from aqt import mw
 from aqt.qt import (
@@ -76,8 +76,8 @@ class EngineDialog(QDialog):
         lay = QVBoxLayout(self)
         intro = QLabel(
             "Knightly Review analyses your games with Stockfish on this computer."
-            if kind == kd.STOCKFISH else
-            "Lc0 is optional. When it's on, it analyses alongside Stockfish and its judgement is used, "
+            if kind == kd.STOCKFISH
+            else "Lc0 is optional. When it's on, it analyses alongside Stockfish and its judgement is used, "
             "except in mate positions. It is much faster with a graphics card (GPU)."
         )
         intro.setWordWrap(True)
@@ -101,9 +101,11 @@ class EngineDialog(QDialog):
         fl.addLayout(row)
         lay.addWidget(found_box)
         if kind == kd.LC0:
-            get = QLabel('Don\'t have it? Download Lc0 (it includes a network) from '
-                         '<a href="https://lczero.org/play/download/">lczero.org</a>, then press “Check again” '
-                         'or choose the file.')
+            get = QLabel(
+                "Don't have it? Download Lc0 (it includes a network) from "
+                '<a href="https://lczero.org/play/download/">lczero.org</a>, then press “Check again” '
+                "or choose the file."
+            )
             get.setWordWrap(True)
             get.setOpenExternalLinks(True)
             lay.addWidget(get)
@@ -188,8 +190,11 @@ class EngineDialog(QDialog):
             showWarning(f"That is {d[0]}, not {name}. Knightly Review supports Stockfish and Lc0 only.", parent=self)
             return
         if not d[1]:
-            showWarning(f"{d[0]} doesn't report win/draw/loss (the UCI_ShowWDL option), which Knightly "
-                        "Review needs to judge moves. Please update it.", parent=self)
+            showWarning(
+                f"{d[0]} doesn't report win/draw/loss (the UCI_ShowWDL option), which Knightly "
+                "Review needs to judge moves. Please update it.",
+                parent=self,
+            )
             return
         self.path = path
         self.scan(select=path)
@@ -247,7 +252,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Knightly Review – settings")
         self.cfg = settings.load()
-        self.login: Optional[LoginFlow] = None
+        self.login: LoginFlow | None = None
         lay = QVBoxLayout(self)
         if first_run:
             hello = QLabel(
@@ -278,8 +283,10 @@ class SettingsDialog(QDialog):
         self.days.setValue(days if days > 0 else 90)
         self.days.setSuffix(" days")
         self.all_time = QCheckBox("All time")
-        self.all_time.setToolTip("Download every game you ever played. Analysis then carries on over several\n"
-                                 "updates, the positions you reach most often first.")
+        self.all_time.setToolTip(
+            "Download every game you ever played. Analysis then carries on over several\n"
+            "updates, the positions you reach most often first."
+        )
         self.all_time.toggled.connect(lambda on: self.days.setEnabled(not on))
         self.all_time.setChecked(days <= 0)
         self.days.setEnabled(days > 0)
@@ -363,8 +370,9 @@ class SettingsDialog(QDialog):
         self.keep.addItem("Keep analysing, to have cards ready for later updates", "precalculate")
         self.keep.addItem("Keep adding cards, with no limit per update", "unlimited")
         self.keep.setCurrentIndex(max(0, self.keep.findData(self.cfg.get("keep_running", "off"))))
-        self.keep.setToolTip("After an update has made its cards. "
-                             "Stop it with Cancel in the progress window or by closing the profile.")
+        self.keep.setToolTip(
+            "After an update has made its cards. Stop it with Cancel in the progress window or by closing the profile."
+        )
         wf.addRow("After the update:", self.keep)
         self.keep_hours = QDoubleSpinBox()
         self.keep_hours.setRange(0, 72)
@@ -452,7 +460,9 @@ class SettingsDialog(QDialog):
             self.login_status.setText(f"Logged in as {sec.get('lichess_login', '?')} (faster downloads).")
         else:
             self.login_btn.setText("Log in…")
-            self.login_status.setText("Optional: logging in makes downloads faster. Your password stays on lichess.org.")
+            self.login_status.setText(
+                "Optional: logging in makes downloads faster. Your password stays on lichess.org."
+            )
         self.login_status.setStyleSheet("color: gray")
 
     def toggle_login(self) -> None:
@@ -500,12 +510,18 @@ class SettingsDialog(QDialog):
             showWarning("Choose Stockfish first (press “Change…” in the Stockfish box).", parent=self)
             return
         keep = self.keep.currentData() or "off"
-        if keep != "off" and self.cfg.get("keep_running", "off") == "off" and not askUser(
+        if (
+            keep != "off"
+            and self.cfg.get("keep_running", "off") == "off"
+            and not askUser(
                 "Keeping the analysis running uses the CPU (and the GPU with Lc0) at full load, for as long as "
                 "you chose.\n\n• Laptops: the battery drains fast.\n• Heat, fan noise, and possible thermal "
                 "throttling.\n• Other programs get slower; lower “Threads” to leave room.\n\n"
                 "It stops with Cancel in the progress "
-                "window or when you close the profile.\n\nTurn it on?", parent=self):
+                "window or when you close the profile.\n\nTurn it on?",
+                parent=self,
+            )
+        ):
             return
         self.cfg.pop("engine_path", None)  # replaced by stockfish_path
         self.cfg.update(
@@ -532,8 +548,10 @@ class SettingsDialog(QDialog):
         settings.save(self.cfg)
         updater.reschedule()
         self.accept()
-        if askUser("Settings saved. Fetch and analyse your games now?\n\n"
-                   "The first update can take a few minutes; Anki stays usable meanwhile."):
+        if askUser(
+            "Settings saved. Fetch and analyse your games now?\n\n"
+            "The first update can take a few minutes; Anki stays usable meanwhile."
+        ):
             start_update()
 
     def reject(self) -> None:
@@ -552,7 +570,12 @@ class SettingsDialog(QDialog):
 class ProgressWindow(QDialog):
     """Current step, two bars (puzzles found, and the current analysis step), and a log of the whole run."""
 
-    STAGES = {"fetch": "Downloading", "analyse": "Puzzles", "cards": "Cards", "start": "Starting"}
+    STAGES: ClassVar[dict[str, str]] = {
+        "fetch": "Downloading",
+        "analyse": "Puzzles",
+        "cards": "Cards",
+        "start": "Starting",
+    }
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
@@ -662,7 +685,7 @@ class ProgressWindow(QDialog):
                 continue
             name.setText(e["label"])
             bar.setValue(int(1000 * (e["ratio"] or 0)))
-            info.setText(f'{e["detail"]} · {e["counts"]}')
+            info.setText(f"{e['detail']} · {e['counts']}")
         self.position_info.setText(d["position"])
         self.position_info.setVisible(bool(d["position"]))
 
@@ -679,7 +702,7 @@ class ProgressWindow(QDialog):
             sb.setValue(sb.maximum())
 
 
-_progress: Optional[ProgressWindow] = None
+_progress: ProgressWindow | None = None
 
 
 def show_progress() -> None:
@@ -705,9 +728,11 @@ def open_settings(first_run: bool = False) -> None:
 
 def setup_menu() -> None:
     menu = mw.form.menuTools.addMenu("Knightly Review")
-    for label, fn in (("Update now", start_update),
-                      ("Show update progress", show_progress), ("Settings…", open_settings)):
+    for label, fn in (
+        ("Update now", start_update),
+        ("Show update progress", show_progress),
+        ("Settings…", open_settings),
+    ):
         a = menu.addAction(label)
         a.triggered.connect(lambda _=False, f=fn: f())
     mw.addonManager.setConfigAction(settings.ADDON, open_settings)
-

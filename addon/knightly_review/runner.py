@@ -8,12 +8,13 @@ built (kc.RunWriter); when the run ends, the writes become one undo step.
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
 import traceback
 from collections import deque
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from aqt import gui_hooks, mw
 from aqt.operations import CollectionOp
@@ -26,12 +27,14 @@ from .vendor.knightly.cache import SqliteCache
 from .vendor.knightly.jobs import UpdateResult, run_update
 from .vendor.knightly.progress import Tracker
 
+log = logging.getLogger(__name__)
+
 Listener = Callable[[str, int, int, str], None]
 
 
 class Updater:
     def __init__(self) -> None:
-        self.thread: Optional[threading.Thread] = None
+        self.thread: threading.Thread | None = None
         self.cancel = threading.Event()
         self.listeners: list[Listener] = []
         self.last: tuple[str, int, int, str] = ("idle", 0, 0, "No update has run yet.")
@@ -43,7 +46,7 @@ class Updater:
         self._seq = 0
         self._logged = ""
         self._lock = threading.Lock()
-        self.timer: Optional[QTimer] = None
+        self.timer: QTimer | None = None
         self.tracker = Tracker()  # what the current (or last) run is doing; the progress window reads it
         self._last_emit = 0.0
         self._pending = False
@@ -107,6 +110,7 @@ class Updater:
             changes = kc.ensure_installed(mw.col)
             existing = kc.existing_notes(mw.col)
         except Exception as e:
+            log.exception("could not prepare the collection")
             if manual:
                 showWarning(f"Knightly Review could not prepare the collection:\n{e}")
             return False
@@ -127,8 +131,13 @@ class Updater:
         self.tracker = tracker = Tracker()
         writer = kc.RunWriter(mw.col, deck)
         self.positions, self._logged = (0, 0, ""), ""
-        self.log("── " + {"more": "Next batch of cards", "precalc": "Pre-calculating for later updates"}.get(
-            _round, "Update" if manual else "Automatic update") + " ──")
+        self.log(
+            "── "
+            + {"more": "Next batch of cards", "precalc": "Pre-calculating for later updates"}.get(
+                _round, "Update" if manual else "Automatic update"
+            )
+            + " ──"
+        )
         self._emit("start", 0, 0, "Starting…" + (f" ({'; '.join(changes)})" if changes else ""), force=True)
 
         def on_note(spec) -> None:
@@ -140,6 +149,7 @@ class Updater:
                     if mw.col is not None and not cancel.is_set():
                         writer.add(spec)
                 except Exception as e:  # raised again in the analysis thread
+                    log.exception("could not add a note")
                     failure.append(e)
                 finally:
                     done.set()
@@ -154,11 +164,21 @@ class Updater:
         def work() -> None:
             cache = SqliteCache(settings.CACHE_PATH)
             try:
-                res = run_update(core, cache, existing=existing, progress=self._emit, cancel=cancel,
-                                 force=manual and not _round, precalculate=_round == "precalc",
-                                 fetch=_round == "", on_note=on_note, tracker=tracker)
+                res = run_update(
+                    core,
+                    cache,
+                    existing=existing,
+                    progress=self._emit,
+                    cancel=cancel,
+                    force=manual and not _round,
+                    precalculate=_round == "precalc",
+                    fetch=_round == "",
+                    on_note=on_note,
+                    tracker=tracker,
+                )
                 err = None
             except Exception as e:  # reported on the main thread
+                log.exception("the update failed")
                 res, err = None, (e, traceback.format_exc())
             finally:
                 cache.close()
@@ -179,8 +199,13 @@ class Updater:
     def _next_round(self, res: UpdateResult, mode: str, round_: str) -> None:
         """After a round's cards are in the collection: carry on, or end the keep-running session."""
         again = ""
-        if mode in ("precalculate", "unlimited") and self.keeping and not self.stopped and not res.cancelled \
-                and time.monotonic() < self.keep_until:
+        if (
+            mode in ("precalculate", "unlimited")
+            and self.keeping
+            and not self.stopped
+            and not res.cancelled
+            and time.monotonic() < self.keep_until
+        ):
             if round_ == "precalc":
                 again = ""  # one pass up to the time limit or full depth
             elif mode == "precalculate":
@@ -201,14 +226,29 @@ class Updater:
         elif not self.start(manual=False, _round=round_):
             self._end_keeping()
 
-    def _end_keeping(self, res: Optional[UpdateResult] = None) -> None:
+    def _end_keeping(self, res: UpdateResult | None = None) -> None:
         if self.keeping:
             self.keeping = False
-            self._emit("done", 1, 1, "Finished analysing in the background." if res is not None and not res.cancelled
-                       else "Stopped analysing in the background.", force=True)
+            self._emit(
+                "done",
+                1,
+                1,
+                "Finished analysing in the background."
+                if res is not None and not res.cancelled
+                else "Stopped analysing in the background.",
+                force=True,
+            )
 
-    def _finish(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str = "off",
-                round_: str = "", writer: Optional[kc.RunWriter] = None) -> None:
+    def _finish(
+        self,
+        res: UpdateResult | None,
+        err,
+        deck: str,
+        manual: bool,
+        mode: str = "off",
+        round_: str = "",
+        writer: kc.RunWriter | None = None,
+    ) -> None:
         """The run is over: merge what it wrote into one undo step, then report."""
 
         def failed(e: Exception) -> None:
@@ -219,9 +259,10 @@ class Updater:
             self._report(res, err, deck, manual, mode, round_)
             return
         CollectionOp(parent=mw, op=lambda col: writer.finish()).success(
-            lambda _changes: self._report(res, err, deck, manual, mode, round_)).failure(failed).run_in_background()
+            lambda _changes: self._report(res, err, deck, manual, mode, round_)
+        ).failure(failed).run_in_background()
 
-    def _report(self, res: Optional[UpdateResult], err, deck: str, manual: bool, mode: str, round_: str) -> None:
+    def _report(self, res: UpdateResult | None, err, deck: str, manual: bool, mode: str, round_: str) -> None:
         if err is not None:
             self.keeping = False
             e, tb = err
@@ -283,7 +324,7 @@ def _on_profile_open() -> None:
             if changes:
                 updater.log("Card templates: " + "; ".join(changes))
     except Exception:
-        traceback.print_exc()
+        log.exception("could not set up the collection")
     updater.reschedule()
     if not cfg.get("setup_done"):
         from .ui import open_settings

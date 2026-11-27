@@ -7,7 +7,6 @@ screen capture and no window decorations).
 """
 
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -52,8 +51,11 @@ def _tidy(w) -> None:
 
     home = os.path.expanduser("~")
     for bb in w.findChildren(QDialogButtonBox):
-        for b, text in ((QDialogButtonBox.StandardButton.Save, "Save"), (QDialogButtonBox.StandardButton.Ok, "OK"),
-                        (QDialogButtonBox.StandardButton.Cancel, "Cancel")):
+        for b, text in (
+            (QDialogButtonBox.StandardButton.Save, "Save"),
+            (QDialogButtonBox.StandardButton.Ok, "OK"),
+            (QDialogButtonBox.StandardButton.Cancel, "Cancel"),
+        ):
             btn = bb.button(b)
             if btn:
                 btn.setText(text)
@@ -87,7 +89,7 @@ def _grab(what: str, file: str, done: dict, wait: int = 1500) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         if u.path != "/shot" or "what" not in q or "file" not in q:

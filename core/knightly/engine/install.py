@@ -18,9 +18,9 @@ import sys
 import tarfile
 import threading
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 from .. import http
 from .discover import popen_kwargs, probe
@@ -32,7 +32,7 @@ RELEASES = "https://api.github.com/repos/official-stockfish/Stockfish/releases/l
 class InstallOption:
     manager: str  # "yay", "paru", "apt", "dnf", "zypper", "brew", "winget"
     command: str  # what to show / copy
-    argv: Optional[list[str]] = None  # set when we can run it for the user (no admin rights needed)
+    argv: list[str] | None = None  # set when we can run it for the user (no admin rights needed)
 
 
 def _os_release() -> dict[str, str]:
@@ -52,8 +52,15 @@ def package_options() -> list[InstallOption]:
     """How this OS's package manager installs Stockfish, if we know one."""
     if sys.platform == "win32":
         if shutil.which("winget"):
-            argv = ["winget", "install", "--id", "Stockfish.Stockfish", "-e",
-                    "--accept-source-agreements", "--accept-package-agreements"]
+            argv = [
+                "winget",
+                "install",
+                "--id",
+                "Stockfish.Stockfish",
+                "-e",
+                "--accept-source-agreements",
+                "--accept-package-agreements",
+            ]
             return [InstallOption("winget", "winget install --id Stockfish.Stockfish -e", argv)]
         return []
     if sys.platform == "darwin":
@@ -82,7 +89,9 @@ def package_options() -> list[InstallOption]:
         if names & set(ids) and shutil.which(manager):
             out.append(InstallOption(manager, cmd))
     if shutil.which("brew"):  # Linuxbrew
-        out.append(InstallOption("brew", "brew install stockfish", [shutil.which("brew") or "brew", "install", "stockfish"]))
+        out.append(
+            InstallOption("brew", "brew install stockfish", [shutil.which("brew") or "brew", "install", "stockfish"])
+        )
     return out
 
 
@@ -91,7 +100,7 @@ def run_option(opt: InstallOption, timeout: float = 900) -> tuple[bool, str]:
     if not opt.argv:
         return False, "this one needs admin rights; run it in a terminal"
     try:
-        p = subprocess.run(opt.argv, capture_output=True, text=True, timeout=timeout, **popen_kwargs())
+        p = subprocess.run(opt.argv, capture_output=True, text=True, timeout=timeout, check=False, **popen_kwargs())
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, str(e)
     return p.returncode == 0, (p.stdout + p.stderr)[-2000:]
@@ -102,13 +111,16 @@ def asset_name_for(os_name: str, machine: str) -> list[str]:
     m = machine.lower()
     arch = "arm64" if m in ("arm64", "aarch64") else "x86-64" if m in ("x86_64", "amd64") else m
     if os_name == "darwin":
-        return ["stockfish-macos-universal", "stockfish-macos-m1-apple-silicon" if arch == "arm64" else "stockfish-macos-x86-64-avx2"]
+        return [
+            "stockfish-macos-universal",
+            "stockfish-macos-m1-apple-silicon" if arch == "arm64" else "stockfish-macos-x86-64-avx2",
+        ]
     if os_name == "win32":
         return [f"stockfish-windows-{arch}-universal", f"stockfish-windows-{arch}-avx2", f"stockfish-windows-{arch}"]
     return [f"stockfish-linux-{arch}-universal", f"stockfish-ubuntu-{arch}-avx2", f"stockfish-ubuntu-{arch}"]
 
 
-def pick_asset(assets: list[dict], os_name: Optional[str] = None, machine: Optional[str] = None) -> Optional[dict]:
+def pick_asset(assets: list[dict], os_name: str | None = None, machine: str | None = None) -> dict | None:
     wanted = asset_name_for(os_name or sys.platform, machine or platform.machine())
     by_stem = {}
     for a in assets:
@@ -141,21 +153,20 @@ def _safe_extract(archive: Path, dest: Path) -> None:
         t.extractall(dest, members=members)
 
 
-def _find_binary(root: Path) -> Optional[Path]:
+def _find_binary(root: Path) -> Path | None:
     exe = ".exe" if sys.platform == "win32" else ""
     best = None
     for p in root.rglob("stockfish*"):
-        if p.is_file() and (p.suffix == exe if exe else p.suffix == ""):
-            if best is None or p.stat().st_size > best.stat().st_size:
-                best = p
+        if p.is_file() and p.suffix == exe and (best is None or p.stat().st_size > best.stat().st_size):
+            best = p
     return best
 
 
 def download_stockfish(
     engines_dir: str,
     *,
-    progress: Optional[Callable[[int, int], None]] = None,
-    cancel: Optional[threading.Event] = None,
+    progress: Callable[[int, int], None] | None = None,
+    cancel: threading.Event | None = None,
     session=None,
 ) -> str:
     """Download the latest official Stockfish for this OS into `engines_dir`; return the binary's path."""
@@ -165,7 +176,9 @@ def download_stockfish(
     rel = r.json()
     asset = pick_asset(rel.get("assets", []))
     if not asset:
-        raise RuntimeError(f"no Stockfish build for {sys.platform}/{platform.machine()} in release {rel.get('tag_name')}")
+        raise RuntimeError(
+            f"no Stockfish build for {sys.platform}/{platform.machine()} in release {rel.get('tag_name')}"
+        )
     target = Path(engines_dir) / rel.get("tag_name", "stockfish")
     target.mkdir(parents=True, exist_ok=True)
     archive = target / asset["name"]

@@ -2,7 +2,7 @@
 
 The part that knows chess: fetch games, analyse them, choose mistakes, and write notes in the card's PGN format. It has no Anki imports, so it runs inside the add-on (bundled), from the command line, and later in a helper process or on a server.
 
-Dependencies: `python-chess` (bundled into the add-on) and `requests` (Anki ships it). Python 3.10+.
+Dependencies: `python-chess` (bundled into the add-on) and `requests` (Anki ships it). Python 3.11+.
 
 ```sh
 uv venv && uv pip install -e .        # or: python -m venv .venv && pip install -e .

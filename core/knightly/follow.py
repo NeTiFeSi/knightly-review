@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Optional
 
 import chess
 
@@ -75,7 +74,7 @@ class _Ctx:
     seen: set[str]  # positions written in this note
     quick_depth: int
     start: int  # length of the move stack at the puzzle position
-    tracker: Optional[Tracker] = None
+    tracker: Tracker | None = None
     nodes: int = 0  # positions analysed so far in the note's trees
     max_plies: int = 0  # >0: stop after this many plies from the answer (the answer and one reply)
     decisions: list[Decision] = field(default_factory=list)
@@ -153,9 +152,18 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx, before_fen: str = "") -> 
         elif solver_to_move:
             ch.children.append(c)  # a one-ply graded variation
     if solver_to_move and before_fen:
-        ctx.decisions.append(Decision(before_fen=before_fen, reply=ch, fen=board.fen(), ply=board.ply(),
-                                      choices=ch.children, good=[c.move for c in ch.children if c.move in names],
-                                      depth=len(board.move_stack) - ctx.start, solver=ctx.solver))
+        ctx.decisions.append(
+            Decision(
+                before_fen=before_fen,
+                reply=ch,
+                fen=board.fen(),
+                ply=board.ply(),
+                choices=ch.children,
+                good=[c.move for c in ch.children if c.move in names],
+                depth=len(board.move_stack) - ctx.start,
+                solver=ctx.solver,
+            )
+        )
     if ctx.max_plies and len(board.move_stack) - ctx.start >= ctx.max_plies - 1:
         return  # the answer and one reply are enough: the replies are not analysed
     for c in ch.children:
@@ -168,17 +176,35 @@ def _expand(board: chess.Board, ch: Choice, ctx: _Ctx, before_fen: str = "") -> 
                 board.pop()
 
 
-def follow_puzzle(board: chess.Board, card: CardSpec, an, cfg: Config, *, solver: chess.Color, seen: set[str],
-                  quick_depth: int, include_played: bool = False, tracker: Optional[Tracker] = None,
-                  max_plies: int = 0) -> list[Decision]:
+def follow_puzzle(
+    board: chess.Board,
+    card: CardSpec,
+    an,
+    cfg: Config,
+    *,
+    solver: chess.Color,
+    seen: set[str],
+    quick_depth: int,
+    include_played: bool = False,
+    tracker: Tracker | None = None,
+    max_plies: int = 0,
+) -> list[Decision]:
     """Grow the solution tree under the answers of `card`, a puzzle at `board` (which carries the moves that
     led to it, for the repetition rules). `solver` is the colour finding the answer; `seen` the positions
     already written in the note (shared by its two puzzles). `include_played`: the card's main move is an
     answer too (the punishment puzzle). `max_plies=2`: only each answer and the opponent's reply (their
     positions are not analysed further). Returns the decision positions found (see `Decision`)."""
-    ctx = _Ctx(an=an, cfg=dataclasses.replace(cfg, good_move=FOLLOW_GOOD), solver=solver, mate=card.mate,
-               seen=seen, quick_depth=quick_depth, start=len(board.move_stack), tracker=tracker,
-               max_plies=max_plies)
+    ctx = _Ctx(
+        an=an,
+        cfg=dataclasses.replace(cfg, good_move=FOLLOW_GOOD),
+        solver=solver,
+        mate=card.mate,
+        seen=seen,
+        quick_depth=quick_depth,
+        start=len(board.move_stack),
+        tracker=tracker,
+        max_plies=max_plies,
+    )
     answers = ([card.played] if include_played else []) + [a for a in card.alternatives if a.nag in ACCEPTED]
     for ch in answers:
         here = board.fen()
@@ -194,5 +220,11 @@ def trimmed(ch: Choice, levels: int = 1) -> Choice:
     """A copy of `ch` that keeps `levels` of the moves below it (1: the opponent's reply). The "transposes"
     comments go: the card does not follow lines any more."""
     comment = ch.comment.replace("Transposes to a line above.", "").strip()
-    return Choice(move=ch.move, nag=ch.nag, score=ch.score, comment=comment, tag=ch.tag,
-                  children=[trimmed(c, levels - 1) for c in ch.children] if levels > 0 else [])
+    return Choice(
+        move=ch.move,
+        nag=ch.nag,
+        score=ch.score,
+        comment=comment,
+        tag=ch.tag,
+        children=[trimmed(c, levels - 1) for c in ch.children] if levels > 0 else [],
+    )

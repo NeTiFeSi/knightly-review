@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional
 
 from . import http, notes, pipeline, puzzles, sources
-from .cache import Cache, fen_key
+from .cache import Cache
 from .config import Config
 from .engine.analyse import Analyser
 from .model import Game, NoteSpec
@@ -24,6 +25,8 @@ from .sources import chesscom, lichess
 
 # progress(stage, done, total, message). Stages: fetch, analyse (puzzles found so far, out
 # of max_new_cards), positions (the current step, emitted often), cards.
+log = logging.getLogger(__name__)
+
 Progress = Callable[[str, int, int, str], None]
 
 
@@ -51,8 +54,9 @@ def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-def fetch_all(cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event, progress: Progress,
-              result: UpdateResult) -> None:
+def fetch_all(
+    cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event, progress: Progress, result: UpdateResult
+) -> None:
     jobs = []
     if cfg.lichess_user:
         jobs.append(("lichess", cfg.lichess_user))
@@ -65,21 +69,36 @@ def fetch_all(cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event
         backfill = mod.needs_backfill(cache, user, cfg.history_days)  # the look-back grew
         if not sources.due(cache, source, user) and not (force and source == "lichess") and not backfill:
             continue
-        msg = lambda m: progress("fetch", 0, 0, m)  # noqa: E731
+        msg = lambda m: progress("fetch", 0, 0, m)
         msg(f"Fetching games from {'Lichess' if source == 'lichess' else 'Chess.com'}…")
         try:
             if source == "lichess":
-                n = lichess.fetch(cache, user, token=cfg.lichess_token, history_days=cfg.history_days,
-                                  time_classes=cfg.time_classes, rated_only=cfg.rated_only, cancel=cancel,
-                                  progress=msg)
+                n = lichess.fetch(
+                    cache,
+                    user,
+                    token=cfg.lichess_token,
+                    history_days=cfg.history_days,
+                    time_classes=cfg.time_classes,
+                    rated_only=cfg.rated_only,
+                    cancel=cancel,
+                    progress=msg,
+                )
             else:
-                n = chesscom.fetch(cache, user, history_days=cfg.history_days, time_classes=cfg.time_classes,
-                                   rated_only=cfg.rated_only, cancel=cancel, progress=msg)
+                n = chesscom.fetch(
+                    cache,
+                    user,
+                    history_days=cfg.history_days,
+                    time_classes=cfg.time_classes,
+                    rated_only=cfg.rated_only,
+                    cancel=cancel,
+                    progress=msg,
+                )
             result.new_games += n
             sources.mark_fetched(cache, source, user)
         except http.Cancelled:
             raise
         except Exception as e:  # one site failing shouldn't stop the other
+            log.exception("fetching games from %s failed", source)
             result.warnings.append(f"{source}: {e}")
 
 
@@ -87,15 +106,15 @@ def run_update(
     cfg: Config,
     cache: Cache,
     *,
-    existing: Optional[dict[str, str]] = None,
-    progress: Optional[Progress] = None,
-    cancel: Optional[threading.Event] = None,
+    existing: dict[str, str] | None = None,
+    progress: Progress | None = None,
+    cancel: threading.Event | None = None,
     force: bool = False,
     fetch: bool = True,
-    analyser_factory: Optional[Callable[..., Analyser]] = None,
+    analyser_factory: Callable[..., Analyser] | None = None,
     precalculate: bool = False,
-    on_note: Optional[Callable[[NoteSpec], None]] = None,
-    tracker: Optional[Tracker] = None,
+    on_note: Callable[[NoteSpec], None] | None = None,
+    tracker: Tracker | None = None,
 ) -> UpdateResult:
     """`precalculate`: no puzzle cap and no notes made: keep analysing ply by ply so the next update finds
     the searches in the cache. `analysis_minutes` still bounds it.
@@ -121,7 +140,11 @@ def run_update(
         games: list[Game] = []
         for source, user in (("lichess", cfg.lichess_user), ("chesscom", cfg.chesscom_user)):
             if user:
-                games += [g for g in cache.games(source, user, since) if not cfg.time_classes or g.time_class in cfg.time_classes]
+                games += [
+                    g
+                    for g in cache.games(source, user, since)
+                    if not cfg.time_classes or g.time_class in cfg.time_classes
+                ]
         games.sort(key=lambda g: g.end_ts, reverse=True)  # newest first across both sites
         by_key = {g.key: g for g in games}
 
@@ -136,7 +159,7 @@ def run_update(
                 p = store.get(key) or puzzles.from_pgn(key, pgn)
                 if p is not None:
                     known.append(p)
-        for key in store.keys():  # puzzles whose note is gone from the collection may be made again
+        for key in store:  # puzzles whose note is gone from the collection may be made again
             if key not in existing:
                 store.delete(key)
         exclude = claimed
@@ -151,11 +174,23 @@ def run_update(
             cache.set(STATE_KEY, {"fingerprint": fp, "finished": False, "ts": time.time()})
 
         progress("analyse", 0, 0, f"Collecting the positions of {len(games)} games…")
-        an_ctx = analyser_factory(cfg, cache, cancel) if analyser_factory else Analyser(cfg, cache, cancel, tracker=tracker)
+        an_ctx = (
+            analyser_factory(cfg, cache, cancel) if analyser_factory else Analyser(cfg, cache, cancel, tracker=tracker)
+        )
         with an_ctx as an:
-            miner = pipeline.Miner(games, an, cfg, store, want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
-                                   known=known, claimed=claimed, existing=existing, make=not precalculate,
-                                   tracker=tracker, on_note=on_note)
+            miner = pipeline.Miner(
+                games,
+                an,
+                cfg,
+                store,
+                want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
+                known=known,
+                claimed=claimed,
+                existing=existing,
+                make=not precalculate,
+                tracker=tracker,
+                on_note=on_note,
+            )
             try:
                 miner.run()
             finally:  # a cancelled run keeps the notes it made

@@ -1,5 +1,6 @@
 {
   "package": "knightly_review",
   "name": "Knightly Review",
-  "min_point_version": 231000
+  "homepage": "https://github.com/NeTiFeSi/knightly-review",
+  "min_point_version": 250700
 }

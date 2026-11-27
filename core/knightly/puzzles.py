@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import io
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import chess
 import chess.pgn
@@ -32,7 +33,7 @@ def puzzle_key(fen: str, ply: int) -> str:
     return f"{KEY_PREFIX}{ply}:{hashlib.sha1(fen_key(fen).encode()).hexdigest()[:12]}"
 
 
-def parse_key(key: str) -> Optional[tuple[int, str]]:
+def parse_key(key: str) -> tuple[int, str] | None:
     """(ply, position hash) of a puzzle note key, or None for another key."""
     parts = key.split(":")
     if len(parts) != 3 or parts[0] != "puzzle" or not parts[1].isdigit():
@@ -68,12 +69,12 @@ class Puzzle:
         return [m for m, nag in self.moves.items() if nag in ACCEPTED]
 
 
-def from_pgn(key: str, pgn: str) -> Optional[Puzzle]:
+def from_pgn(key: str, pgn: str) -> Puzzle | None:
     """The first puzzle (cloze 1, or the lowest number) of a note's PGN, with its answers' NAGs."""
     from .notes import KR_TAG  # notes imports this module
 
     f = io.StringIO(pgn)
-    best: Optional[tuple[int, chess.pgn.GameNode]] = None
+    best: tuple[int, chess.pgn.GameNode] | None = None
     while (g := chess.pgn.read_game(f)) is not None:
         for node in g.mainline():
             m = KR_TAG.search(node.comment or "")
@@ -97,7 +98,10 @@ class Store:
     def keys(self) -> list[str]:
         return list(self.cache.get(INDEX) or [])
 
-    def get(self, key: str) -> Optional[Puzzle]:
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.keys())
+
+    def get(self, key: str) -> Puzzle | None:
         d = self.cache.get(KEY_PREFIX + key)
         if not d:
             return None

@@ -10,32 +10,83 @@ a puzzle at the first move of a game, or a line the tagger can't read, gets `oth
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import Optional
 
 import chess
 import chess.pgn
 
 from . import cook
 
+log = logging.getLogger(__name__)
+
 OTHER = "other"
 MATE_CP = 10000  # select.build_card gives a forced mate as ±this; its line is followed to the mate
 SOLUTION_PLIES = 7  # the engine line is cut to this many plies (the solver's moves come first and last)
 
 # Lichess tags that say how a puzzle looks or what the position is, not what the tactic is.
-_NOT_MOTIFS = {"short", "long", "veryLong", "oneMove", "crushing", "advantage", "equality", "mate",
-               "pawnEndgame", "knightEndgame", "bishopEndgame", "rookEndgame", "queenEndgame",
-               "queenRookEndgame"}
+_NOT_MOTIFS = {
+    "short",
+    "long",
+    "veryLong",
+    "oneMove",
+    "crushing",
+    "advantage",
+    "equality",
+    "mate",
+    "pawnEndgame",
+    "knightEndgame",
+    "bishopEndgame",
+    "rookEndgame",
+    "queenEndgame",
+    "queenRookEndgame",
+}
 
 # Most important first: specific mates, then the tactics that name the idea, then the general ones.
 PRIORITY = [
-    "smotheredMate", "backRankMate", "anastasiaMate", "hookMate", "arabianMate", "bodenMate",
-    "doubleBishopMate", "dovetailMate", "mateIn1", "mateIn2", "mateIn3", "mateIn4", "mateIn5",
-    "underPromotion", "promotion", "enPassant", "fork", "skewer", "discoveredAttack", "doubleCheck", "pin",
-    "hangingPiece", "trappedPiece", "deflection", "attraction", "overloading", "interference", "intermezzo",
-    "clearance", "xRayAttack", "capturingDefender", "exposedKing", "attackingF2F7", "collinearMove",
-    "zugzwang", "advancedPawn", "sacrifice", "defensiveMove", "quietMove", "castling", "kingsideAttack",
-    "queensideAttack", "coercion",
+    "smotheredMate",
+    "backRankMate",
+    "anastasiaMate",
+    "hookMate",
+    "arabianMate",
+    "bodenMate",
+    "doubleBishopMate",
+    "dovetailMate",
+    "mateIn1",
+    "mateIn2",
+    "mateIn3",
+    "mateIn4",
+    "mateIn5",
+    "underPromotion",
+    "promotion",
+    "enPassant",
+    "fork",
+    "skewer",
+    "discoveredAttack",
+    "doubleCheck",
+    "pin",
+    "hangingPiece",
+    "trappedPiece",
+    "deflection",
+    "attraction",
+    "overloading",
+    "interference",
+    "intermezzo",
+    "clearance",
+    "xRayAttack",
+    "capturingDefender",
+    "exposedKing",
+    "attackingF2F7",
+    "collinearMove",
+    "zugzwang",
+    "advancedPawn",
+    "sacrifice",
+    "defensiveMove",
+    "quietMove",
+    "castling",
+    "kingsideAttack",
+    "queensideAttack",
+    "coercion",
 ]
 
 
@@ -44,7 +95,7 @@ def slug(tag: str) -> str:
     return re.sub(r"(?<=[a-z])(?=[A-Z0-9])", "-", tag).lower()
 
 
-def _puzzle(board: chess.Board, line: list[str], cp: int) -> Optional[cook.Puzzle]:
+def _puzzle(board: chess.Board, line: list[str], cp: int) -> cook.Puzzle | None:
     """The Lichess-style puzzle: the game before the opponent's last move, that move, then `line`."""
     if not board.move_stack:
         return None
@@ -83,6 +134,7 @@ def detect(board: chess.Board, line: list[str], cp: int = 0, sacrifice: bool = F
         if puzzle is not None:
             tags = [t for t in cook.cook(puzzle) if t not in _NOT_MOTIFS]
     except Exception:  # the tagger meets positions Lichess puzzles never have
+        log.debug("motif tagger failed", exc_info=True)
         tags = []
     if sacrifice and "sacrifice" not in tags:
         tags.append("sacrifice")

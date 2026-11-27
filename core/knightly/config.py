@@ -47,7 +47,7 @@ class Config:
     sacrifice_plies: int = 4  # where along the engine's line material is counted (then captures/checks finish)
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any] | None) -> "Config":
+    def from_dict(cls, d: dict[str, Any] | None) -> Config:
         d = dict(d or {})
         if d.get("engine_path") and not d.get("stockfish_path"):  # settings from before Lc0 support
             d["stockfish_path"] = d["engine_path"]

@@ -12,8 +12,9 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable, Optional, Protocol
+from typing import Any, Protocol
 
 from .model import Eval, Game
 
@@ -59,15 +60,15 @@ def fen_key(fen: str) -> str:
 
 
 class Cache(Protocol):
-    def get_eval(self, key: str, engine: str, multipv: int = 1, min_effort: int = 0) -> Optional[Eval]: ...
+    def get_eval(self, key: str, engine: str, multipv: int = 1, min_effort: int = 0) -> Eval | None: ...
     def put_eval(self, key: str, engine: str, effort: int, ev: Eval) -> None: ...
     def put_games(self, games: Iterable[Game], user: str) -> int: ...
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]: ...
     def best_evals(self, keys: list[str], engine: str) -> dict[str, tuple[int, Eval]]: ...
-    def get_analysis(self, game: Game) -> Optional[list[Optional[dict]]]: ...
-    def put_analysis(self, game: Game, analysis: list[Optional[dict]]) -> None: ...
-    def get_http(self, url: str) -> tuple[Optional[str], Optional[str]]: ...
-    def put_http(self, url: str, etag: Optional[str], last_modified: Optional[str]) -> None: ...
+    def get_analysis(self, game: Game) -> list[dict | None] | None: ...
+    def put_analysis(self, game: Game, analysis: list[dict | None]) -> None: ...
+    def get_http(self, url: str) -> tuple[str | None, str | None]: ...
+    def put_http(self, url: str, etag: str | None, last_modified: str | None) -> None: ...
     def get(self, key: str, default: Any = None) -> Any: ...
     def set(self, key: str, value: Any) -> None: ...
 
@@ -106,12 +107,16 @@ class SqliteCache:
             self._local.conn = None
 
     # evals
-    def get_eval(self, key: str, engine: str, multipv: int = 1, min_effort: int = 0) -> Optional[Eval]:
-        row = self._conn().execute(
-            "SELECT data FROM evals WHERE fen_key=? AND engine=? AND multipv>=? AND effort>=? "
-            "ORDER BY effort DESC LIMIT 1",
-            (key, engine, multipv, min_effort),
-        ).fetchone()
+    def get_eval(self, key: str, engine: str, multipv: int = 1, min_effort: int = 0) -> Eval | None:
+        row = (
+            self._conn()
+            .execute(
+                "SELECT data FROM evals WHERE fen_key=? AND engine=? AND multipv>=? AND effort>=? "
+                "ORDER BY effort DESC LIMIT 1",
+                (key, engine, multipv, min_effort),
+            )
+            .fetchone()
+        )
         if not row:
             return None
         ev = Eval.from_json(json.loads(row[0]))
@@ -156,19 +161,25 @@ class SqliteCache:
         return n
 
     def games(self, source: str, user: str, since_ts: int = 0) -> list[Game]:
-        rows = self._conn().execute(
-            "SELECT data FROM games WHERE source=? AND user=? AND end_ts>=? ORDER BY end_ts DESC",
-            (source, user.lower(), since_ts),
-        ).fetchall()
+        rows = (
+            self._conn()
+            .execute(
+                "SELECT data FROM games WHERE source=? AND user=? AND end_ts>=? ORDER BY end_ts DESC",
+                (source, user.lower(), since_ts),
+            )
+            .fetchall()
+        )
         return [Game.from_json(json.loads(r[0])) for r in rows]
 
-    def get_analysis(self, game: Game) -> Optional[list[Optional[dict]]]:
-        row = self._conn().execute(
-            "SELECT analysis FROM games WHERE source=? AND id=?", (game.source, game.id)
-        ).fetchone()
+    def get_analysis(self, game: Game) -> list[dict | None] | None:
+        row = (
+            self._conn()
+            .execute("SELECT analysis FROM games WHERE source=? AND id=?", (game.source, game.id))
+            .fetchone()
+        )
         return json.loads(row[0]) if row and row[0] else None
 
-    def put_analysis(self, game: Game, analysis: list[Optional[dict]]) -> None:
+    def put_analysis(self, game: Game, analysis: list[dict | None]) -> None:
         with self._conn() as c:
             c.execute(
                 "UPDATE games SET analysis=? WHERE source=? AND id=?",
@@ -176,11 +187,11 @@ class SqliteCache:
             )
 
     # HTTP validators
-    def get_http(self, url: str) -> tuple[Optional[str], Optional[str]]:
+    def get_http(self, url: str) -> tuple[str | None, str | None]:
         row = self._conn().execute("SELECT etag, last_modified FROM http WHERE url=?", (url,)).fetchone()
         return (row[0], row[1]) if row else (None, None)
 
-    def put_http(self, url: str, etag: Optional[str], last_modified: Optional[str]) -> None:
+    def put_http(self, url: str, etag: str | None, last_modified: str | None) -> None:
         with self._conn() as c:
             c.execute(
                 "INSERT OR REPLACE INTO http (url, etag, last_modified, fetched) VALUES (?,?,?,?)",

@@ -8,9 +8,9 @@ along its moves that the table names.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
 
 import chess
 

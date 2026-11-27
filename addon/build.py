@@ -28,6 +28,7 @@ from vendoring import vendor_tree
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+LEGAL_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
 PKG = HERE / "knightly_review"
 VENDOR = PKG / "vendor"
 CARD = PKG / "card"
@@ -77,14 +78,20 @@ def vendor() -> None:
         src = next(tmp.glob(f"{name}-{version}/{name}"))
         vendor_tree(src, VENDOR / name, names)
     vendor_tree(ROOT / "core" / "knightly", VENDOR / "knightly", names)
-    licence = "\n".join(f"{n} {v}: AGPL-3.0-or-later compatible, see https://pypi.org/project/{n}/{v}/" for n, v, _ in packages)
+    licence = "\n".join(
+        f"{n} {v}: AGPL-3.0-or-later compatible, see https://pypi.org/project/{n}/{v}/" for n, v, _ in packages
+    )
     (VENDOR / "VENDORED.txt").write_text(licence + "\nknightly: this repository's core/ (AGPL-3.0-or-later)\n")
 
 
 def card() -> None:
     dist = ROOT / "card" / "dist"
-    need = [dist / "_knightly.js",
-            dist / "templates" / "front.html", dist / "templates" / "back.html", dist / "templates" / "style.css"]
+    need = [
+        dist / "_knightly.js",
+        dist / "templates" / "front.html",
+        dist / "templates" / "back.html",
+        dist / "templates" / "style.css",
+    ]
     missing = [str(p) for p in need if not p.exists()]
     if missing:
         sys.exit("card build missing (run `npm run build` in card/): " + ", ".join(missing))
@@ -104,6 +111,9 @@ def package() -> Path:
             if not f.is_file() or "__pycache__" in f.parts or rel.parts[0] == "user_files" or f.name == "meta.json":
                 continue
             z.write(f, rel)
+        # The add-on is AGPL and bundles GPL code: its licence texts and notices travel with it.
+        for name in LEGAL_FILES:
+            z.write(ROOT / name, name)
     return out
 
 

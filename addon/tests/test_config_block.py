@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "knightly_review"))
-from config_block import format_block, rewrite, validate  # noqa: E402
+from config_block import format_block, rewrite, validate
 
 LOADER = pathlib.Path(__file__).resolve().parents[2] / "card" / "templates" / "loader.html"
 

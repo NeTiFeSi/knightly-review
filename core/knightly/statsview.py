@@ -11,7 +11,6 @@ belongs to its card (`data-card`).
 from __future__ import annotations
 
 import html
-from typing import Optional
 
 import chess
 
@@ -43,8 +42,11 @@ def bar(r: MoveResults, cls: str) -> str:
     parts = []
     for c, pct in (("w", w), ("d", d), ("b", b)):
         if pct:
-            parts.append(f'<i class="{c}" style="width:{pct}%">{pct}%</i>' if pct >= LABEL_MIN
-                         else f'<i class="{c}" style="width:{pct}%"></i>')
+            parts.append(
+                f'<i class="{c}" style="width:{pct}%">{pct}%</i>'
+                if pct >= LABEL_MIN
+                else f'<i class="{c}" style="width:{pct}%"></i>'
+            )
     title = f"White {r.white} · draws {r.draw} · Black {r.black}"
     return f'<span class="{cls}" title="{title}">{"".join(parts)}</span>'
 
@@ -60,8 +62,9 @@ def _results_text(r: MoveResults) -> str:
     return f"White {r.white} ({w}%) · draws {r.draw} ({d}%) · Black {r.black} ({b}%)"
 
 
-def section(card: int, pos: Optional[Position], heading: str = "", nags: Optional[dict[str, int]] = None,
-            mistake: str = "") -> str:
+def section(
+    card: int, pos: Position | None, heading: str = "", nags: dict[str, int] | None = None, mistake: str = ""
+) -> str:
     """The stats of `pos` for the card numbered `card`, or '' when fewer than `MIN_GAMES` games reached it.
     `nags`: UCI → NAG of the moves the note graded; `mistake`: the UCI of the note's mistake (red)."""
     if pos is None or pos.reached < MIN_GAMES:
@@ -82,19 +85,28 @@ def section(card: int, pos: Optional[Position], heading: str = "", nags: Optiona
         except ValueError:
             continue
         nag = nags.get(u, 0)
-        tint = (" kr-bad" if u == mistake or nag in (MISTAKE, BLUNDER, DUBIOUS) else
-                " kr-good" if nag in ACCEPTED else "")
+        tint = (
+            " kr-bad" if u == mistake or nag in (MISTAKE, BLUNDER, DUBIOUS) else " kr-good" if nag in ACCEPTED else ""
+        )
         glyph = f'<b class="kr-stat-nag">{html.escape(NAG_SYMBOL[nag])}</b>' if nag in NAG_SYMBOL else ""
         share = round(100 * r.games / pos.reached)
-        out.append(f'<div class="kr-stat-row{tint}"><span class="kr-stat-move">{html.escape(san)}{glyph}</span>'
-                   f'<span class="kr-stat-games">{_games(r.games)} · {share}%</span>{bar(r, "kr-stat-wdl")}</div>')
+        out.append(
+            f'<div class="kr-stat-row{tint}"><span class="kr-stat-move">{html.escape(san)}{glyph}</span>'
+            f'<span class="kr-stat-games">{_games(r.games)} · {share}%</span>{bar(r, "kr-stat-wdl")}</div>'
+        )
     rest = moves[ROWS:]
     if rest:
-        other = MoveResults(games=sum(r.games for _, r in rest), white=sum(r.white for _, r in rest),
-                            draw=sum(r.draw for _, r in rest), black=sum(r.black for _, r in rest))
+        other = MoveResults(
+            games=sum(r.games for _, r in rest),
+            white=sum(r.white for _, r in rest),
+            draw=sum(r.draw for _, r in rest),
+            black=sum(r.black for _, r in rest),
+        )
         n = len(rest)
-        out.append(f'<div class="kr-stat-row kr-stat-other"><span class="kr-stat-move">other {n} move'
-                   f'{"" if n == 1 else "s"}</span><span class="kr-stat-games">{_games(other.games)} · '
-                   f'{round(100 * other.games / pos.reached)}%</span>{bar(other, "kr-stat-wdl")}</div>')
+        out.append(
+            f'<div class="kr-stat-row kr-stat-other"><span class="kr-stat-move">other {n} move'
+            f'{"" if n == 1 else "s"}</span><span class="kr-stat-games">{_games(other.games)} · '
+            f"{round(100 * other.games / pos.reached)}%</span>{bar(other, 'kr-stat-wdl')}</div>"
+        )
     out.append("</div>")
     return "".join(out)

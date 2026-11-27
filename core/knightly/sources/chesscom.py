@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import chess.pgn
 
@@ -22,7 +22,7 @@ API = "https://api.chess.com/pub"
 TIME_CLASS = {"daily": "correspondence"}
 
 
-def parse_game(d: dict, user: str) -> Optional[Game]:
+def parse_game(d: dict, user: str) -> Game | None:
     if d.get("rules", "chess") != "chess":
         return None
     if d.get("initial_setup") and d["initial_setup"] != chess.STARTING_FEN:
@@ -69,12 +69,12 @@ def fetch(
     user: str,
     *,
     history_days: int = 90,
-    time_classes: Optional[list[str]] = None,
+    time_classes: list[str] | None = None,
     rated_only: bool = False,
-    cancel: Optional[threading.Event] = None,
-    progress: Optional[Callable[[str], None]] = None,
+    cancel: threading.Event | None = None,
+    progress: Callable[[str], None] | None = None,
     session=None,
-    now: Optional[float] = None,
+    now: float | None = None,
 ) -> int:
     s = session or http.session()
     u = user.lower()
@@ -126,7 +126,7 @@ def fetch(
     return new
 
 
-def _first_month(history_days: int, now: Optional[float] = None) -> tuple[int, int]:
+def _first_month(history_days: int, now: float | None = None) -> tuple[int, int]:
     if history_days <= 0:
         return (0, 0)  # all time
     t = time.gmtime((now or time.time()) - history_days * 86400)
@@ -137,7 +137,7 @@ def _first_key(user: str) -> str:
     return f"chesscom_first:{user.lower()}"
 
 
-def needs_backfill(cache, user: str, history_days: int, now: Optional[float] = None) -> bool:
+def needs_backfill(cache, user: str, history_days: int, now: float | None = None) -> bool:
     """True when the look-back now reaches further back than any fetch so far."""
     got = cache.get(_first_key(user))
     return got is None or _first_month(history_days, now) < tuple(got)

@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
-from typing import Iterable, Optional
+from collections.abc import Iterable
+from typing import Self
 
 import chess
 import chess.engine
@@ -22,8 +24,12 @@ from ..cache import Cache, fen_key
 from ..config import Config
 from ..http import Cancelled
 from ..model import Eval, Line, NoWdl, Score
-from ..progress import LC0 as P_LC0, STOCKFISH as P_SF, Tracker
+from ..progress import LC0 as P_LC0
+from ..progress import STOCKFISH as P_SF
+from ..progress import Tracker
 from .discover import LC0, STOCKFISH, kind_of, popen_kwargs
+
+log = logging.getLogger(__name__)
 
 WDL_OPTION = "UCI_ShowWDL"
 MATED = 10000  # |cp| used for a checkmated position (the side to move lost)
@@ -51,23 +57,30 @@ def terminal(board: chess.Board) -> Score:
     return Score(cp=0, wdl=(0, 1000, 0))
 
 
-def is_mate(ev: Optional[Eval]) -> bool:
+def is_mate(ev: Eval | None) -> bool:
     return bool(ev and ev.lines and ev.lines[0].score.mate is not None)
 
 
 class Engine:
     """One engine process of a known kind, with its own search limit and cache entries."""
 
-    def __init__(self, kind: str, path: str, cfg: Config, cache: Cache, tracker: Optional[Tracker] = None,
-                 cancel: Optional[threading.Event] = None):
+    def __init__(
+        self,
+        kind: str,
+        path: str,
+        cfg: Config,
+        cache: Cache,
+        tracker: Tracker | None = None,
+        cancel: threading.Event | None = None,
+    ):
         self.kind, self.path, self.cfg, self.cache = kind, path, cfg, cache
-        self._proc: Optional[chess.engine.SimpleEngine] = None
+        self._proc: chess.engine.SimpleEngine | None = None
         self.name = ""
         self.calls = 0
         self.tracker = tracker  # told about every search (progress.py)
         self.cancel = cancel  # a search in progress stops when this is set
 
-    def limit(self, depth: Optional[int] = None, ms: Optional[int] = None) -> tuple[chess.engine.Limit, int]:
+    def limit(self, depth: int | None = None, ms: int | None = None) -> tuple[chess.engine.Limit, int]:
         """The search limit and the cache effort it stands for: Stockfish by depth (`cfg.sf_depth`
         unless `depth`), Lc0 by time (`ms`, required)."""
         if self.kind == STOCKFISH:
@@ -102,8 +115,9 @@ class Engine:
                 self.tracker.engine(P_SF if self.kind == STOCKFISH else P_LC0, name=name, enabled=True)
         return self._proc
 
-    def _search(self, board: chess.Board, limit: chess.engine.Limit, multipv: int,
-                root: Optional[list[chess.Move]], t0: float) -> list:
+    def _search(
+        self, board: chess.Board, limit: chess.engine.Limit, multipv: int, root: list[chess.Move] | None, t0: float
+    ) -> list:
         """The engine's best line(s), streaming its progress to the tracker; stops at once on cancel."""
         kind = P_SF if self.kind == STOCKFISH else P_LC0
         with self.proc().analysis(board, limit, multipv=multipv, root_moves=root) as a:
@@ -112,13 +126,24 @@ class Engine:
                     a.stop()
                     raise Cancelled()
                 if self.tracker and "depth" in info:
-                    self.tracker.search_progress(kind, depth=int(info.get("depth", 0)), nodes=int(info.get("nodes", 0)),
-                                                 nps=int(info.get("nps", 0)),
-                                                 ms=round(info.get("time", time.monotonic() - t0) * 1000))
+                    self.tracker.search_progress(
+                        kind,
+                        depth=int(info.get("depth", 0)),
+                        nodes=int(info.get("nodes", 0)),
+                        nps=int(info.get("nps", 0)),
+                        ms=round(info.get("time", time.monotonic() - t0) * 1000),
+                    )
             return [dict(i) for i in a.multipv]
 
-    def evaluate(self, board: chess.Board, multipv: int, moves: Optional[list[str]] = None,
-                 depth: Optional[int] = None, ms: Optional[int] = None, timed: bool = False) -> Eval:
+    def evaluate(
+        self,
+        board: chess.Board,
+        multipv: int,
+        moves: list[str] | None = None,
+        depth: int | None = None,
+        ms: int | None = None,
+        timed: bool = False,
+    ) -> Eval:
         """With `moves`, only those root moves are searched (not cached). `depth` (Stockfish)
         searches to that depth instead of the configured one; `ms` is Lc0's time. `timed`: a
         cached result must know how long it took (`Eval.ms`), or the search is run again."""
@@ -156,15 +181,16 @@ class Engine:
             try:
                 self._proc.quit()
             except Exception:
-                pass
+                log.debug("engine did not quit cleanly", exc_info=True)
             self._proc = None
 
 
 class Analyser:
     """Stockfish, plus Lc0 when enabled. Not thread-safe: use one per worker thread."""
 
-    def __init__(self, cfg: Config, cache: Cache, cancel: Optional[threading.Event] = None,
-                 tracker: Optional[Tracker] = None):
+    def __init__(
+        self, cfg: Config, cache: Cache, cancel: threading.Event | None = None, tracker: Tracker | None = None
+    ):
         self.cfg = cfg
         self.cancel = cancel or threading.Event()
         self.tracker = tracker
@@ -182,7 +208,7 @@ class Analyser:
             s.update(lc0_runs=self.lc0.calls, used_lc0=self.picked[LC0])
         return s
 
-    def __enter__(self) -> "Analyser":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc) -> None:
@@ -197,8 +223,15 @@ class Analyser:
         if self.cancel.is_set():
             raise Cancelled()
 
-    def evaluate(self, board: chess.Board, *, multipv: int = 1, ply: int = 99,
-                 moves: Optional[list[str]] = None, sf_only: bool = False) -> Eval:
+    def evaluate(
+        self,
+        board: chess.Board,
+        *,
+        multipv: int = 1,
+        ply: int = 99,
+        moves: list[str] | None = None,
+        sf_only: bool = False,
+    ) -> Eval:
         """Eval of `board` with up to `multipv` lines (fewer if there are fewer legal moves).
 
         With `moves`, only those root moves are searched. `sf_only`: Stockfish alone, even with Lc0 on
