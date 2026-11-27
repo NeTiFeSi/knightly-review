@@ -5,6 +5,8 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-27
+
 ### Fixed
 
 - **"The game is decided" on equal positions.** A game now counts as decided only when after every legal move the
@@ -79,6 +81,7 @@ First public release.
 - Anki 25.07 or newer (the add-on needs Python 3.11 or newer; building from source also needs Python 3.11+ and
   Node.js).
 
-[Unreleased]: https://github.com/NeTiFeSi/knightly-review/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/NeTiFeSi/knightly-review/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/NeTiFeSi/knightly-review/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/NeTiFeSi/knightly-review/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NeTiFeSi/knightly-review/releases/tag/v0.1.0
