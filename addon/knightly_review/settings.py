@@ -62,7 +62,7 @@ def save_secrets(data: dict[str, Any]) -> None:
 
 def core_config(cfg: dict[str, Any] | None = None) -> Config:
     c = Config.from_dict(cfg if cfg is not None else load())
-    c.lichess_token = secrets().get("lichess_token", "")
+    c.extract.lichess_token = secrets().get("lichess_token", "")
     return c
 
 

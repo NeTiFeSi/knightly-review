@@ -13,7 +13,7 @@ import chess.pgn
 
 from . import openings, phases
 from .cache import fen_key
-from .config import Config
+from .config import Annotate
 from .engine.analyse import MATED
 from .model import CardSpec, Choice, Game, NoteSpec, Score
 from .puzzles import parse_key, puzzle_key
@@ -106,7 +106,7 @@ def _puzzle_pgn(
     game: Game,
     scores: list[Score | None],
     first: CardSpec,
-    inaccuracy: float = Config.inaccuracy,
+    inaccuracy: float = Annotate.inaccuracy,
     nags: dict[int, int] | None = None,
     lead: tuple[str, Choice] | None = None,
 ) -> str:
@@ -218,7 +218,7 @@ def build_puzzle(
     first: CardSpec,
     second: CardSpec | None,
     notes: str,
-    inaccuracy: float = Config.inaccuracy,
+    inaccuracy: float = Annotate.inaccuracy,
     nags: dict[int, int] | None = None,
     lead: tuple[str, Choice] | None = None,
 ) -> NoteSpec:

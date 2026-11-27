@@ -2,11 +2,11 @@
 
 Two kinds of search, each to a fixed depth:
 
-- the **full search** (`evaluate`, depth `cfg.sf_depth`): one line per legal move (MultiPV = the number of legal
+- the **full search** (`evaluate`, depth `cfg.annotate.sf_depth`): one line per legal move (MultiPV = the number of legal
   moves). With a single line, Stockfish prunes the moves it thinks are worse and only bounds their scores;
   searching them all gives each move an exact score from the same search, so the loss of a move against the best
   one is comparable.
-- the **scan** (`scan`, depth `cfg.scan_depth_used()`): a cheap first look with the fewest lines that can
+- the **scan** (`scan`, depth `cfg.annotate.scan_depth_used()`): a cheap first look with the fewest lines that can
   measure a loss: one line for the best move, and each move the games played searched on its own (Stockfish's
   `searchmoves`), so its score is exact too. It tells which positions are worth a full search.
 
@@ -90,7 +90,7 @@ class Engine:
             if WDL_OPTION not in eng.options:
                 eng.quit()
                 raise EngineError(f"{name} doesn't report win/draw/loss ({WDL_OPTION}); please update it")
-            conf = {WDL_OPTION: True, "Threads": self.cfg.engine_threads(), "Hash": self.cfg.hash_mb}
+            conf = {WDL_OPTION: True, "Threads": self.cfg.engine.engine_threads(), "Hash": self.cfg.engine.hash_mb}
             eng.configure({k: v for k, v in conf.items() if k in eng.options})
             self._proc, self.name = eng, name
             if self.tracker:
@@ -118,10 +118,10 @@ class Engine:
             return [dict(i) for i in a.multipv]
 
     def evaluate(self, board: chess.Board) -> Eval:
-        """`board` searched to `cfg.sf_depth` with one line per legal move, best first (from the cache when the
+        """`board` searched to `cfg.annotate.sf_depth` with one line per legal move, best first (from the cache when the
         position was searched that deep already)."""
         key = fen_key(board.fen())
-        depth = self.cfg.sf_depth
+        depth = self.cfg.annotate.sf_depth
         ev = self.cache.get_eval(key, min_effort=depth)
         if ev:
             if self.tracker:
@@ -146,16 +146,16 @@ class Engine:
         return ev
 
     def scan(self, board: chess.Board, moves: list[str]) -> tuple[Line, dict[str, Line]]:
-        """The cheap look at `board`: (the best line, the line of each of `moves`) at `cfg.scan_depth_used()`.
+        """The cheap look at `board`: (the best line, the line of each of `moves`) at `cfg.annotate.scan_depth_used()`.
 
         One search with one line finds the best move; the other moves are searched together with only those as
         root moves (one line each). Whatever the cache has already (a full search counts) is not searched again."""
         key = fen_key(board.fen())
-        full = self.cache.get_eval(key, min_effort=self.cfg.sf_depth)
+        full = self.cache.get_eval(key, min_effort=self.cfg.annotate.sf_depth)
         if full and full.lines:
             by = {l.moves[0]: l for l in full.lines if l.moves}
             return full.lines[0], {m: by[m] for m in moves if m in by}
-        depth = self.cfg.scan_depth_used()
+        depth = self.cfg.annotate.scan_depth_used()
         have = {m: ev.lines[0] for m, ev in self.cache.get_scan(key, ["", *moves], depth).items() if ev.lines}
         saved: dict[str, Eval] = {}
         if "" not in have:
@@ -178,10 +178,10 @@ class Engine:
         """The `lines` best lines of `board`, best first, at the scan depth (cached; a full search answers it)."""
         key = fen_key(board.fen())
         n = min(lines, board.legal_moves.count())
-        full = self.cache.get_eval(key, min_effort=self.cfg.sf_depth)
+        full = self.cache.get_eval(key, min_effort=self.cfg.annotate.sf_depth)
         if full and full.lines:
             return Eval(full.depth, full.lines[:n], full.source)
-        depth, name = self.cfg.scan_depth_used(), f"*{n}"
+        depth, name = self.cfg.annotate.scan_depth_used(), f"*{n}"
         have = self.cache.get_scan(key, [name], depth)
         if name in have:
             return have[name]
@@ -223,7 +223,7 @@ class Analyser:
         self.cache = cache
         self.cancel = cancel or threading.Event()
         self.tracker = tracker
-        self.sf = Engine(cfg.stockfish_path, cfg, cache, tracker, self.cancel)
+        self.sf = Engine(cfg.engine.stockfish_path, cfg, cache, tracker, self.cancel)
         if tracker:
             tracker.engine(P_SF, enabled=True)
 
@@ -269,4 +269,4 @@ class Analyser:
 
     def cached(self, board: chess.Board) -> Eval | None:
         """The position's search when it is in the cache already (never starts one)."""
-        return self.cache.get_eval(fen_key(board.fen()), min_effort=self.cfg.sf_depth)
+        return self.cache.get_eval(fen_key(board.fen()), min_effort=self.cfg.annotate.sf_depth)

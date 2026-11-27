@@ -1,14 +1,14 @@
 """The one way puzzles are made: ply by ply, the biggest mistakes confirmed first.
 
 For ply 0, 1, 2… (half-moves already played), the user's positions first and then, with
-`cfg.include_opponent`, the opponents':
+`cfg.select.include_opponent`, the opponents':
 
-1. Every position at that ply gets a cheap scan (`Analyser.scan`, at `cfg.scan_depth`): the best move with one
+1. Every position at that ply gets a cheap scan (`Analyser.scan`, at `cfg.annotate.scan_depth`): the best move with one
    line, and each move the games played from the position searched on its own. Each position gets the loss
    of the worst move a player actually played there: how far its win rate falls below the best move's
    (engine WDL).
 2. The positions where that loss is more than half of `min_loss` (the scan is shallow: it only rules out
-   the clearly fine moves) are taken biggest first. Each gets the full search, to `cfg.sf_depth` with one line
+   the clearly fine moves) are taken biggest first. Each gets the full search, to `cfg.annotate.sf_depth` with one line
    per legal move, and the full setup (`select.build_card`): if the played move is more than `min_loss` worse
    than the best and not a good move, it is a puzzle: one note with two puzzles, the position before the
    mistake and the position after it (the punishment).
@@ -100,7 +100,7 @@ class Miner:
         self.tracker = tracker or Tracker()
         self.on_note = on_note or (lambda spec: None)
         self.clock = clock
-        self.deadline = clock() + cfg.analysis_minutes * 60 if cfg.analysis_minutes > 0 else math.inf
+        self.deadline = clock() + cfg.build.analysis_minutes * 60 if cfg.build.analysis_minutes > 0 else math.inf
         self.known: dict[str, Puzzle] = {p.id: p for p in known}
         self.merged = {bid for p in self.known.values() for bid in p.links}
         # Notes in the collection built under older rules, by note key, until they are rebuilt.
@@ -162,7 +162,7 @@ class Miner:
             self.repair()
             for ply in range(max(self.by_ply, default=-1) + 1):
                 for mine in (True, False):
-                    if mine or self.cfg.include_opponent:
+                    if mine or self.cfg.select.include_opponent:
                         self._ply(ply, mine)
             self.finished = True
         except _Stop:
@@ -188,8 +188,8 @@ class Miner:
         if not units:
             return
         who = "your moves" if mine else "your opponents' moves"
-        depth = self.cfg.sf_depth
-        scan_depth = self.cfg.scan_depth_used()
+        depth = self.cfg.annotate.sf_depth
+        scan_depth = self.cfg.annotate.scan_depth_used()
         step = f"Ply {ply}, {who}: scanning {len(units)} positions at depth {scan_depth} of {depth}"
         self._step = step
         self.tracker.plies(ply, max(self.by_ply, default=0))
@@ -202,7 +202,7 @@ class Miner:
             u.scan = self.an.scan(u.board, list(u.played))
             self.analysed += 1
             self.tracker.advance()
-        floor = self.cfg.min_loss_at(ply) / 2  # the scan is shallow: it only rules out the clearly fine moves
+        floor = self.cfg.select.min_loss_at(ply) / 2  # the scan is shallow: it only rules out the clearly fine moves
         for u in sorted((u for u in units if self.loss(u) > floor), key=lambda u: -self.loss(u)):
             self._tick()
             self._confirm(u, ply)
@@ -214,14 +214,14 @@ class Miner:
         puzzle."""
         self._say(
             f"Ply {ply}: making a puzzle at full strength",
-            f"depth {self.cfg.sf_depth}, every move",
+            f"depth {self.cfg.annotate.sf_depth}, every move",
             f"ply {ply}: a move losing {self.loss(u):.0f} %",
         )
         self.tracker.plan(1)
         game_opponent = ""
         worst = sorted(self._losses(u).items(), key=lambda kv: -kv[1])[:CONFIRM_TRIES]
         for move, loss in worst:
-            if loss <= self.cfg.min_loss_at(ply) / 2:
+            if loss <= self.cfg.select.min_loss_at(ply) / 2:
                 break
             st = u.played[move]
             game = (st.mine_game if u.mine else st.opp_game) or self.games[0]
@@ -341,7 +341,7 @@ class Miner:
         )
         self._write_notes_field(p)
         spec = notes_mod.build_puzzle(
-            game, self._scores_of(game), card, second, p.notes, self.cfg.inaccuracy, self._nags(game, {ply})
+            game, self._scores_of(game), card, second, p.notes, self.cfg.annotate.inaccuracy, self._nags(game, {ply})
         )
         self._emit(p, spec)
 
@@ -461,7 +461,7 @@ class Miner:
         )
         self._write_notes_field(p)
         spec = notes_mod.build_puzzle(
-            game, [], first, second, p.notes, self.cfg.inaccuracy, lead=(d.before_fen, trimmed(d.reply, 0))
+            game, [], first, second, p.notes, self.cfg.annotate.inaccuracy, lead=(d.before_fen, trimmed(d.reply, 0))
         )
         self._emit(p, spec)
 

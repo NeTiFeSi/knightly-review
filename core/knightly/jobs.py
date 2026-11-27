@@ -47,11 +47,10 @@ STATE_KEY = "last_run"
 
 
 def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
-    """Hash of everything a run depends on: the rules, the settings (minus tokens), the games used, the positions
-    on cards."""
-    d = cfg.to_dict()
-    d.pop("lichess_token", None)
-    blob = json.dumps([puzzles.RULES, d, sorted(game_keys), sorted(exclude)], sort_keys=True)
+    """Hash of everything a run depends on: the rules, the settings of the stages it runs (minus secrets; the
+    engine's threads and memory change no result), the games used, the positions on cards."""
+    settings = cfg.fingerprint("extract", "annotate", "select", "build")
+    blob = json.dumps([puzzles.RULES, settings, sorted(game_keys), sorted(exclude)], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -59,16 +58,18 @@ def fetch_all(
     cfg: Config, cache: Cache, *, force: bool, cancel: threading.Event, progress: Progress, result: UpdateResult
 ) -> None:
     jobs = []
-    if cfg.lichess_user:
-        jobs.append(("lichess", cfg.lichess_user))
-    if cfg.chesscom_user:
-        jobs.append(("chesscom", cfg.chesscom_user))
+    if cfg.extract.lichess_user:
+        jobs.append(("lichess", cfg.extract.lichess_user))
+    if cfg.extract.chesscom_user:
+        jobs.append(("chesscom", cfg.extract.chesscom_user))
     for source, user in jobs:
         # A manual update may always ask Lichess (incremental); Chess.com's cache makes
         # frequent asks pointless, so its cooldown always applies.
         mod = lichess if source == "lichess" else chesscom
         # the look-back grew, or the filters let through games they left out
-        backfill = mod.needs_backfill(cache, user, cfg.history_days, cfg.time_classes, cfg.rated_only)
+        backfill = mod.needs_backfill(
+            cache, user, cfg.extract.history_days, cfg.extract.time_classes, cfg.extract.rated_only
+        )
         if not sources.due(cache, source, user) and not (force and source == "lichess") and not backfill:
             continue
         msg = lambda m: progress("fetch", 0, 0, m)
@@ -78,10 +79,10 @@ def fetch_all(
                 n = lichess.fetch(
                     cache,
                     user,
-                    token=cfg.lichess_token,
-                    history_days=cfg.history_days,
-                    time_classes=cfg.time_classes,
-                    rated_only=cfg.rated_only,
+                    token=cfg.extract.lichess_token,
+                    history_days=cfg.extract.history_days,
+                    time_classes=cfg.extract.time_classes,
+                    rated_only=cfg.extract.rated_only,
                     cancel=cancel,
                     progress=msg,
                 )
@@ -89,9 +90,9 @@ def fetch_all(
                 n = chesscom.fetch(
                     cache,
                     user,
-                    history_days=cfg.history_days,
-                    time_classes=cfg.time_classes,
-                    rated_only=cfg.rated_only,
+                    history_days=cfg.extract.history_days,
+                    time_classes=cfg.extract.time_classes,
+                    rated_only=cfg.extract.rated_only,
                     cancel=cancel,
                     progress=msg,
                 )
@@ -140,14 +141,15 @@ def run_update(
         if fetch:
             fetch_all(cfg, cache, force=force, cancel=cancel, progress=progress, result=result)
 
-        since = sources.since_ts(cfg.history_days)
+        since = sources.since_ts(cfg.extract.history_days)
         games: list[Game] = []
-        for source, user in (("lichess", cfg.lichess_user), ("chesscom", cfg.chesscom_user)):
+        for source, user in (("lichess", cfg.extract.lichess_user), ("chesscom", cfg.extract.chesscom_user)):
             if user:
                 games += [
                     g
                     for g in cache.games(source, user, since)
-                    if (not cfg.time_classes or g.time_class in cfg.time_classes) and (not cfg.rated_only or g.rated)
+                    if (not cfg.extract.time_classes or g.time_class in cfg.extract.time_classes)
+                    and (not cfg.extract.rated_only or g.rated)
                 ]
         games.sort(key=lambda g: g.end_ts, reverse=True)  # newest first across both sites
         by_key = {g.key: g for g in games}
@@ -187,7 +189,7 @@ def run_update(
                 an,
                 cfg,
                 store,
-                want=pipeline.UNBOUNDED if precalculate else cfg.max_new_cards,
+                want=pipeline.UNBOUNDED if precalculate else cfg.build.max_new_cards,
                 known=known,
                 claimed=claimed,
                 existing=existing,

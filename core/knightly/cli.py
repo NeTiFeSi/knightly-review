@@ -118,24 +118,24 @@ def main(argv: list[str] | None = None) -> int:
     from .jobs import run_update
 
     cfg = Config.from_dict(json.loads(Path(args.config).read_text()) if args.config else {})
-    cfg.lichess_user = args.lichess or cfg.lichess_user
-    cfg.chesscom_user = args.chesscom or cfg.chesscom_user
+    cfg.extract.lichess_user = args.lichess or cfg.extract.lichess_user
+    cfg.extract.chesscom_user = args.chesscom or cfg.extract.chesscom_user
     if args.minutes is not None:
-        cfg.analysis_minutes = args.minutes
+        cfg.build.analysis_minutes = args.minutes
     if args.max_cards is not None:
-        cfg.max_new_cards = args.max_cards
+        cfg.build.max_new_cards = args.max_cards
     if args.days is not None:
-        cfg.history_days = args.days
+        cfg.extract.history_days = args.days
     if args.depth is not None:
-        cfg.sf_depth = args.depth
-    cfg.stockfish_path = args.stockfish or cfg.stockfish_path
-    if not cfg.stockfish_path:
+        cfg.annotate.sf_depth = args.depth
+    cfg.engine.stockfish_path = args.stockfish or cfg.engine.stockfish_path
+    if not cfg.engine.stockfish_path:
         found = discover()
         if not found:
             print("Stockfish not found; pass --stockfish", file=sys.stderr)
             return 2
-        cfg.stockfish_path = found[0].path
-    if not (cfg.lichess_user or cfg.chesscom_user):
+        cfg.engine.stockfish_path = found[0].path
+    if not (cfg.extract.lichess_user or cfg.extract.chesscom_user):
         print("pass --lichess and/or --chesscom", file=sys.stderr)
         return 2
 

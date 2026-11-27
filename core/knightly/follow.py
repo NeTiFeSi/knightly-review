@@ -193,7 +193,7 @@ def follow_puzzle(
     positions are not analysed further). Returns the decision positions found (see `Decision`)."""
     ctx = _Ctx(
         an=an,
-        cfg=dataclasses.replace(cfg, good_move=FOLLOW_GOOD),
+        cfg=dataclasses.replace(cfg, annotate=dataclasses.replace(cfg.annotate, good_move=FOLLOW_GOOD)),
         solver=solver,
         mate=card.mate,
         seen=seen,

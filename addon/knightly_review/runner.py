@@ -118,14 +118,14 @@ class Updater:
         deck = cfg.get("deck") or kc.MODEL
         if not _round:
             self.stopped = False
-            hours = core.keep_running_hours if core.keep_running in ("precalculate", "unlimited") else 0
+            hours = core.build.keep_running_hours if core.build.keep_running in ("precalculate", "unlimited") else 0
             self.keep_until = time.monotonic() + hours * 3600 if hours > 0 else math.inf
-            self.keeping = core.keep_running in ("precalculate", "unlimited")
+            self.keeping = core.build.keep_running in ("precalculate", "unlimited")
         left_min = (self.keep_until - time.monotonic()) / 60
         if _round == "precalc":  # runs for the rest of the time, or until everything is at full depth
-            core.analysis_minutes = max(0.05, left_min) if left_min != math.inf else 0
+            core.build.analysis_minutes = max(0.05, left_min) if left_min != math.inf else 0
         elif _round and left_min != math.inf:
-            core.analysis_minutes = min(core.analysis_minutes or left_min, max(0.05, left_min))
+            core.build.analysis_minutes = min(core.build.analysis_minutes or left_min, max(0.05, left_min))
         self.cancel = threading.Event()
         cancel = self.cancel
         self.tracker = tracker = Tracker()
@@ -182,7 +182,9 @@ class Updater:
                 res, err = None, (e, traceback.format_exc())
             finally:
                 cache.close()
-            mw.taskman.run_on_main(lambda: self._finish(res, err, deck, manual, core.keep_running, _round, writer))
+            mw.taskman.run_on_main(
+                lambda: self._finish(res, err, deck, manual, core.build.keep_running, _round, writer)
+            )
 
         self.thread = threading.Thread(target=work, name="knightly-update", daemon=True)
         self.thread.start()
