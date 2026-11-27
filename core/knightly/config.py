@@ -57,6 +57,10 @@ class Extract:
     history_days: int = 90  # 0 or negative = all time
     time_classes: list[str] = field(default_factory=lambda: ["blitz", "rapid", "classical", "correspondence"])
     rated_only: bool = False
+    # When games are fetched (the supervisor): at start, and every so many hours (0 = only at start and by hand).
+    # Each later stage runs when the one before it has new output.
+    update_on_startup: bool = True
+    update_every_hours: float = 6
 
     def __post_init__(self) -> None:
         seen: set[tuple[str, str]] = set()
@@ -109,6 +113,11 @@ class Annotate:
     inaccuracy: float = 5.0  # a move losing this much or more is an inaccuracy (?!); between "good" and this is normal play: no NAG, no puzzle
     sacrifice_points: int = 2  # material (1/3/3/5/9) given up against the alternative that keeps the most
     sacrifice_plies: int = 4  # where along the engine's line material is counted (then captures/checks finish)
+    # The supervisor's annotate stage: engine time per run, and whether to keep annotating at low priority
+    # afterwards, while the app is open, for at most `keep_annotating_hours` (0 = until everything is annotated).
+    annotate_minutes: float = 10
+    keep_annotating: bool = False
+    keep_annotating_hours: float = 0
 
     def scan_depth_used(self) -> int:
         """The scan's depth: `scan_depth`, but never deeper than the full search."""
@@ -135,12 +144,6 @@ class Build:
 
     analysis_minutes: float = 10  # engine time per update; 0 = until enough cards are found
     max_new_cards: int = 10
-    # Keep analysing after an update has made its cards: "off"; "precalculate" (keep deepening and
-    # confirming candidates and save them for the next update); "unlimited" (keep adding cards, in
-    # batches of max_new_cards, with no per-update cap). `keep_running_hours`: 0 = until stopped or
-    # everything is at full depth. Used by the add-on's runner, not by one run_update.
-    keep_running: str = "off"
-    keep_running_hours: float = 0
 
 
 @dataclass
@@ -161,6 +164,14 @@ SECTIONS: dict[str, type] = {
     "manage": Manage,
 }
 SECRETS = {("extract", "lichess_token")}
+# When stages run, not what they produce: left out of the fingerprints too.
+SCHEDULE = {
+    ("extract", "update_on_startup"),
+    ("extract", "update_every_hours"),
+    ("annotate", "annotate_minutes"),
+    ("annotate", "keep_annotating"),
+    ("annotate", "keep_annotating_hours"),
+}
 
 
 def _owner() -> dict[str, str]:
@@ -210,10 +221,11 @@ class Config:
         return {k: v for name in SECTIONS for k, v in dataclasses.asdict(getattr(self, name)).items()}
 
     def fingerprint(self, *sections: str) -> str:
-        """Hash of the given sections' settings (all of them when none is named), secrets left out."""
+        """Hash of the given sections' settings (all of them when none is named), secrets and schedules left out."""
         names = sections or tuple(SECTIONS)
+        skip = SECRETS | SCHEDULE
         d = {
-            name: {k: v for k, v in dataclasses.asdict(getattr(self, name)).items() if (name, k) not in SECRETS}
+            name: {k: v for k, v in dataclasses.asdict(getattr(self, name)).items() if (name, k) not in skip}
             for name in names
         }
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()

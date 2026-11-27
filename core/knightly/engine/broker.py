@@ -106,6 +106,7 @@ class Pool:
         self.cfg, self.size, self.lease = cfg, max(1, size), lease
         self._start = start or self._popen
         self._idle: list[chess.engine.SimpleEngine] = []
+        self._since: dict[int, float] = {}  # id of an idle process → when it became idle
         self._count = 0  # processes started and not closed
         self._waiting: list[tuple[int, int]] = []  # heap of (priority, ticket)
         self._tickets = itertools.count()
@@ -190,7 +191,25 @@ class Pool:
                     _quit(proc)
                 else:
                     self._idle.append(proc)
+                    self._since[id(proc)] = time.monotonic()
                 self._cond.notify_all()
+
+    def reap(self, max_idle: float = 60) -> int:
+        """Stop the processes idle for more than `max_idle` seconds; with none left, give the lease back (the
+        next search takes it again). Returns how many were stopped."""
+        now = time.monotonic()
+        with self._cond:
+            old = [p for p in self._idle if now - self._since.get(id(p), now) > max_idle]
+            for p in old:
+                self._idle.remove(p)
+                self._since.pop(id(p), None)
+            self._count -= len(old)
+            release = self._count == 0 and not self._waiting
+        for p in old:
+            _quit(p)
+        if release and self.lease is not None:
+            self.lease.release()
+        return len(old)
 
     def close(self) -> None:
         """Stop the idle processes (busy ones stop when their search returns) and give the lease back."""

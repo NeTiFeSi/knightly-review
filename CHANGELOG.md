@@ -23,6 +23,14 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The work runs in stages, each on its own.** Fetching games, annotating your moves, choosing puzzle candidates,
+  making cards and maintaining your notes each run on a thread of their own, as soon as the stage before them
+  has something new, sharing Stockfish (making cards comes before annotating). An update no longer has to finish
+  everything in one go: annotating carries on where it stopped, and each run of the card stage makes up to your
+  "new cards per update". New cards are written into Anki every few seconds, each batch one undo step.
+- **"Keep analysing after the update" is now "keep annotating in the background"**, at low priority. "Keep adding
+  cards with no limit" is gone: cards are made up to your limit each time the card stage runs. Your setting
+  carries over.
 - Changing Stockfish's threads or memory no longer makes the next update analyse everything again. The first
   update after this version does analyse again once, mostly from the searches already saved.
 - Only one program runs Stockfish at a time on the same data: an update from the command line waits while Anki's

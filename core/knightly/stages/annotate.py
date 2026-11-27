@@ -45,6 +45,29 @@ class Unit:
         return max(self.losses().values(), default=0.0)
 
 
+def _line(line: Line) -> dict:
+    return {"score": line.score.to_json(), "moves": line.moves}
+
+
+def _unline(d: dict) -> Line:
+    return Line(Score.from_json(d["score"]), list(d["moves"]))
+
+
+def scan_to_json(scan: tuple[Line, dict[str, Line]]) -> dict:
+    best, lines = scan
+    return {"best": _line(best), "lines": {m: _line(l) for m, l in lines.items()}}
+
+
+def scan_from_json(d: dict) -> tuple[Line, dict[str, Line]]:
+    return _unline(d["best"]), {m: _unline(l) for m, l in d["lines"].items()}
+
+
+def annotated(row: tuple[int, dict] | None, u: Unit, depth: int) -> bool:
+    """A saved annotation (depth, data) answers `u`: deep enough, and it has a line for every move played there
+    (new games may have played others since)."""
+    return row is not None and row[0] >= depth and set(u.played) <= set(row[1]["lines"])
+
+
 def positions(by_ply: dict[int, dict[str, stats.Pos]], ply: int, mine: bool) -> list[Unit]:
     """The positions at `ply` where that side (yours, or your opponents') played, with a choice to make."""
     out = []

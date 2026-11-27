@@ -459,23 +459,31 @@ class SettingsDialog(QDialog):
         self.minutes.setSuffix(" min")
         self.minutes.setSpecialValueText("until the cards are found")
         self.minutes.setValue(int(self.cfg.get("analysis_minutes", 10)))
-        self.minutes.setToolTip("Engine time one update may spend. Analysis carries on in the next update.")
-        wf.addRow("Analysis per update:", self.minutes)
-        self.keep = QComboBox()
-        self.keep.addItem("Stop when the update is done", "off")
-        self.keep.addItem("Keep analysing, to have cards ready for later updates", "precalculate")
-        self.keep.addItem("Keep adding cards, with no limit per update", "unlimited")
-        self.keep.setCurrentIndex(max(0, self.keep.findData(self.cfg.get("keep_running", "off"))))
-        self.keep.setToolTip(
-            "After an update has made its cards. Stop it with Cancel in the progress window or by closing the profile."
+        self.minutes.setToolTip("Engine time for confirming puzzles and making their cards, each time it runs.")
+        wf.addRow("Making cards, per run:", self.minutes)
+        self.annotate_minutes = QSpinBox()
+        self.annotate_minutes.setRange(0, 24 * 60)
+        self.annotate_minutes.setSuffix(" min")
+        self.annotate_minutes.setSpecialValueText("until every position is annotated")
+        self.annotate_minutes.setValue(int(self.cfg.get("annotate_minutes", 10)))
+        self.annotate_minutes.setToolTip(
+            "Engine time for the cheap look at every position of your games (how good each move was),\n"
+            "each time new games arrive. It carries on where it stopped."
         )
-        wf.addRow("After the update:", self.keep)
+        wf.addRow("Annotating, per run:", self.annotate_minutes)
+        self.keep = QCheckBox("Keep annotating in the background, at low priority, while Anki is open")
+        self.keep.setChecked(bool(self.cfg.get("keep_annotating", False)))
+        self.keep.setToolTip(
+            "Cards are still made only up to “New cards per update”; annotating ahead makes them come faster.\n"
+            "Stop it with Cancel in the progress window or by closing the profile."
+        )
+        wf.addRow("", self.keep)
         self.keep_hours = QDoubleSpinBox()
         self.keep_hours.setRange(0, 72)
         self.keep_hours.setDecimals(1)
         self.keep_hours.setSuffix(" h")
-        self.keep_hours.setSpecialValueText("until stopped or everything is analysed")
-        self.keep_hours.setValue(float(self.cfg.get("keep_running_hours", 0)))
+        self.keep_hours.setSpecialValueText("until stopped or everything is annotated")
+        self.keep_hours.setValue(float(self.cfg.get("keep_annotating_hours", 0)))
         wf.addRow("For at most:", self.keep_hours)
         self.opponent = QCheckBox("Also make cards from my opponents' mistakes (played from their side)")
         self.opponent.setChecked(bool(self.cfg.get("include_opponent", False)))
@@ -611,21 +619,21 @@ class SettingsDialog(QDialog):
         if not self.engine_path:
             showWarning("Choose Stockfish first (press “Change…” in the Stockfish box).", parent=self)
             return
-        keep = self.keep.currentData() or "off"
+        keep = self.keep.isChecked()
         if (
-            keep != "off"
-            and self.cfg.get("keep_running", "off") == "off"
+            keep
+            and not self.cfg.get("keep_annotating", False)
             and not askUser(
-                "Keeping the analysis running uses the CPU at full load, for as long as "
-                "you chose.\n\n• Laptops: the battery drains fast.\n• Heat, fan noise, and possible thermal "
-                "throttling.\n• Other programs get slower; lower “Threads” to leave room.\n\n"
+                "Annotating in the background uses the CPU, at low priority, for as long as "
+                "you chose.\n\n• Laptops: the battery drains faster.\n• Heat and fan noise.\n"
+                "• Lower “Threads” to leave room for other programs.\n\n"
                 "It stops with Cancel in the progress "
                 "window or when you close the profile.\n\nTurn it on?",
                 parent=self,
             )
         ):
             return
-        for old in ("engine_path", "use_lc0", "lc0_path"):  # replaced by stockfish_path / no longer used
+        for old in ("engine_path", "use_lc0", "lc0_path", "keep_running", "keep_running_hours"):  # no longer used
             self.cfg.pop(old, None)
         self.cfg.update(
             accounts=accounts,
@@ -639,8 +647,9 @@ class SettingsDialog(QDialog):
             deck=self.deck.text().strip() or "Knightly Review",
             max_new_cards=self.max_cards.value(),
             analysis_minutes=self.minutes.value(),
-            keep_running=keep,
-            keep_running_hours=round(self.keep_hours.value(), 1),
+            annotate_minutes=self.annotate_minutes.value(),
+            keep_annotating=keep,
+            keep_annotating_hours=round(self.keep_hours.value(), 1),
             include_opponent=self.opponent.isChecked(),
             update_on_startup=self.on_start.isChecked(),
             update_every_hours=self.every.value(),

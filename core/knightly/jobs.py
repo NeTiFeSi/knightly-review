@@ -55,6 +55,29 @@ def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
+def collection_state(
+    cache: Cache, existing: dict[str, str], prune: bool = True
+) -> tuple[puzzles.Store, list[puzzles.Puzzle], set[str]]:
+    """What is on cards already, from the collection's notes (note key → PGN): the puzzle records, the puzzles of
+    this pipeline (found again by id: position and ply), and the position of every card (never made twice; cards
+    from older versions count too). `prune`: puzzle records whose note is gone from the collection are dropped,
+    so the puzzle may be made again (off when there is no collection to compare with)."""
+    store = puzzles.Store(cache)
+    known: list[puzzles.Puzzle] = []
+    claimed: set[str] = set()
+    for key, pgn in existing.items():
+        claimed |= set(notes.card_ids(pgn))
+        if puzzles.parse_key(key):
+            p = store.get(key) or puzzles.from_pgn(key, pgn)
+            if p is not None:
+                known.append(p)
+    if prune:
+        for key in store:
+            if key not in existing:
+                store.delete(key)
+    return store, known, claimed
+
+
 def _priorities(precalculate: bool) -> dict[str, int]:
     """Pre-calculating is work for later: it waits behind every other user of the engine."""
     if precalculate:
@@ -106,20 +129,7 @@ def run_update(
         games: list[Game] = extract.games_of(cfg, cache)  # yours, newest first across the sources
         by_key = {g.key: g for g in games}
 
-        # What is on cards already: puzzles of this pipeline (found again by id: position and ply) and
-        # cards from older versions (their positions are never offered again).
-        store = puzzles.Store(cache)
-        known: list[puzzles.Puzzle] = []
-        claimed: set[str] = set()  # the position of every card in the collection: never made twice
-        for key, pgn in existing.items():
-            claimed |= set(notes.card_ids(pgn))
-            if puzzles.parse_key(key):
-                p = store.get(key) or puzzles.from_pgn(key, pgn)
-                if p is not None:
-                    known.append(p)
-        for key in store:  # puzzles whose note is gone from the collection may be made again
-            if have_collection and key not in existing:
-                store.delete(key)
+        store, known, claimed = collection_state(cache, existing, prune=have_collection)
         exclude = claimed
 
         fp = fingerprint(cfg, by_key, exclude)

@@ -44,6 +44,14 @@ def load() -> dict[str, Any]:
         ]
     for old in ("lichess_user", "chesscom_user"):
         cfg.pop(old, None)
+    if "keep_running" in cfg:
+        # The stages run on their own now: "keep analysing after the update" became annotating in the
+        # background (at low priority); cards are only made by the build stage, up to its limit per run.
+        if cfg["keep_running"] in ("precalculate", "unlimited"):
+            cfg["keep_annotating"] = True
+            cfg["keep_annotating_hours"] = float(cfg.get("keep_running_hours") or 0)
+        cfg.pop("keep_running", None)
+        cfg.pop("keep_running_hours", None)
     cfg["config_version"] = defaults["config_version"]
     if cfg.get("engine_path") and not cfg.get("stockfish_path"):  # settings from an early version
         cfg["stockfish_path"] = cfg["engine_path"]

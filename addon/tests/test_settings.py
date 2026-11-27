@@ -41,6 +41,16 @@ class LoadTest(unittest.TestCase):
         self.assertEqual(cfg["accounts"], accounts)
         self.assertNotIn("lichess_user", cfg)
 
+    def test_keep_running_becomes_keep_annotating(self):
+        for mode, hours, keep in (("precalculate", 2.5, True), ("unlimited", 0, True), ("off", 3, False)):
+            cfg = self.load({"keep_running": mode, "keep_running_hours": hours})
+            self.assertNotIn("keep_running", cfg)
+            self.assertNotIn("keep_running_hours", cfg)
+            self.assertEqual(cfg["keep_annotating"], keep)
+            if keep:
+                self.assertEqual(cfg["keep_annotating_hours"], hours)
+        self.assertFalse(self.load({})["keep_annotating"])
+
     def test_configured(self):
         from knightly_review import settings
 

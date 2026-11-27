@@ -135,6 +135,21 @@ class PoolTest(unittest.TestCase):
         with pool.acquire() as p:
             self.assertIs(p, made[1])
 
+    def test_idle_processes_are_stopped_and_the_lease_given_back(self):
+        c = tmpcache(self)
+        start, made = starter()
+        pool = Pool(Config(), lease=Lease(c), start=start)
+        with pool.acquire():
+            pass
+        self.assertEqual(pool.reap(max_idle=60), 0)  # idle for less than a minute: kept
+        self.assertIsNotNone(c.get(LEASE_KEY))
+        self.assertEqual(pool.reap(max_idle=0), 1)
+        self.assertTrue(made[0].quit_called)
+        self.assertIsNone(c.get(LEASE_KEY))
+        with pool.acquire() as p:  # a new process, and the lease again
+            self.assertIs(p, made[1])
+        self.assertIsNotNone(c.get(LEASE_KEY))
+
     def test_a_failing_start_frees_its_place(self):
         calls = []
 
