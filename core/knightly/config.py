@@ -19,7 +19,7 @@ class Config:
     lichess_token: str = ""
     # Engines: Stockfish is required; Lc0 is optional and, when on, runs alongside it.
     stockfish_path: str = ""
-    sf_depth: int = 13  # fixed depth for every Stockfish analysis; 20+ is recommended if the CPU allows
+    sf_depth: int = 13  # fixed depth for every Stockfish analysis
     threads: int = 0  # Stockfish threads; 0 = half the CPU cores
     hash_mb: int = 64  # Stockfish hash table (RAM), in MB
     use_lc0: bool = False

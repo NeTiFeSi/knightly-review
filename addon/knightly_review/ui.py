@@ -303,8 +303,7 @@ class SettingsDialog(QDialog):
         self.depth = QSpinBox()
         self.depth.setRange(8, 60)
         self.depth.setValue(int(self.cfg.get("sf_depth", 13)))
-        self.depth.setToolTip("Every position is searched to this depth. 20 or more gives better judgements, "
-                              "but each update takes longer.")
+        self.depth.setToolTip("Every position is searched to this depth. Higher is slower.")
         drow = QHBoxLayout()
         drow.addWidget(self.depth)
         hint = QLabel("20+ recommended if your computer can take it")

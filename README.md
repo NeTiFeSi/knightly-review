@@ -93,7 +93,7 @@ There are two places for settings. **Tools → Knightly Review → Settings…**
 |---|---|---|
 | Lichess / Chess.com | empty | Whose games to fetch. Either can be empty. Logging in to Lichess (optional) makes downloads faster. |
 | Look back | 90 days | How far back to fetch games. **All time** fetches everything; raising it later downloads the older games on the next update. |
-| Stockfish: depth | 13 | Every position is searched to this depth. 20 or more gives better judgements, if your computer can take it. |
+| Stockfish: depth | 13 | Every position is searched to this depth. |
 | Stockfish: threads, hash | half the cores, 64 MB | CPU threads and RAM for the engine. |
 | Lc0 | off | Second engine. It analyses after Stockfish, and its judgement is used except in mate positions, where Stockfish's is. |
 | Deck | Knightly Review | Where the new cards go. |
