@@ -87,10 +87,14 @@ class Context:
         )
 
     def snapshot(self) -> tuple[dict[str, str], bool]:
-        """The notes on cards: the collection's, and those waiting in the outbox (newest version)."""
+        """The notes on cards: the collection's, and those waiting in the outbox (newest version).
+
+        The outbox is read first: a note drained between the two reads is then in the collection's notes, never
+        in neither (a note missing from both would look deleted, and manage would drop its puzzle record)."""
+        waiting = self.cache.outbox()
         got = self.existing()
         notes = dict(got or {})
-        for _seq, kind, data in self.cache.outbox():
+        for _seq, kind, data in waiting:
             if kind == NOTE:
                 notes[data["key"]] = data["pgn"]
         return notes, got is not None
@@ -159,7 +163,9 @@ def run_select(ctx: Context, tracker: Tracker, manual: bool = False) -> Outcome:
     if cache.get("candidates_settings") != fp:  # what counts as a candidate changed: judge them all again
         cache.clear_candidates()
         cache.set("candidates_settings", fp)
-    existing, _ = ctx.snapshot()
+    existing, have_collection = ctx.snapshot()
+    if not have_collection:  # what is on cards is unknown: no candidate can be told apart from them
+        return Outcome(summary="no collection")
     _store, known, claimed = collection_state(cache, existing, prune=False)
     selector = Selector(cfg, Ledger.of(known, claimed))
     _, by_ply = _games(ctx)
@@ -192,7 +198,9 @@ def run_build(ctx: Context, tracker: Tracker, manual: bool = False) -> Outcome:
     if not pending:
         return Outcome(summary="no candidates")
     with ctx.notes_lock:
-        existing, _ = ctx.snapshot()
+        existing, have_collection = ctx.snapshot()
+        if not have_collection:
+            return Outcome(summary="no collection")
         store, known, claimed = collection_state(cache, existing, prune=False)
         ledger = Ledger.of(known, claimed)
         selector = Selector(cfg, ledger)
@@ -281,7 +289,7 @@ def run_manage(ctx: Context, tracker: Tracker, manual: bool = False) -> Outcome:
                 existing=existing,
                 on_note=on_note,
             )
-            manager = Manager(builder, cfg, budget, report, tracker)
+            manager = Manager(builder, cfg, budget, report, tracker, extract.stored_urls(cfg, cache))
             finished = True
             try:
                 manager.run()
@@ -381,8 +389,8 @@ class Supervisor:
         return {name: self.run_stage(name, manual) for name in STAGES}
 
     # --- threads
-    def start(self) -> None:
-        """One thread per stage, plus the timer that fetches games."""
+    def start(self, fetch: bool = True) -> None:
+        """One thread per stage, plus the timer that fetches games (`fetch`: now too, with `update_on_startup`)."""
         if self._threads:
             return
         self._stopping.clear()
@@ -393,13 +401,39 @@ class Supervisor:
         th = threading.Thread(target=self._timer, name="knightly-timer", daemon=True)
         th.start()
         self._threads.append(th)
-        ex = self.ctx.cfg.extract
-        if ex.update_on_startup:
+        if fetch and self.ctx.cfg.extract.update_on_startup:
             self.trigger("extract")
+        self._keep_on()
+
+    def _keep_on(self) -> None:
+        """Keep on annotating from now, as the settings say (after a cancel, from the next update)."""
         ann = self.ctx.cfg.annotate
-        if ann.keep_annotating:
+        if not ann.keep_annotating:
+            self.keep_until = 0.0
+        else:
             hours = ann.keep_annotating_hours
             self.keep_until = self.clock() + hours * 3600 if hours > 0 else float("inf")
+
+    @property
+    def keeping(self) -> bool:
+        """Annotating goes on by itself: allowed now, and the last pass left work."""
+        last = self.state["annotate"].last
+        return self.clock() < self.keep_until and last is not None and last.more
+
+    def reconfigure(self, cfg: Config) -> None:
+        """New settings, for the next runs (a running stage finishes with the ones it started with). The
+        stages whose settings changed run again; games are fetched only when the games' settings changed."""
+        old, self.ctx.cfg = self.ctx.cfg, cfg
+        self.ctx.pool.reconfigure(cfg)
+        self._keep_on()
+        if old.fingerprint("extract") != cfg.fingerprint("extract"):
+            self.trigger("extract")  # and every stage after it
+            return
+        if old.fingerprint("annotate", "select", "build") != cfg.fingerprint("annotate", "select", "build"):
+            for name in ("annotate", "select", "build"):
+                self.trigger(name)
+        if old.fingerprint("manage", "annotate", "select") != cfg.fingerprint("manage", "annotate", "select"):
+            self.trigger("manage")
 
     def trigger(self, name: str, manual: bool = False) -> None:
         """Run `name` as soon as its thread is free (a run already asked for is not repeated)."""
@@ -407,11 +441,13 @@ class Supervisor:
         self._wake[name].set()
 
     def update(self) -> None:
-        """Everything, now: fetch games, then every stage after it."""
+        """Everything, now: fetch games, then every stage after it (and keep on annotating again)."""
+        self._keep_on()
         self.trigger("extract", manual=True)
 
     def cancel_running(self, wait: float = 10) -> None:
-        """Stop what is running now (and keeping on annotating); the threads stay, ready for the next run."""
+        """Stop what is running now, and keeping on annotating until the next update or new settings; the
+        threads stay, ready for the next run."""
         self.keep_until = 0.0
         cancel = self.ctx.cancel
         cancel.set()

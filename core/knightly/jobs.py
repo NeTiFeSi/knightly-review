@@ -160,6 +160,7 @@ def run_update(
                 make=not precalculate,
                 tracker=tracker,
                 on_note=on_note,
+                stored_urls=extract.stored_urls(cfg, cache),
             )
             try:
                 miner.run()

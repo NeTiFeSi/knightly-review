@@ -320,8 +320,9 @@ class SqliteCache:
             )
 
     def add_candidates(self, rows: Iterable[tuple[str, int, bool, float, list]]) -> int:
-        """New pending candidates (fen key, ply, mine, loss, tries). One already listed is pending again when its
-        moves to try changed (new games played others), unless it made a puzzle already."""
+        """Pending candidates (fen key, ply, mine, loss, tries), from positions not on a card. One already listed
+        is pending again when it made a puzzle or was skipped (the note never reached the collection, or was
+        deleted from it: it is made again), or when its moves to try changed (new games played others)."""
         n = 0
         with self._conn() as c:
             for k, ply, mine, loss, tries in rows:
@@ -330,7 +331,7 @@ class SqliteCache:
                        VALUES (?,?,?,?,?,'pending',?)
                        ON CONFLICT (fen_key, ply, mine) DO UPDATE SET
                          loss=excluded.loss, tries=excluded.tries, status='pending', updated=excluded.updated
-                       WHERE candidates.status != 'made' AND candidates.tries != excluded.tries""",
+                       WHERE candidates.status IN ('made', 'skipped') OR candidates.tries != excluded.tries""",
                     (k, ply, int(mine), loss, json.dumps(tries), int(time.time())),
                 )
                 n += cur.rowcount

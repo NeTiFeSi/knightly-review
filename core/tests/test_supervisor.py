@@ -134,6 +134,63 @@ class TablesTest(unittest.TestCase):
         self.assertIn((SUSPEND, ["legacy:7"]), [(k, d) for _s, k, d in self.c.outbox()])
         self.assertEqual(sup.run_stage("manage").summary, "nothing changed")
 
+    def test_a_note_that_never_reached_the_collection_is_made_again(self):
+        for n in ("annotate", "select", "build"):
+            self.sup.run_stage(n)
+        (note,) = outbox_notes(self.c)
+        self.assertEqual(self.sup.run_stage("select").summary.split(";")[0], "0 new candidates, up to ply 6")
+        self.c.outbox_done([s for s, *_ in self.c.outbox()])  # dropped (or deleted from the collection later)
+        for n in ("manage", "annotate", "select"):
+            self.sup.run_stage(n)
+        self.assertEqual([n.key for n in self.sup.run_stage("build").notes], [note.key])
+        self.assertEqual(self.sup.run_stage("select").summary.split(";")[0], "0 new candidates, up to ply 6")
+
+    def test_no_collection_no_candidates_or_notes(self):
+        self.sup.run_stage("annotate")
+        self.sup.ctx.existing = lambda: None  # the profile is closing
+        self.assertEqual(self.sup.run_stage("select").summary, "no collection")
+        self.assertEqual(self.c.candidates(), [])
+        self.sup.ctx.existing = dict
+        self.sup.run_stage("select")
+        self.sup.ctx.existing = lambda: None
+        self.assertEqual(self.sup.run_stage("build").summary, "no collection")
+        self.assertEqual(self.c.outbox(), [])
+
+    def test_a_note_drained_during_the_snapshot_is_counted(self):
+        self.sup.run_stage("annotate")
+        self.sup.run_stage("select")
+        self.sup.run_stage("build")
+        (note,) = outbox_notes(self.c)
+
+        def drained_meanwhile():  # the outbox is written into the collection while the stage reads it
+            self.c.outbox_done([seq for seq, *_ in self.c.outbox()])
+            return {note.key: note.pgn}
+
+        self.sup.ctx.existing = drained_meanwhile
+        notes, have = self.sup.ctx.snapshot()
+        self.assertEqual((notes, have), ({note.key: note.pgn}, True))
+
+    def test_a_game_older_than_the_look_back_is_not_gone(self):
+        url = "https://lichess.org/old00001"
+        legacy = f'[Site "{url}"]\n\n1. e4 *'
+        cfg = Config.from_dict({**CFG, "suspend_outdated": True})
+        for stored, suspended in ((True, False), (False, True)):
+            games = [game_from(SICILIAN, white=False, id="old", url=url, end_ts=int(time.time()) - 400 * 86400)]
+            c = seed(self, games if stored else [])
+            key = self._old_rules_note(c, legacy)
+            sup = Supervisor(context(c, cfg, lambda *a: FakeAnalyser(table=PUNISH_TABLE), {key: legacy}))
+            sup.run_stage("manage")
+            self.assertEqual(SUSPEND in [k for _s, k, _d in c.outbox()], suspended, f"stored={stored}")
+
+    def _old_rules_note(self, c, pgn: str) -> str:
+        from knightly import puzzles
+        from knightly.notes import puzzle_key
+
+        key = puzzle_key(fen_key(board_at(SICILIAN, 5).fen()), 5)
+        p = puzzles.Puzzle(key=key, fen=board_at(SICILIAN, 5).fen(), ply=5, played="", pgn=pgn, rules=0)
+        puzzles.Store(c).put(p)
+        return key
+
 
 class ChainTest(unittest.TestCase):
     def test_stages_run_on_their_threads_in_a_chain(self):
@@ -218,6 +275,34 @@ class ChainTest(unittest.TestCase):
         time.sleep(0.1)
         sup.stop(wait=5)
         self.assertEqual(passes, [False, True, True])  # the first pass at its own priority, then low priority
+
+    def test_cancel_stops_keeping_on_until_the_next_update(self):
+        cfg = Config.from_dict({**CFG, "update_on_startup": False, "keep_annotating": True})
+        sup = Supervisor(context(seed(self, []), cfg, None), workers={n: (lambda *a: Outcome()) for n in STAGES})
+        sup.state["annotate"].last = Outcome(True, more=True)
+        sup._keep_on()
+        self.assertTrue(sup.keeping)
+        sup.cancel_running()
+        self.assertFalse(sup.keeping)
+        sup.update()
+        self.assertTrue(sup.keeping)
+        sup.state["annotate"].last = Outcome(True, more=False)  # everything annotated: nothing to keep on with
+        self.assertFalse(sup.keeping)
+        sup.stop()
+
+    def test_new_settings_run_only_the_stages_they_concern(self):
+        cfg = Config.from_dict({**CFG, "update_on_startup": False})
+        sup = Supervisor(context(seed(self, []), cfg, None), workers={n: (lambda *a: Outcome()) for n in STAGES})
+        woken = lambda: {n for n, e in sup._wake.items() if e.is_set()}
+        sup.reconfigure(Config.from_dict({**CFG, "update_on_startup": False, "deck": "x"}))
+        self.assertEqual(woken(), set())  # the deck is the add-on's
+        sup.reconfigure(Config.from_dict({**CFG, "update_on_startup": False, "max_new_cards": 3}))
+        self.assertEqual(woken(), {"annotate", "select", "build"})
+        for e in sup._wake.values():
+            e.clear()
+        sup.reconfigure(Config.from_dict({**CFG, "update_on_startup": False, "max_new_cards": 3, "history_days": 9}))
+        self.assertEqual(woken(), {"extract"})
+        self.assertEqual(sup.ctx.cfg.extract.history_days, 9)
 
 
 if __name__ == "__main__":

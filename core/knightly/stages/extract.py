@@ -140,11 +140,12 @@ def passes_filters(game: Game, ex: Extract) -> bool:
     return (not ex.time_classes or game.time_class in ex.time_classes) and (not ex.rated_only or game.rated)
 
 
-def games_of(cfg: Config, cache, role: str = ME) -> list[Game]:
+def games_of(cfg: Config, cache, role: str = ME, *, everything: bool = False) -> list[Game]:
     """The games of the accounts of this role within the look-back and the filters, newest first, each seen
-    from that player's side. A game between two of your accounts is there once."""
+    from that player's side. A game between two of your accounts is there once. `everything`: every stored
+    game of those accounts, whatever its date and the filters."""
     ex = cfg.extract
-    since = sources.since_ts(ex.history_days)
+    since = 0 if everything else sources.since_ts(ex.history_days)
     found: dict[str, Game] = {}
     candidates: list[Game] = []
     for a in ex.accounts:
@@ -153,10 +154,15 @@ def games_of(cfg: Config, cache, role: str = ME) -> list[Game]:
     if any(a.role == role for a in ex.accounts):
         candidates += cache.games_from("pgn", since)
     for g in candidates:
-        if g.key in found or not passes_filters(g, ex):
+        if g.key in found or not (everything or passes_filters(g, ex)):
             continue
         s = side(g, ex)
         if s is None or s[1] != role:
             continue
         found[g.key] = g if g.user_is_white == s[0] else dataclasses.replace(g, user_is_white=s[0])
     return sorted(found.values(), key=lambda g: g.end_ts, reverse=True)
+
+
+def stored_urls(cfg: Config, cache) -> set[str]:
+    """The URLs of every stored game of your accounts (a note whose game is not among them lost its game)."""
+    return {g.url for g in games_of(cfg, cache, everything=True) if g.url}

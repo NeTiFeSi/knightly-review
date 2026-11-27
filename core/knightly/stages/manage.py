@@ -35,8 +35,19 @@ from .report import Reporter
 
 
 class Manager:
-    def __init__(self, builder: Builder, cfg: Config, budget: Budget, report: Reporter, tracker: Tracker):
+    def __init__(
+        self,
+        builder: Builder,
+        cfg: Config,
+        budget: Budget,
+        report: Reporter,
+        tracker: Tracker,
+        stored_urls: set[str] | None = None,
+    ):
+        """`stored_urls`: the URLs of every stored game, also those older than the look-back (a note's game is
+        gone only when it is not among them); None: the builder's games."""
         self.b, self.cfg, self.budget, self.report, self.tracker = builder, cfg, budget, report, tracker
+        self.stored_urls = stored_urls
         self.an = builder.an
         self._by_url: dict[str, Game] | None = None
         self.old_rules = dict(builder.stale)  # the notes made under older rules, as the run starts
@@ -61,6 +72,12 @@ class Manager:
         headers = chess.pgn.read_headers(io.StringIO(p.pgn))
         return self._by_url.get(headers.get("Site", "")) if headers else None
 
+    def _game_gone(self, p: Puzzle) -> bool:
+        if self.stored_urls is None:
+            return self._game_of(p) is None
+        headers = chess.pgn.read_headers(io.StringIO(p.pgn))
+        return not headers or headers.get("Site", "") not in self.stored_urls
+
     def outdated(self) -> list[str]:
         """The keys of the notes this version can no longer maintain: notes from before puzzle keys, and notes
         still on older rules whose game is gone (all of them when notes are not updated)."""
@@ -68,7 +85,7 @@ class Manager:
         for key, p in self.old_rules.items():
             if key not in self.b.existing:
                 continue
-            if not self.cfg.manage.update_notes or (key in self.b.stale and self._game_of(p) is None):
+            if not self.cfg.manage.update_notes or (key in self.b.stale and self._game_gone(p)):
                 out.append(key)
         return out
 

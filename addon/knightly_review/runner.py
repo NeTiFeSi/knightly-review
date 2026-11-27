@@ -6,7 +6,9 @@ stopped when the profile closes. Two things need the collection, on the main thr
 - the notes already in it, which the stages ask for (`_existing`);
 - the outbox, where the build and manage stages put the notes they make and the notes to suspend: a timer
   drains it every few seconds, each batch one undo step (kc.RunWriter). What is left there when the profile
-  closes is written the next time it opens.
+  closes is written the next time it opens, also when the settings are incomplete (no stage runs then). An
+  item that can't be written doesn't hold up the others: it is tried again a few times, then dropped (the
+  stages make its note again).
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from collections.abc import Callable
 from aqt import gui_hooks, mw
 from aqt.operations import CollectionOp
 from aqt.qt import QTimer
-from aqt.utils import tooltip
+from aqt.utils import showWarning, tooltip
 
 from . import collection as kc
 from . import settings
@@ -36,6 +38,7 @@ log = logging.getLogger(__name__)
 Listener = Callable[[str, int, int, str], None]
 LABELS = {"extract": "Games", "manage": "Notes", "annotate": "Annotating", "select": "Candidates", "build": "Puzzles"}
 DRAIN_MS = 3000
+DRAIN_TRIES = 3  # an outbox item that fails this many times is dropped
 START_DELAY_MS = 20_000  # after the profile opens, so Anki starts at full speed
 
 
@@ -59,6 +62,10 @@ class Host:
         self.drainer: QTimer | None = None
         self._draining = False
         self._wrote: kc.RunWriter | None = None
+        self._fails: dict[int, int] = {}  # outbox seq → failed writes
+        self._retry_at = 0.0  # after a failed drain, the next try waits until then (monotonic)
+        self._drain_failures = 0
+        self._warn_until = 0.0  # a stage failing before then is shown in a dialog (an update the user asked for)
         self.finished: dict[str, float] = {}  # stage → when its last run ended (time.time())
 
     # --- what the progress window reads
@@ -68,7 +75,7 @@ class Host:
 
     @property
     def keeping(self) -> bool:
-        return self.sup is not None and self.sup.keep_until > time.monotonic()
+        return self.sup is not None and self.sup.keeping
 
     def log(self, line: str) -> None:
         with self._lock:
@@ -104,29 +111,40 @@ class Host:
             f(*self.last)
 
     # --- the supervisor
-    def launch(self) -> bool:
-        """Start the stages with the current settings (the fetch at start when the settings say so)."""
+    def open(self) -> None:
+        """The cache, and the timer that drains its outbox (with or without the stages)."""
+        if mw.col is None:
+            return
+        if self.cache is None:
+            self.cache = SqliteCache(settings.CACHE_PATH)
+        self._start_drainer()
+
+    def launch(self, fetch: bool = True) -> bool:
+        """Start the stages with the current settings (`fetch`: and fetch games, when the settings say so)."""
         if self.sup is not None or mw.col is None:
             return self.sup is not None
         cfg = settings.load()
         if not settings.configured(cfg):
             return False
         core = settings.core_config(cfg)
-        self.cache = SqliteCache(settings.CACHE_PATH)
+        self.open()
+        assert self.cache is not None
         self.pool = Pool(core, lease=Lease(self.cache))
         ctx = Context(core, self.cache, self.pool, threading.Event(), existing=self._existing)
         self.sup = Supervisor(ctx, on_start=self._on_start, on_done=self._on_done)
-        self.sup.start()
-        self._start_drainer()
+        self.sup.start(fetch=fetch)
         return True
 
-    def shutdown(self, wait: float = 5) -> None:
+    def _stop_stages(self, wait: float) -> None:
         sup, self.sup = self.sup, None
         if sup is not None:
             sup.stop(wait=wait)
         if self.pool is not None:
             self.pool.close()
             self.pool = None
+
+    def shutdown(self, wait: float = 5) -> None:
+        self._stop_stages(wait)
         if self.drainer is not None:
             self.drainer.stop()
             self.drainer = None
@@ -149,6 +167,7 @@ class Host:
             return False
         assert self.sup is not None
         if manual:
+            self._warn_until = time.monotonic() + 3600
             self.sup.update()
         else:
             self.sup.trigger("extract")
@@ -174,16 +193,31 @@ class Host:
         if sup is None:
             return
         self._emit("done", 0, 0, "Cancelling…", force=True)
-        th = threading.Thread(target=sup.cancel_running, name="knightly-cancel", daemon=True)
+        self._warn_until = 0.0
+
+        def cancel() -> None:
+            sup.cancel_running()
+            self._emit("done", 0, 0, "Stopped.", force=True)
+
+        th = threading.Thread(target=cancel, name="knightly-cancel", daemon=True)
         th.start()
         if wait:
             th.join(wait)
 
     def reschedule(self) -> None:
-        """The settings changed: the stages start again with them."""
-        if self.sup is not None:
-            self.shutdown()
-            self.launch()
+        """The settings changed. Running stages finish with the old ones; the next runs use the new ones, and
+        the stages they concern run again. Incomplete settings stop the stages; completed ones start them."""
+        if mw.col is None:
+            return
+        cfg = settings.load()
+        if not settings.configured(cfg):
+            self._stop_stages(wait=0)  # the threads end at their next search or download
+            self.open()
+            return
+        if self.sup is None:
+            self.launch(fetch=False)  # the settings dialog asks whether to fetch now
+        else:
+            self.sup.reconfigure(settings.core_config(cfg))
 
     def _existing(self) -> dict[str, str] | None:
         """Stage thread: the collection's Knightly notes, read on the main thread (None: no collection)."""
@@ -222,6 +256,9 @@ class Host:
             self._emit("done", 0, 0, f"{label}: cancelled.", force=True)
         elif error:
             self._emit("error", 0, 0, f"{label} failed: {error}", force=True)
+            if time.monotonic() < self._warn_until:  # an update the user asked for: say it failed
+                self._warn_until = 0.0
+                mw.taskman.run_on_main(lambda: showWarning(f"Knightly Review: {label} failed:\n{error}"))
         elif out is not None:
             text = out.summary + (" Warnings: " + "; ".join(out.warnings) if out.warnings else "")
             self._emit("done", 1, 1, f"{label}: {text}", force=True)
@@ -239,30 +276,44 @@ class Host:
     def drain(self) -> None:
         """Write what waits in the outbox into the collection, as one undo step (main thread)."""
         cache = self.cache
-        if self._draining or cache is None or mw.col is None:
+        if self._draining or cache is None or mw.col is None or time.monotonic() < self._retry_at:
             return
         items = cache.outbox()
         if not items:
             return
         self._draining = True
         deck = settings.load().get("deck") or kc.MODEL
-        new_cards = sum(d.get("new_cards", 0) for _s, kind, d in items if kind == NOTE)
+        written: list[int] = []
+        dropped: dict[int, str] = {}  # seq → what was given up on
 
         def write(col):
             kc.ensure_installed(col)
             writer = kc.RunWriter(col, deck)
-            for _seq, kind, data in items:
-                if kind == NOTE:
-                    writer.add(NoteSpec(**data))
-                elif kind == SUSPEND:
-                    writer.suspend(data)
+            for seq, kind, data in items:
+                try:
+                    if kind == NOTE:
+                        writer.add(NoteSpec(**data))
+                    elif kind == SUSPEND:
+                        writer.suspend(data)
+                    written.append(seq)
+                except Exception as e:  # this item only: the others are still written
+                    log.exception("could not write outbox item %s", seq)
+                    self._fails[seq] = self._fails.get(seq, 0) + 1
+                    if self._fails[seq] >= DRAIN_TRIES:
+                        dropped[seq] = f"{data.get('key', kind) if isinstance(data, dict) else kind}: {e}"
             changes = writer.finish()
-            cache.outbox_done(seq for seq, _k, _d in items)
+            cache.outbox_done([*written, *dropped])
             self._wrote = writer
             return changes
 
         def ok(_changes) -> None:
             self._draining = False
+            self._drain_failures, self._retry_at = 0, 0.0
+            for seq in [*written, *dropped]:
+                self._fails.pop(seq, None)
+            for d in dropped.values():
+                self._emit("error", 0, 0, f"Gave up on writing a note ({d}); it will be made again.", force=True)
+            new_cards = sum(d.get("new_cards", 0) for seq, kind, d in items if kind == NOTE and seq in written)
             suspended = self._wrote.suspended if self._wrote is not None else 0
             parts = []
             if new_cards:
@@ -275,8 +326,11 @@ class Host:
 
         def failed(e: Exception) -> None:
             self._draining = False
+            self._drain_failures += 1  # tried again later, waiting longer each time (up to 5 minutes)
+            self._retry_at = time.monotonic() + min(300, DRAIN_MS / 1000 * 2**self._drain_failures)
             log.error("could not write the notes: %s", e)
-            self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
+            if self._drain_failures == 1:
+                self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
 
         CollectionOp(parent=mw, op=write).success(ok).failure(failed).run_in_background()
 
@@ -297,8 +351,8 @@ def _on_profile_open() -> None:
         from .ui import open_settings
 
         QTimer.singleShot(1500, lambda: open_settings(first_run=True))
-    elif settings.configured(cfg):
-        QTimer.singleShot(START_DELAY_MS, updater.launch)
+    else:  # the outbox is written also when the settings are incomplete
+        QTimer.singleShot(START_DELAY_MS, updater.launch if settings.configured(cfg) else updater.open)
 
 
 def _on_profile_close() -> None:

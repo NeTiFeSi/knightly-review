@@ -54,6 +54,7 @@ class Miner:
         make: bool = True,
         tracker: Tracker | None = None,
         on_note: Callable[[NoteSpec], None] | None = None,
+        stored_urls: set[str] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ):
         """`games` newest first. `known`: the puzzles already in the collection; `claimed`: fen keys of
@@ -84,7 +85,7 @@ class Miner:
             make=make,
             on_note=on_note,
         )
-        self.manager = Manager(self.builder, cfg, self.budget, self.report, self.tracker)
+        self.manager = Manager(self.builder, cfg, self.budget, self.report, self.tracker, stored_urls)
         self.finished = False  # nothing left to continue: the run ended by itself, not out of time
         self.outdated: list[str] = []  # keys of the notes this version can't maintain (when making notes)
 

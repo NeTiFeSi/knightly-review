@@ -112,6 +112,10 @@ class Pool:
         self._tickets = itertools.count()
         self._cond = threading.Condition()
         self._closed = False
+        self._old: set[int] = set()
+        self._lent: dict[
+            int, chess.engine.SimpleEngine
+        ] = {}  # id → a process out for a search  # ids of busy processes started with older engine settings
         self.name = ""
         self.started = 0  # processes started so far
 
@@ -179,6 +183,8 @@ class Pool:
                 self._cond.notify_all()
             raise
         broken = False
+        with self._cond:
+            self._lent[id(proc)] = proc
         try:
             yield proc
         except (chess.engine.EngineError, chess.engine.EngineTerminatedError):
@@ -186,13 +192,33 @@ class Pool:
             raise
         finally:
             with self._cond:
-                if broken or self._closed:
+                self._lent.pop(id(proc), None)
+                if broken or self._closed or id(proc) in self._old:
+                    self._old.discard(id(proc))
                     self._count -= 1
                     _quit(proc)
                 else:
                     self._idle.append(proc)
                     self._since[id(proc)] = time.monotonic()
                 self._cond.notify_all()
+
+    def reconfigure(self, cfg: Config) -> None:
+        """New settings. When the engine's changed, the processes are replaced: the idle ones now, the busy ones
+        when their search returns."""
+        with self._cond:
+            changed = cfg.engine != self.cfg.engine
+            self.cfg = cfg
+            if not changed:
+                return
+            idle, self._idle = self._idle, []
+            for p in idle:
+                self._since.pop(id(p), None)
+            self._count -= len(idle)
+            self._old = set(self._lent)
+            self.name = ""
+            self._cond.notify_all()
+        for p in idle:
+            _quit(p)
 
     def reap(self, max_idle: float = 60) -> int:
         """Stop the processes idle for more than `max_idle` seconds; with none left, give the lease back (the

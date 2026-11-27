@@ -150,6 +150,21 @@ class PoolTest(unittest.TestCase):
             self.assertIs(p, made[1])
         self.assertIsNotNone(c.get(LEASE_KEY))
 
+    def test_new_engine_settings_replace_the_processes(self):
+        start, made = starter()
+        pool = Pool(Config(), start=start)
+        with pool.acquire():
+            pass
+        pool.reconfigure(Config.from_dict({"deck": "other"}))  # not the engine's: kept
+        self.assertFalse(made[0].quit_called)
+        with pool.acquire() as busy:
+            pool.reconfigure(Config.from_dict({"hash_mb": 128}))
+            self.assertFalse(busy.quit_called)  # stopped when its search returns
+        self.assertTrue(made[0].quit_called)
+        with pool.acquire() as p:
+            self.assertIs(p, made[1])
+        self.assertEqual(pool.cfg.engine.hash_mb, 128)
+
     def test_a_failing_start_frees_its_place(self):
         calls = []
 
