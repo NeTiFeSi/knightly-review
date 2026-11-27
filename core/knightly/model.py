@@ -155,6 +155,7 @@ class NoteSpec:
     tags: list[str]
     card_ids: dict[str, int]  # fen_key -> cloze number
     new_cards: int = 0
+    retag: bool = True  # replace the note's generated tags with `tags` (False: a note in the collection keeps its own)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

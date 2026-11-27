@@ -41,6 +41,7 @@ class UpdateResult:
     stats: dict = field(default_factory=dict)
     finished: bool = False  # the analysis left nothing to continue (every ply done, or enough puzzles)
     skipped: bool = False  # same inputs as the last finished run: nothing was collected or analysed
+    outdated: list[str] = field(default_factory=list)  # keys of the notes this version can't maintain
 
 
 STATE_KEY = "last_run"
@@ -49,7 +50,7 @@ STATE_KEY = "last_run"
 def fingerprint(cfg: Config, game_keys: Iterable[str], exclude: Iterable[str]) -> str:
     """Hash of everything a run depends on: the rules, the settings of the stages it runs (minus secrets; the
     engine's threads and memory change no result), the games used, the positions on cards."""
-    settings = cfg.fingerprint("extract", "annotate", "select", "build")
+    settings = cfg.fingerprint("extract", "annotate", "select", "build", "manage")
     blob = json.dumps([puzzles.RULES, settings, sorted(game_keys), sorted(exclude)], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
@@ -156,6 +157,7 @@ def run_update(
                 result.notes = miner.notes
                 result.new_cards = sum(sp.new_cards for sp in miner.notes)
                 result.analysed_positions = miner.analysed
+                result.outdated = miner.outdated
             result.stats = dict(an.stats)
             result.finished = miner.finished
             # Only a run that made no cards counts as finished: new cards change `exclude` anyway, and

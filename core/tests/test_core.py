@@ -1655,6 +1655,45 @@ class RepairTest(unittest.TestCase):
         self.assertEqual(notes.card_ids(rebuilt.pgn), notes.card_ids(sub_note.pgn))
 
 
+class ManageTest(unittest.TestCase):
+    """The manage stage's settings: updating notes and tags, and listing the notes no longer maintained."""
+
+    run_with = RepairTest.run_with
+    age = RepairTest.age
+
+    def old_note(self, url="https://lichess.org/test0001"):
+        c = seed(self, [recent(url=url)])
+        (first,) = self.run_with(c, {PUZZLE_FEN: PUNISH_TABLE[PUZZLE_FEN]}).notes  # one card: the repair adds one
+        self.age(c)
+        return c, first
+
+    def test_notes_from_before_puzzle_keys_are_outdated(self):
+        c, first = self.old_note()
+        res = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn, "legacy:42": "1. e4 *"})
+        self.assertEqual([n.key for n in res.notes], [first.key])  # rebuilt
+        self.assertEqual(res.outdated, ["legacy:42"])
+
+    def test_a_note_whose_game_is_gone_is_outdated(self):
+        c, first = self.old_note()
+        gone = seed(self, [recent(url="https://lichess.org/other")])  # the note's game isn't among the games
+        puzzles.Store(gone).put(puzzles.Store(c).get(first.key))
+        res = self.run_with(gone, PUNISH_TABLE, {first.key: first.pgn})
+        self.assertNotIn(first.key, [n.key for n in res.notes])
+        self.assertEqual(res.outdated, [first.key])
+
+    def test_notes_left_alone_when_not_updating(self):
+        c, first = self.old_note()
+        res = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn}, update_notes=False)
+        self.assertEqual((res.notes, res.outdated), ([], [first.key]))  # not rebuilt: from an older version
+
+    def test_tags_kept_when_not_updating_them(self):
+        c, first = self.old_note()
+        (note,) = self.run_with(c, PUNISH_TABLE, {first.key: first.pgn}, update_tags=False).notes
+        self.assertEqual((note.key, note.retag, note.new_cards), (first.key, False, 1))
+        fresh = self.run_with(seed(self, [recent()]), PUNISH_TABLE, update_tags=False).notes
+        self.assertTrue(all(n.retag for n in fresh))  # a new note always gets its tags
+
+
 class StatsTest(unittest.TestCase):
     def test_collect_counts_moves_by_side(self):
         a = game_from(SICILIAN, white=False, id="s1", end_ts=200)

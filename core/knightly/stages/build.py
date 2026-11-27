@@ -18,8 +18,6 @@ already in the collection belong to the manage stage; they move there next.)
 
 from __future__ import annotations
 
-import dataclasses
-import io
 from collections.abc import Callable, Iterable
 
 import chess
@@ -30,10 +28,10 @@ from .. import similar, stats, statsview
 from ..cache import fen_key
 from ..config import Config
 from ..follow import Decision, follow_puzzle, trimmed
-from ..model import CardSpec, Choice, Game, NoteSpec
+from ..model import CardSpec, Game, NoteSpec
 from ..progress import Tracker
 from ..puzzles import RULES, Puzzle, Store, puzzle_id
-from ..select import ACCEPTED, GOOD, build_card, build_punish, grade_position
+from ..select import ACCEPTED, build_card, build_punish, grade_position
 from .annotate import Annotator, Unit
 from .budget import Budget, Stop
 from .candidates import Ledger
@@ -125,9 +123,9 @@ class Builder:
         if similar_to is not None:
             self._merge(similar_to, u, card.ply)
             return
-        self._grow(u.board.fen(), game, card)
+        self.grow(u.board.fen(), game, card)
 
-    def _grow(self, fen: str, game: Game, card: CardSpec) -> None:
+    def grow(self, fen: str, game: Game, card: CardSpec) -> None:
         """`_add` without the similarity check, for the mistake at `fen`."""
         ply = card.ply
         # The boards carry the game's moves up to the puzzle, for the repetition and fifty-move rules.
@@ -152,7 +150,7 @@ class Builder:
                 tracker=self.tracker,
             )
         for d in sorted(decisions, key=lambda d: -d.depth):  # the leaves first, then towards the root
-            self._sub_note(d, game)
+            self.sub_note(d, game)
             if self.cards >= self.budget.want:
                 raise Stop()
         self._root_note(fen, game, card, second, after)
@@ -228,11 +226,10 @@ class Builder:
             self.existing[p.key] = spec.pgn
         self.made.add(p.key)
         self.cards += spec.new_cards
-        self.notes.append(spec)
-        self.on_note(spec)
+        self._out(spec)
         self.tracker.found(self.cards, self.budget.want if self.budget.capped else 0)
 
-    def _sub_note(self, d: Decision, game: Game) -> None:
+    def sub_note(self, d: Decision, game: Game) -> None:
         """The note of a decision position X: find the best move there (with the opponent's reply), and punish the
         best move that is not good (the position after it). Not made when X is a card already; the second card
         is left out when its position is a card already or the game is decided there."""
@@ -341,65 +338,17 @@ class Builder:
         p.links[bid] = out
         self.ledger.merged.add(bid)
         self.store.put(p)
-        self._refresh(p)
+        self.refresh(p)
 
-    # --- keeping existing notes up to date
-    def repair(self) -> None:
-        """Rebuild the notes made under older rules, the mistakes from our games first: growing their trees
-        again also rebuilds the notes of the positions inside them and makes the ones that were missing. The
-        notes of tree positions not reached that way are then rebuilt one by one. A note that cannot be
-        rebuilt (its game is gone, or it is no puzzle under the current settings) stays."""
-        if not self.make or not self.stale:
-            return
-        by_url = {g.url: g for g in self.games if g.url}
-        todo = sorted(self.stale.values(), key=lambda p: (_from_a_tree(p), p.ply))
-        step = "Updating the notes made by an older version"
-        self.report.stage(step, len(todo), "notes", "updating notes")
-        for p in todo:
-            if p.key in self.stale:  # not rebuilt along with an earlier one
-                self.budget.tick()
-                headers = chess.pgn.read_headers(io.StringIO(p.pgn))
-                game = by_url.get(headers.get("Site", "")) if headers else None
-                if game is not None:
-                    (self._repair_tree_note if _from_a_tree(p) else self._repair_mistake)(p, game)
-                if self.cards >= self.budget.want:
-                    raise Stop()
-            self.tracker.advance()
+    def _out(self, spec: NoteSpec) -> None:
+        """Hand a note on. A note in the collection keeps its generated tags when the settings say so."""
+        if spec.key in self.existing and not self.cfg.manage.update_tags:
+            spec.retag = False
+        self.notes.append(spec)
+        self.on_note(spec)
 
-    def _repair_mistake(self, p: Puzzle, game: Game) -> None:
-        board = chess.Board(p.fen)
-        mine = (board.turn == chess.WHITE) == game.user_is_white
-        opponent = "" if mine else ((game.black if game.user_is_white else game.white) or "Your opponent")
-        card = build_card(board.copy(stack=False), p.ply, p.played, self.an, self.cfg, opponent)
-        if card is not None:
-            self._grow(p.fen, game, card)
-
-    def _repair_tree_note(self, p: Puzzle, game: Game) -> None:
-        """Grow the tree again from the position before the opponent's move, the note's first position."""
-        pg = chess.pgn.read_game(io.StringIO(p.pgn))
-        first = pg.next() if pg else None
-        if pg is None or first is None:
-            return
-        board = pg.board()
-        _, by_move = grade_position(board.copy(stack=False), self.an, self.cfg)
-        line = by_move.get(first.move.uci())
-        if line is None:
-            return
-        reply = Choice(move=first.move.uci(), nag=next(iter(first.nags), 0), score=line.score)
-        start = CardSpec(fen_key=fen_key(board.fen()), ply=board.ply(), played=reply, alternatives=[reply], loss=0.0)
-        after = chess.Board(p.fen)
-        graded, _ = grade_position(after, self.an, self.cfg)
-        start.mate = any(g.mate is not None and g.mate > 0 for g in graded)
-        start.alternatives = [Choice(move=reply.move, nag=GOOD, score=reply.score)]  # a followed move
-        decisions = follow_puzzle(
-            board, start, self.an, self.cfg, solver=not board.turn, seen=set(), tracker=self.tracker, max_plies=3
-        )
-        for d in decisions:
-            if notes_mod.puzzle_key(fen_key(d.fen), d.ply) == p.key:
-                d.reply = dataclasses.replace(d.reply, nag=reply.nag)
-                self._sub_note(d, game)
-
-    def _refresh(self, p: Puzzle) -> None:
+    # --- a note's Notes field (the manage stage refreshes every note's; a merge refreshes the old note's)
+    def refresh(self, p: Puzzle) -> None:
         """Write `p`'s note again when its Notes field would now read differently (new games, new comments)."""
         if not self.make or (p.key not in self.existing and p.key not in self.made):
             return
@@ -419,10 +368,4 @@ class Builder:
             card_ids=ids,
             new_cards=0,
         )
-        self.notes.append(spec)
-        self.on_note(spec)
-
-    def refresh_all(self) -> None:
-        for p in list(self.ledger.known.values()):
-            if p.stored:
-                self._refresh(p)
+        self._out(spec)

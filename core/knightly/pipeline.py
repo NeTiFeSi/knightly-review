@@ -9,8 +9,8 @@ first and then, with `cfg.select.include_opponent`, the opponents':
 4. build (stages/build.py) confirms each at full strength and makes its notes;
 
 then the next ply. Every search is cached by position and depth, so a run carries on where the last one stopped.
-Before that, the notes built under older rules are rebuilt and the Notes fields refreshed (`Builder.repair`,
-`Builder.refresh_all`).
+Before that, the manage stage (stages/manage.py) refreshes the Notes fields and rebuilds the notes made under
+older rules, and after it, it lists the notes this version can no longer maintain.
 
 The stages share what is on cards already (`Ledger`), the run's budget (`Budget`) and its messages (`Reporter`).
 Here they run one after another, so a run makes exactly the notes the single loop it replaced made; the
@@ -31,6 +31,7 @@ from .stages.annotate import Annotator, positions
 from .stages.budget import UNBOUNDED, Budget, Stop
 from .stages.build import Builder
 from .stages.candidates import CONFIRM_TRIES, Ledger, Selector
+from .stages.manage import Manager
 from .stages.report import Reporter
 
 __all__ = ["CONFIRM_TRIES", "UNBOUNDED", "Miner"]
@@ -83,7 +84,9 @@ class Miner:
             make=make,
             on_note=on_note,
         )
+        self.manager = Manager(self.builder, cfg, self.budget, self.report, self.tracker)
         self.finished = False  # nothing left to continue: the run ended by itself, not out of time
+        self.outdated: list[str] = []  # keys of the notes this version can't maintain (when making notes)
 
     # --- what the run did
     @property
@@ -113,8 +116,7 @@ class Miner:
     # --- the loop
     def run(self) -> None:
         try:
-            self.builder.refresh_all()
-            self.builder.repair()
+            self.manager.run()
             for ply in range(max(self.by_ply, default=-1) + 1):
                 for mine in (True, False):
                     if mine or self.cfg.select.include_opponent:
@@ -122,6 +124,8 @@ class Miner:
             self.finished = True
         except Stop:
             self.finished = self.budget.capped and self.cards >= self.budget.want and self.make
+        if self.make:
+            self.outdated = self.manager.outdated()
 
     def _ply(self, ply: int, mine: bool) -> None:
         units = self.selector.open(positions(self.by_ply, ply, mine), ply)

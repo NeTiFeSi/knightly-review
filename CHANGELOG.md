@@ -16,6 +16,10 @@ and the project follows [Semantic Versioning](https://semver.org/).
 - **PGN export.** Choose an export folder to have every account's games written there as PGN after each update,
   or use **Tools → Knightly Review → Export games…** once.
 - **An optional email for Chess.com**, sent with its downloads, as Chess.com asks of programs using its API.
+- **Settings for the notes already in Anki:** keep them up to date (on by default; off leaves them as they are),
+  replace their `knightly::` tags when they are written again (on by default), and suspend the notes this
+  version can no longer keep up to date (off by default): notes from versions before puzzle keys, and notes made
+  under older rules whose game is no longer among your games. Suspending is part of the update's undo step.
 
 ### Changed
 

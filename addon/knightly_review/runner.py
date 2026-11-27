@@ -182,8 +182,9 @@ class Updater:
                 res, err = None, (e, traceback.format_exc())
             finally:
                 cache.close()
+            outdated = res.outdated if res is not None and core.manage.suspend_outdated else []
             mw.taskman.run_on_main(
-                lambda: self._finish(res, err, deck, manual, core.build.keep_running, _round, writer)
+                lambda: self._finish(res, err, deck, manual, core.build.keep_running, _round, writer, outdated)
             )
 
         self.thread = threading.Thread(target=work, name="knightly-update", daemon=True)
@@ -250,21 +251,31 @@ class Updater:
         mode: str = "off",
         round_: str = "",
         writer: kc.RunWriter | None = None,
+        outdated: list[str] | None = None,
     ) -> None:
-        """The run is over: merge what it wrote into one undo step, then report."""
+        """The run is over: suspend the notes it found out of date (when the settings say so), merge what it
+        wrote into one undo step, then report."""
 
         def failed(e: Exception) -> None:
             self.keeping = False
             self._emit("error", 0, 0, f"Could not add the cards: {e}", force=True)
 
-        if writer is None or not writer.written or mw.col is None:
+        if writer is None or mw.col is None or not (writer.written or outdated):
             self._report(res, err, deck, manual, mode, round_)
             return
-        CollectionOp(parent=mw, op=lambda col: writer.finish()).success(
-            lambda _changes: self._report(res, err, deck, manual, mode, round_)
+
+        def op(col):
+            if outdated:
+                writer.suspend(outdated)
+            return writer.finish()
+
+        CollectionOp(parent=mw, op=op).success(
+            lambda _changes: self._report(res, err, deck, manual, mode, round_, writer.suspended)
         ).failure(failed).run_in_background()
 
-    def _report(self, res: UpdateResult | None, err, deck: str, manual: bool, mode: str, round_: str) -> None:
+    def _report(
+        self, res: UpdateResult | None, err, deck: str, manual: bool, mode: str, round_: str, suspended: int = 0
+    ) -> None:
         if err is not None:
             self.keeping = False
             e, tb = err
@@ -274,7 +285,7 @@ class Updater:
                 showWarning(f"Knightly Review update failed:\n{e}")
             return
         assert res is not None
-        summary = _summary(res)
+        summary = _summary(res, suspended)
         if res.cancelled:
             self.keeping = False
             self._emit("done", 0, 0, "Cancelled. " + summary, force=True)
@@ -300,7 +311,7 @@ class Updater:
             self.timer.start(int(hours * 3600 * 1000))
 
 
-def _summary(res: UpdateResult) -> str:
+def _summary(res: UpdateResult, suspended: int = 0) -> str:
     if res.skipped:
         text = "Nothing changed since the last update."
         return text + (" Warnings: " + "; ".join(res.warnings) if res.warnings else "")
@@ -309,6 +320,8 @@ def _summary(res: UpdateResult) -> str:
         f"{res.analysed_positions} position{'s' if res.analysed_positions != 1 else ''} analysed",
         f"{res.new_cards} new card{'s' if res.new_cards != 1 else ''}",
     ]
+    if suspended:
+        parts.append(f"{suspended} card{'s' if suspended != 1 else ''} of out-of-date notes suspended")
     text = ", ".join(parts) + "."
     if res.warnings:
         text += " Warnings: " + "; ".join(res.warnings)

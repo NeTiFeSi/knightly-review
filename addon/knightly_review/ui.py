@@ -491,6 +491,24 @@ class SettingsDialog(QDialog):
         wf.addRow("Also update every:", self.every)
         lay.addWidget(work)
 
+        manage = QGroupBox("Notes already in Anki")
+        mf = QVBoxLayout(manage)
+        self.update_notes = QCheckBox(
+            "Keep them up to date (rebuild notes from older versions, refresh the Notes field)"
+        )
+        self.update_notes.setChecked(bool(self.cfg.get("update_notes", True)))
+        self.update_tags = QCheckBox("Replace their knightly:: tags when they are written again")
+        self.update_tags.setChecked(bool(self.cfg.get("update_tags", True)))
+        self.suspend_outdated = QCheckBox("Suspend notes from older versions that can no longer be kept up to date")
+        self.suspend_outdated.setChecked(bool(self.cfg.get("suspend_outdated", False)))
+        self.suspend_outdated.setToolTip(
+            "Notes made by versions before puzzle keys, and notes made under older rules whose game is no\n"
+            "longer among your games. Unsuspend one in the browser to keep it; Undo reverts the update."
+        )
+        for w in (self.update_notes, self.update_tags, self.suspend_outdated):
+            mf.addWidget(w)
+        lay.addWidget(manage)
+
         cpu = QGroupBox("Judging moves")
         cf = QFormLayout(cpu)
         self.good = QDoubleSpinBox()
@@ -628,6 +646,9 @@ class SettingsDialog(QDialog):
             update_every_hours=self.every.value(),
             threads=self.threads.value(),
             good_move=round(self.good.value(), 2),
+            update_notes=self.update_notes.isChecked(),
+            update_tags=self.update_tags.isChecked(),
+            suspend_outdated=self.suspend_outdated.isChecked(),
             setup_done=True,
         )
         settings.save(self.cfg)

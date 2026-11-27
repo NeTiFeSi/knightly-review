@@ -145,7 +145,11 @@ class Build:
 
 @dataclass
 class Manage:
-    """What is done to the notes already in the collection. Nothing is configurable yet."""
+    """What is done to the notes already in the collection (stages/manage.py)."""
+
+    update_notes: bool = True  # rebuild notes made under older rules; refresh Notes fields as games arrive
+    update_tags: bool = True  # a note written again gets the generated tags of now (off: they stay)
+    suspend_outdated: bool = False  # suspend the notes this version can no longer maintain
 
 
 SECTIONS: dict[str, type] = {
