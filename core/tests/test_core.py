@@ -1029,7 +1029,7 @@ class FollowTest(unittest.TestCase):
 
     def test_decided_games_end_with_a_comment(self):
         e4 = self.key("e2e4")
-        table = {e4: _ev(("e7e5", score_for(30)), ("c7c5", score_for(35)))}  # even Black's worst move wins for Black
+        table = {e4: _ev(("e7e5", score_for(20)), ("c7c5", score_for(24)))}  # Black wins most games after either move
         card, _ = self.tree(table)
         node = card.alternatives[0]
         self.assertEqual((node.children, node.comment), ([], "The game is decided: Black is winning."))
@@ -1101,16 +1101,25 @@ class FollowTest(unittest.TestCase):
 
         b = board_at(SCHOLAR_MOVES, 5)
         lines = lambda *pcts: {m: Line(score_for(100 - p), [m]) for m, p in zip(["g7g6", "d8e7", "d8f6"], pcts)}
-        self.assertTrue(decided(b, lines(60, 55, 52)))  # Black wins whatever it plays
-        self.assertFalse(decided(b, lines(45, 40, 30)))  # loses whatever it plays
-        self.assertIsNone(decided(b, lines(60, 55, 40)))
+        self.assertTrue(decided(b, lines(90, 80, 76)))  # Black wins whatever it plays
+        self.assertFalse(decided(b, lines(24, 20, 10)))  # loses whatever it plays
+        self.assertIsNone(decided(b, lines(90, 80, 70)))  # one move wins only 40 % of the time
+        self.assertIsNone(decided(b, lines(30, 20, 10)))
         self.assertIsNone(decided(b, {"g8f6": Line(WHITE_MATES, ["g8f6"]), "g7g6": Line(score_for(40), ["g7g6"])}))
-        table = {PUZZLE_FEN: Eval(20, [Line(S(-30, 50, 850, 100), ["g7g6"]), Line(S(-25, 70, 850, 80), ["g8f6"])])}
-        self.assertIsNone(build_card(b, 5, "g8f6", FakeAnalyser(table=table), Config()))  # every move holds above 50 %
+        table = {PUZZLE_FEN: Eval(20, [Line(S(-500, 0, 200, 800), ["g7g6"]), Line(S(-300, 0, 450, 550), ["g8f6"])])}
+        self.assertIsNone(build_card(b, 5, "g8f6", FakeAnalyser(table=table), Config()))  # Black wins either way
+
+    def test_a_drawish_position_is_not_decided(self):
+        from knightly.select import decided
+
+        lines = {m: Line(S(29, 56, 938, 6), [m]) for m in ["e7e5", "c7c5"]}  # Black scores 47.5 % after 1. e4
+        board = chess.Board()
+        board.push_uci("e2e4")
+        self.assertIsNone(decided(board, lines))
 
     def test_a_decided_punishment_makes_no_second_card(self):
         after = board_at(SCHOLAR_MOVES, 6)
-        table = {fen_key(after.fen()): _ev(("h5h4", score_for(80)), ("h5g4", score_for(75)))}  # White wins whatever
+        table = {fen_key(after.fen()): _ev(("h5h4", score_for(80)), ("h5g4", score_for(76)))}  # White wins whatever
         self.assertIsNone(build_punish(after, 6, "Nf6", FakeAnalyser(table=table), Config()))
 
 

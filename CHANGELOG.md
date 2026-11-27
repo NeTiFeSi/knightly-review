@@ -5,6 +5,13 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **"The game is decided" on equal positions.** A game now counts as decided only when after every legal move the
+  same side wins more than half the time, by Stockfish's win/draw/loss estimate. Before, an expected score just
+  under or over 50 % was enough, which cut solution trees short, dropped real mistakes and left out punishment
+  cards. Notes made before this fix are not changed.
+
 ## [0.2.0] - 2026-11-27
 
 ### Changed
